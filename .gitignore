@@ -1,0 +1,16 @@
+# Go / Wails output
+/build/bin/
+/build/windows/installer/tmp/
+
+# Frontend dependencies and generated output
+/node_modules/
+/frontend/node_modules/
+/frontend/dist/
+/frontend/package.json.md5
+
+# Local scaffold and IDE state
+/.wails-scaffold/
+/.idea/
+
+# Logs
+*.log

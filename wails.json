@@ -1,0 +1,28 @@
+{
+  "$schema": "https://wails.io/schemas/config.v2.json",
+  "name": "Pixtorio",
+  "outputfilename": "Pixtorio",
+  "frontend:install": "npm install",
+  "frontend:build": "npm run build",
+  "frontend:dev:watcher": "npm run dev",
+  "frontend:dev:serverUrl": "auto",
+  "author": {
+    "name": "Pixtorio",
+    "email": ""
+  },
+  "info": {
+    "companyName": "Pixtorio",
+    "productName": "Pixtorio",
+    "productVersion": "0.1.0",
+    "comments": "Local pixel-art and frame-animation editor",
+    "fileAssociations": [
+      {
+        "ext": "pixio",
+        "name": "Pixtorio.Project",
+        "description": "Pixtorio Project",
+        "iconName": "appicon",
+        "role": "Editor"
+      }
+    ]
+  }
+}
