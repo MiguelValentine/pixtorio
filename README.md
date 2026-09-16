@@ -1,116 +1,119 @@
-# Pixtorio
+<p align="center">
+  <img src="artifacts/logo-draft/pixtorio-pixel-p.png" width="96" alt="Pixtorio logo">
+</p>
 
-Pixtorio is a Windows-first Go pixel-art and frame-animation editor with a Wails desktop shell and a React, TypeScript and Vite frontend. The same frontend can run in a browser for local editing and browser downloads. It has a broad Aseprite-inspired raster and animation baseline; remaining parity work is tracked in `PARITY_WORK.md`.
+<h1 align="center">Pixtorio</h1>
 
-## Prerequisites
+<p align="center">A local pixel-art and frame-animation editor.</p>
 
-- Go 1.27 or newer
-- Node.js 24 or newer
-- WebView2 Runtime for the Windows desktop build
+<p align="center">
+  <a href="#quick-start">Quick start</a> ·
+  <a href="#features">Features</a> ·
+  <a href="#build">Build</a> ·
+  <a href="#contributing">Contributing</a> ·
+  <a href="README_zh-CN.md">简体中文</a>
+</p>
 
-## Development
+![Pixtorio light interface preview](artifacts/final-light.png)
+
+Pixtorio is a pixel-art and frame-animation editor inspired by the Aseprite workflow. Its desktop shell is built with Wails and Go; the editor uses React, TypeScript, Vite, and Canvas 2D. The same frontend can also run in a browser for local import and export workflows.
+
+The default interface is Simplified Chinese with a light theme. Both language and theme can be changed in Preferences. Windows is the primary desktop target; Pixtorio can also be built locally for Apple Silicon macOS.
+
+## Features
+
+- **Pixel creation**: pencil, eraser, eyedropper, fill, gradient, spray, contour, exact-color replacement, shapes, curves, multiline text, pixel-perfect zooming, panning, grids, guides, symmetry, and tiled previews.
+- **Brushes and colour**: shape, bitmap, and pattern brushes; brush presets; pressure and velocity dynamics; RGBA/HSLA editing; palette management; indexed colour; colour wheel; and tint, tone, and shade selectors.
+- **Layers and animation**: nested groups, all 19 Aseprite raster blend modes, background/reference layers, per-cel opacity and Z-index, a timeline, linked cels, tags, onion skinning, and detached animation previews.
+- **Selection and transforms**: rectangle, ellipse, lasso, polygon, magic-wand, colour, and opaque-content selections; boolean operations, feathering, grow/shrink, copy/paste, and selection, cel, and document transforms.
+- **Effects and assets**: brightness/contrast, HSL, curves, convolution, outline, shading, tilemaps, slices, ICC colour profiles, pixel aspect ratios, history, recovery, and configurable shortcuts.
+- **Interchange**: PNG, GIF, sprite sheets, packed atlases, image sequences, and GPL/JASC-PAL palettes, with configurable frame ranges, directions, tags, and layer splitting.
+
+## Quick Start
+
+### Prerequisites
+
+- Go `1.27` or newer
+- Node.js `24` or newer
+- Wails CLI `v2.15.0`
+- WebView2 Runtime for Windows desktop builds
+- Xcode Command Line Tools for local macOS builds
 
 Install the Wails CLI and frontend dependencies:
 
-~~~powershell
+```bash
 go install github.com/wailsapp/wails/v2/cmd/wails@v2.15.0
-Set-Location frontend
-npm install
-Set-Location ..
-~~~
+npm --prefix frontend install
+```
 
-Run the desktop application with live reload:
+Start the desktop app in development mode:
 
-~~~powershell
+```bash
 wails dev
-~~~
+```
 
-Run the browser frontend:
+Run the browser frontend only:
 
-~~~powershell
+```bash
 npm --prefix frontend run dev -- --host 127.0.0.1
-~~~
+```
 
-Browser mode supports local `.pixio`, PNG, palette, sprite-sheet and image-sequence import plus downloaded `.pixio`, PNG, GIF, sprite-sheet and image-sequence exports. Desktop-only recent-project paths, native dialogs, atomic file replacement and the live MCP bridge require the Wails application.
+Browser mode supports local project, PNG, palette, sprite-sheet, and image-sequence import, plus downloaded `.pixio`, PNG, GIF, sprite-sheet, and image-sequence exports. Native dialogs, recent-project paths, atomic saves, and MCP require the desktop application.
 
-Run the consolidated checks and create a production build:
+## Build
 
-~~~powershell
-go test ./...
+Run the full verification suite:
+
+```bash
 npm --prefix frontend run check
 npm --prefix frontend test
 npm --prefix frontend run build
+go test ./...
+```
+
+Build a production application for the current platform:
+
+```bash
 wails build
-~~~
+```
 
-The Windows executable is written to `build/bin/Pixtorio.exe`. An installer is intentionally not produced.
+The Windows executable is written to `build/bin/Pixtorio.exe`. To build an Apple Silicon macOS app bundle:
 
-## `.pixio v4`
+```bash
+wails build -platform darwin/arm64
+```
 
-`.pixio` is Pixtorio's only editable project format. The reader accepts strict format v4 only; v1-v3 files are rejected and there is no migration path or compatibility reader. The ZIP container stores a validated manifest, thumbnail, RGBA Cel PNGs, indexed Cel `.idx` payloads, tileset PNG/IDX resources, authoritative tilemap cell binaries and an optional embedded ICC profile.
+The macOS bundle is written to `build/bin/Pixtorio.app`. A release distributed to end users must be signed and notarized with your own Apple Developer ID.
 
-The manifest persists canvas dimensions, color mode, palette and transparent index, layer hierarchy and roles, all 19 blend modes, frames and tags, sparse/partial/linked Cel geometry, tilesets/tilemaps, slices, guides, pixel aspect ratio, color profile metadata and editor settings. RGBA, grayscale and indexed editing are supported; indexed documents keep palette indexes authoritative and use RGBA pixels as render caches. Palette alpha, GPL/JASC-PAL interchange and indexed conversion dithering are supported.
+## Project Files
 
-Color management supports embedded profile assignment/persistence and known sRGB/Display P3 conversion. Arbitrary ICC data can be retained and assigned, but conversion is only offered for profiles with a known conversion matrix.
+`.pixio` is Pixtorio's only editable project format. The current format is a strict `.pixio v4` ZIP container containing canvas, layers, frames, cels, palettes, tilesets, tilemaps, slices, guides, colour profiles, settings, and thumbnails.
 
-## Current Features
+v4 intentionally rejects older projects: v1-v3 files are not migrated, downgraded, or opened through a compatibility reader. PNG, GIF, sprite sheets, atlases, and image sequences are interchange formats, not project formats.
 
-Workspace layout presets are available under Preferences → Workspace layouts. Set the inspector width and timeline height, enter a name, and save the current layout. Select a saved layout to apply or update it; Reset layout restores the default 228px inspector and 254px timeline. Presets stay in local application/browser storage and do not alter project files or document history.
+## Project Status
 
-The palette menu can save the current palette as the local default for new documents, apply that default to the current document, or restore the built-in default. Alpha values and the transparent index are retained. Applying a palette is undoable and remaps indexed artwork to the new colors. In indexed documents, the Transparent index selector relocates the transparent slot and remaps palette indexes together to preserve the artwork's appearance.
+Pixtorio has a broad baseline across pixel editing, animation, compositing, import/export, history, and MCP, but it does not claim complete Aseprite parity. Confirmed remaining differences and verification work are tracked in [PARITY_WORK.md](PARITY_WORK.md).
 
-The collapsible Color selector offers a saturation/value spectrum, a hue/saturation wheel with a value strip, and tint/tone/shade variants. Pointer dragging and arrow-key adjustment edit the active foreground or background target while retaining that target's Alpha value.
+Automation/CLI interfaces, scripting and plugin APIs, cloud synchronization, installer maintenance, and `.aseprite` compatibility are explicitly out of scope.
 
-Image → Adjustments and effects → Curves offers independent R/G/B/A control-point curves. Click the graph to add a point, drag to adjust, or use the input/output fields. Arrow keys move the selected point by one (Shift by ten); Delete removes interior points. Changes remain in the dialog until Apply, which uses the selected Cel range and creates one undo step.
+## MCP
 
-The Outline effect opens a settings dialog with inside/outside placement, thickness, square/diamond/circle shape, eight direction toggles, horizontal/vertical tiling, channel masks and Cel scope. Generate preview compares the active Cel before and after without editing the document; changing settings clears that preview. Apply processes the chosen editable image Cels once per linked buffer and records one undo step. Background-layer alpha remains protected.
+The desktop app supports local MCP integration through `Pixtorio.exe --mcp`. It can access the active editor's documents, layers, frames, pixels, palettes, tilemaps, previews, and exports while sharing UI undo/redo history.
 
-Outline sampling and selections use document coordinates, including tiling across canvas edges. Partial Cels expand only where new outline pixels require it; existing off-canvas pixels and linked-Cel relative positions are retained. A batch is calculated before committing, so an expansion beyond the 2048-pixel Cel limit rejects the batch without partial edits.
+See [MCP.md](MCP.md) for protocol details, limits, and security guidance. MCP is a local desktop integration, not a remote service or a general-purpose scripting environment.
 
-Feathered outline edges interpolate color using premultiplied alpha, so hidden RGB in transparent pixels does not create dark or colored fringes. Disabled channels retain their original values.
+## Contributing
 
-The timeline's **Cel properties** button edits the active Cel or the selected Cels in one undo step. Opacity is 0–100%; Z-index is an integer from -32768 to 32767 that shifts the Cel above or below sibling layers for that frame, inside its current group. A blank field preserves each selected Cel's value. Linked Cels share pixels but retain independent opacity and stacking properties. Copying Cels and duplicating frames retain both properties; merge and background conversion bake opacity once. Background Cel properties are fixed at 100% and zero stacking offset.
+Issues and pull requests are welcome. Before submitting a change:
 
-Every Cel in the strict v4 project manifest and JSON bridge now requires `opacity` (0–1) and `zIndex`. Files missing these fields are rejected; no fallback or migration is provided.
+1. Keep the change focused and follow the existing TypeScript, React, and Go conventions.
+2. Add focused tests for behavioural changes.
+3. Run the full verification suite listed above.
+4. Do not add migration, compatibility reading, or compatibility tests for `.pixio v1-v3`.
 
-Brush settings can capture the current selection as a colored RGBA pattern and align it to each source stamp, the document canvas or the stroke destination. Pattern X/Y origin is adjustable, transparent pattern texels leave existing pixels untouched, and tiled drawing retains texture phase across document edges. Named brush presets save, update, apply and delete the full shape, bitmap, pattern, alignment, origin, spacing, angle, ink, dynamics and stabilizer configuration in local application/browser storage.
+See [AGENTS.md](AGENTS.md) and [RELEASE.md](RELEASE.md) for the full engineering and release-verification requirements.
 
-Brush Dynamics separates size, opacity, angle and foreground/background color into independent channels. Each channel can use Pressure or Velocity, its own minimum/maximum range and threshold, inversion, and a linear, ease-in, ease-out or S-curve response. Shape and paint groups can be collapsed independently, and named brush presets persist the complete channel configuration in strict preset format v2.
+## License
 
-The Text Tool can load TTF, OTF, WOFF and WOFF2 files for the current application session. None, slight and full hinting align text at subpixel, half-pixel or whole-pixel positions; ligatures can be enabled or disabled independently. Imported fonts are used by the live preview and rasterized on placement, so saved `.pixio` projects contain only the resulting pixels and never depend on an external font file.
-
-- Pixel canvas with integer zoom, pan, transparent checkerboard, custom grid, guides, symmetry axes, tiled preview, nearest-neighbor sampling and cached dirty-region rendering.
-- Pencil, eraser, eyedropper, zoom, hand, move, line, rectangle, ellipse, staged quadratic curve and polyline, polygon, fill, gradient, spray, blur, jumble, contour, exact-color replacement, slice and multiline text tools.
-- Square, circle, cross, diamond, bitmap, selection-derived and colored pattern brushes with spacing, pixel-perfect drawing, brush angle, ink modes, independent pressure/velocity size/opacity/angle/color dynamics, response curves, stabilizer controls and persistent named presets.
-- Rectangle, ellipse, lasso, polygon, magic-wand, color and opaque-content selections with soft coverage, feathering, optional antialiasing, boolean operations, reselect, invert, grow, shrink, border, copy, paste, delete, transforms and independent crop.
-- Eight-handle selection/Cel transform editing with scale, perspective and distort modes, nearest-neighbor arbitrary-angle rotation, interactive rotation handle, draggable pivot and numeric transform controls.
-- Canvas/document rotate and flip, trim transparent margins, canvas resize with anchors, sprite-content resize and pixel-aspect-ratio editing, including sparse/indexed/linked/tilemap data rebuilding.
-- Nested groups, multi-layer selection and batch commands, visibility, lock, opacity, all 19 Aseprite raster blend modes, background/reference roles, continuous Cels, alpha lock, appearance-preserving merge/flatten and Delete-key layer removal.
-- Multi-frame timeline with empty and linked Cels, cross-document Cel copy/paste, frame tags, reverse/ping-pong playback, repeat counts, duration editing, loop ranges, FPS controls, onion skin and internal or detached animation preview.
-- Tilemap authoring with shared tilesets, image conversion, tile selection, add/delete, tile-cell and pixel editing, flip/rotation flags and cache synchronization.
-- Text layout with live canvas preview, built-in or runtime-loaded fonts, hinting and ligature controls, foreground fill, background-color stroke/width, font family/size, line height, bold/italic, alignment, antialiasing, alpha compositing and selection clipping.
-- Effects and adjustments including brightness/contrast, HSL, invert, convolution, median/despeckle, curves, HSV/HSL relative or absolute modes, channel masks, outline and shading, with active/selected/all-Cel scope.
-- PNG import/export, transparent animated GIF export with loop controls, sprite-sheet layouts/padding, packed atlas export, tag/layer split export, atlas JSON, sprite-sheet import with offsets/padding, image-sequence import/export and selectable frame range/direction.
-- Local light/dark themes, English/Chinese UI, spectrum/wheel/tint-tone-shade color selectors, autosave/recovery, recent projects, unsaved-close confirmation, drag/drop import, implemented preference controls, history memory controls, resizable inspector/timeline panels and conflict-aware tool/command shortcut editing.
-- Reversible history with bounded dirty-region pixel commands, structural document commands, saved-state tracking, non-linear history-state restore, per-tab composite/thumbnail caches and performance benchmarks.
-- Native Windows and browser bitmap clipboard interchange, plus an application-local Cel clipboard shared by open documents.
-
-## Parity Status
-
-Parity work is active. Move/background semantics, advanced edit commands, per-Cel appearance, document-space effects, curves, pattern-brush presets, expanded text options and color-selector variants are implemented; the confirmed remaining differences are recorded in `PARITY_WORK.md`. Complete command, preference and workspace parity is not yet claimed.
-
-## MCP Integration
-
-Keep the desktop application open and configure an MCP client to launch `Pixtorio.exe --mcp` over stdio. Tools operate on the live editor workspace, share UI undo/redo and use Go for v4 project persistence and exports. The protocol covers document metadata, open tabs, document creation/open/save/close, atomic undoable edits, layers, frames, RGBA pixels, indexed indexes, palettes, tilesets, tilemaps, settings, slices, guides, previews and PNG/GIF/sprite-sheet export.
-
-See `MCP.md` for configuration, limits and local security. MCP is a live desktop integration, not a scripting engine, arbitrary code runner or browser-only backend.
-
-## Windows Release
-
-Build the executable with:
-
-~~~powershell
-go run github.com/wailsapp/wails/v2/cmd/wails@v2.15.0 build
-~~~
-
-The release is executable-only. Pixtorio intentionally does not ship automation or CLI interfaces, scripting/plugins/extensions, cloud synchronization, an installer or `.aseprite` compatibility. The live MCP bridge is a desktop integration surface, not a general scripting API.
+This repository currently has no license file. Until an explicit license is added, no permission is granted to copy, modify, or distribute the project.

@@ -12,6 +12,10 @@ function storage(initial: string | null = null) {
 }
 
 describe("application preferences", () => {
+  it("defaults to the Chinese light interface", () => {
+    expect(defaultPreferences().general).toMatchObject({language: "zh", theme: "light"});
+  });
+
   it("round trips the complete preference model", () => {
     const target = storage();
     const preferences = defaultPreferences();

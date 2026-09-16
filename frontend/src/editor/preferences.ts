@@ -105,7 +105,7 @@ const hexColor = /^#[0-9a-f]{6}$/i;
 export function defaultPreferences(): AppPreferences {
   return {
     version: preferencesVersion,
-    general: {theme: "dark", language: "zh", uiScale: 100, expandMenusOnHover: false, paletteSeparators: true},
+    general: {theme: "light", language: "zh", uiScale: 100, expandMenusOnHover: false, paletteSeparators: true},
     files: {autosaveEnabled: true, autosaveSeconds: 30, recentItems: 10},
     color: {alphaRange: "percent", defaultColorMode: "rgba", defaultProfile: "srgb"},
     alerts: {closeUnsaved: true, deleteLayer: false, deleteFrame: false, deleteCel: false, convertColorMode: true},

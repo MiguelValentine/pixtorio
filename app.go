@@ -560,21 +560,31 @@ func (a *App) beforeClose(ctx context.Context) bool {
 		return false
 	}
 
-	title, message := "Unsaved changes", "Close Pixtorio and discard all unsaved changes?"
-	if strings.EqualFold(language, "zh") || strings.HasPrefix(strings.ToLower(language), "zh-") {
-		title, message = "存在未保存的更改", "关闭 Pixtorio 并放弃所有未保存的更改吗？"
-	}
-	response, err := runtime.MessageDialog(ctx, runtime.MessageDialogOptions{
-		Type:          runtime.QuestionDialog,
-		Title:         title,
-		Message:       message,
-		DefaultButton: "No",
-		CancelButton:  "No",
-	})
-	if err != nil || response != "Yes" {
+	dialog, discardButton := closeConfirmationDialog(language)
+	response, err := runtime.MessageDialog(ctx, dialog)
+	if err != nil || response != discardButton {
 		return true
 	}
 	return a.ClearRecovery() != nil
+}
+
+// closeConfirmationDialog provides explicit choices because macOS does not
+// synthesize question-dialog buttons when none are supplied.
+func closeConfirmationDialog(language string) (runtime.MessageDialogOptions, string) {
+	title, message := "Unsaved changes", "Close Pixtorio and discard all unsaved changes?"
+	discardButton, cancelButton := "Discard Changes", "Cancel"
+	if strings.EqualFold(language, "zh") || strings.HasPrefix(strings.ToLower(language), "zh-") {
+		title, message = "存在未保存的更改", "关闭 Pixtorio 并放弃所有未保存的更改吗？"
+		discardButton, cancelButton = "放弃更改", "取消"
+	}
+	return runtime.MessageDialogOptions{
+		Type:          runtime.QuestionDialog,
+		Title:         title,
+		Message:       message,
+		Buttons:       []string{discardButton, cancelButton},
+		DefaultButton: cancelButton,
+		CancelButton:  cancelButton,
+	}, discardButton
 }
 
 func decodeRGBABase64(width, height int, encoded string) ([]byte, error) {

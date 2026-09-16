@@ -27,6 +27,32 @@ func TestStartupProjectPath(t *testing.T) {
 	}
 }
 
+func TestCloseConfirmationDialogUsesExplicitLocalizedButtons(t *testing.T) {
+	tests := []struct {
+		language string
+		title    string
+		discard  string
+		cancel   string
+	}{
+		{language: "en", title: "Unsaved changes", discard: "Discard Changes", cancel: "Cancel"},
+		{language: "zh-CN", title: "存在未保存的更改", discard: "放弃更改", cancel: "取消"},
+	}
+	for _, test := range tests {
+		t.Run(test.language, func(t *testing.T) {
+			dialog, discard := closeConfirmationDialog(test.language)
+			if dialog.Title != test.title {
+				t.Fatalf("dialog title = %q, want %q", dialog.Title, test.title)
+			}
+			if discard != test.discard || len(dialog.Buttons) != 2 || dialog.Buttons[0] != test.discard || dialog.Buttons[1] != test.cancel {
+				t.Fatalf("dialog buttons = %#v, discard = %q", dialog.Buttons, discard)
+			}
+			if dialog.DefaultButton != test.cancel || dialog.CancelButton != test.cancel {
+				t.Fatalf("default/cancel buttons = %q/%q, want %q", dialog.DefaultButton, dialog.CancelButton, test.cancel)
+			}
+		})
+	}
+}
+
 func TestConflictsWithProjectPathUsesCaseInsensitiveIdentity(t *testing.T) {
 	reserved := filepath.Join(t.TempDir(), "Hero.pixio")
 	if !conflictsWithProjectPath(strings.ToUpper(reserved), []string{strings.ToLower(reserved)}) {
