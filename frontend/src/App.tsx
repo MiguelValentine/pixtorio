@@ -77,7 +77,7 @@ import {ClearRecovery, ClipboardReadImage, ClipboardWriteImage, ImportPNG, Impor
 import {ClipboardGetText, ClipboardSetText, EventsOn} from "../wailsjs/runtime/runtime";
 import {ClaimMCPCommand, CompleteMCPCommand, SetMCPReady} from "../wailsjs/go/main/App";
 import {handleMCPWorkspaceCommand, type MCPWorkspaceTab} from "./editor/mcpWorkspace";
-import {defaultWorkspaceDimensions, readWorkspaceLayouts, saveWorkspaceLayout, deleteWorkspaceLayout} from "./editor/workspaceLayouts";
+import {defaultWorkspaceDimensions, defaultWorkspaceVisibility, readWorkspaceLayouts, readWorkspaceVisibility, saveWorkspaceLayout, saveWorkspaceVisibility, deleteWorkspaceLayout} from "./editor/workspaceLayouts";
 import {readPreferences, savePreferences, type AppPreferences} from "./editor/preferences";
 import {readDefaultPalette, saveDefaultPalette, resetDefaultPalette} from "./editor/defaultPalette";
 import {applyDocumentPalette, relocateTransparentIndex} from "./editor/paletteOperations";
@@ -1644,8 +1644,8 @@ function App() {
   const [isViewMenuOpen, setIsViewMenuOpen] = useState(false);
   const [isImageEffectsMenuOpen, setIsImageEffectsMenuOpen] = useState(false);
   const [isPaletteMenuOpen, setIsPaletteMenuOpen] = useState(false);
-  const [inspectorVisible, setInspectorVisible] = useState(true);
-  const [timelineVisible, setTimelineVisible] = useState(true);
+  const [inspectorVisible, setInspectorVisible] = useState(() => readWorkspaceVisibility(localStorage).inspectorVisible ?? defaultWorkspaceVisibility.inspectorVisible);
+  const [timelineVisible, setTimelineVisible] = useState(() => readWorkspaceVisibility(localStorage).timelineVisible ?? defaultWorkspaceVisibility.timelineVisible);
   const [tabScrollState, setTabScrollState] = useState({canGoBack: false, canGoForward: false});
   const [canvasDialog, setCanvasDialog] = useState<"new" | "resize" | "sprite-size" | null>(null);
   const [canvasWidthDraft, setCanvasWidthDraft] = useState(64);
@@ -2187,6 +2187,9 @@ function App() {
   }, [preferences.files.recentItems]);
   useEffect(() => { localStorage.setItem("pixtorio-inspector-width", String(inspectorWidth)); }, [inspectorWidth]);
   useEffect(() => { localStorage.setItem("pixtorio-timeline-height", String(timelineHeight)); }, [timelineHeight]);
+  useEffect(() => {
+    saveWorkspaceVisibility(localStorage, {inspectorVisible, timelineVisible});
+  }, [inspectorVisible, timelineVisible]);
   useEffect(() => {
     const previousSize = previousBrushSizeRef.current;
     previousBrushSizeRef.current = brushSize;
@@ -4415,6 +4418,11 @@ function App() {
         setColorProfileDialog(false);
         return;
       }
+      if (key === "escape" && isViewMenuOpen) {
+        event.preventDefault();
+        setIsViewMenuOpen(false);
+        return;
+      }
       if (key === "escape" && isPaletteMenuOpen) {
         event.preventDefault();
         setIsPaletteMenuOpen(false);
@@ -4438,7 +4446,7 @@ function App() {
         setIsFileMenuOpen(false);
         return;
       }
-      if (celPropertiesDialog || canvasDialog || tagDialog || exportDialog || adjustmentDialog || spriteImportDialog || settingsOpen || historyOpen || colorProfileDialog) return;
+      if (celPropertiesDialog || canvasDialog || tagDialog || exportDialog || adjustmentDialog || spriteImportDialog || settingsOpen || historyOpen || colorProfileDialog || isViewMenuOpen) return;
       const command = commandForShortcutEvent(event, commandShortcutAssignments);
       if (command && isEditableTarget(event.target)) return;
       if (!hasOpenDocument && command !== "new" && command !== "open") {
@@ -4522,7 +4530,7 @@ function App() {
     };
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [activeCel, activeClearColor, activeLayer, activeTab, activateTool, adjustmentDialog, canEditPixels, canvasDialog, celPropertiesDialog, clearCurrentCels, colorProfileDialog, commandShortcutAssignments, commitPixelMutation, copyCurrentCels, copyCurrentSelection, cutCurrentCels, cutCurrentSelection, deleteCurrentFrames, exportDialog, hasOpenDocument, historyOpen, isEditMenuOpen, isFileMenuOpen, isPaletteMenuOpen, isPlaying, isSpriteMenuOpen, mutateDocument, newDocument, openPixio, pasteCurrentCels, pasteSystemSelection, pixelDocument, preferences.alerts.deleteLayer, preferences.selection.keepAfterDelete, redo, savePixio, selection, setSelection, setStatus, settingsOpen, shortcutToolByKey, spriteImportDialog, tagDialog, undo]);
+  }, [activeCel, activeClearColor, activeLayer, activeTab, activateTool, adjustmentDialog, canEditPixels, canvasDialog, celPropertiesDialog, clearCurrentCels, colorProfileDialog, commandShortcutAssignments, commitPixelMutation, copyCurrentCels, copyCurrentSelection, cutCurrentCels, cutCurrentSelection, deleteCurrentFrames, exportDialog, hasOpenDocument, historyOpen, isEditMenuOpen, isFileMenuOpen, isPaletteMenuOpen, isPlaying, isSpriteMenuOpen, isViewMenuOpen, mutateDocument, newDocument, openPixio, pasteCurrentCels, pasteSystemSelection, pixelDocument, preferences.alerts.deleteLayer, preferences.selection.keepAfterDelete, redo, savePixio, selection, setSelection, setStatus, settingsOpen, shortcutToolByKey, spriteImportDialog, tagDialog, undo]);
 
   const siblingLayers = pixelDocument.layers.filter((layer) => layer.parentId === activeLayer.parentId);
   const activeSiblingIndex = siblingLayers.findIndex((layer) => layer.id === activeLayer.id);
@@ -4626,8 +4634,8 @@ function App() {
     <div
       className={`${lightTheme ? "app-shell is-light" : "app-shell"}${preferences.general.paletteSeparators ? " has-palette-separators" : ""}`}
       style={{
-        "--inspector-width": `${inspectorWidth}px`,
-        "--timeline-height": `${timelineHeight}px`,
+        "--inspector-width": inspectorVisible ? `${inspectorWidth}px` : "0px",
+        "--timeline-height": timelineVisible ? `${timelineHeight}px` : "0px",
         zoom: uiScale,
         width: `${100 / uiScale}%`,
         height: `${100 / uiScale}%`,
@@ -4637,15 +4645,15 @@ function App() {
     >
       <header className="topbar">
         <div className="file-menu" ref={fileMenuRef} onPointerEnter={() => {
-          if (!preferences.general.expandMenusOnHover || (!isFileMenuOpen && !isEditMenuOpen && !isSpriteMenuOpen)) return;
-          setIsFileMenuOpen(true); setIsEditMenuOpen(false); setIsSpriteMenuOpen(false);
+          if (!preferences.general.expandMenusOnHover || (!isFileMenuOpen && !isEditMenuOpen && !isSpriteMenuOpen && !isViewMenuOpen)) return;
+          setIsFileMenuOpen(true); setIsEditMenuOpen(false); setIsSpriteMenuOpen(false); setIsViewMenuOpen(false);
         }}>
           <button
             className={isFileMenuOpen ? "menu-trigger is-open" : "menu-trigger"}
             type="button"
             aria-haspopup="menu"
             aria-expanded={isFileMenuOpen}
-            onClick={() => { setIsEditMenuOpen(false); setIsSpriteMenuOpen(false); setIsFileMenuOpen((value) => !value); }}
+            onClick={() => { setIsEditMenuOpen(false); setIsSpriteMenuOpen(false); setIsViewMenuOpen(false); setIsFileMenuOpen((value) => !value); }}
           >
             {ui.file} <ChevronDown size={14} aria-hidden="true" />
           </button>
@@ -4672,8 +4680,8 @@ function App() {
           </div>}
         </div>
         <div className="file-menu" ref={editMenuRef} onPointerEnter={() => {
-          if (!preferences.general.expandMenusOnHover || !hasOpenDocument || (!isFileMenuOpen && !isEditMenuOpen && !isSpriteMenuOpen)) return;
-          setIsFileMenuOpen(false); setIsEditMenuOpen(true); setIsSpriteMenuOpen(false);
+          if (!preferences.general.expandMenusOnHover || !hasOpenDocument || (!isFileMenuOpen && !isEditMenuOpen && !isSpriteMenuOpen && !isViewMenuOpen)) return;
+          setIsFileMenuOpen(false); setIsEditMenuOpen(true); setIsSpriteMenuOpen(false); setIsViewMenuOpen(false);
         }}>
           <button
             className={isEditMenuOpen ? "menu-trigger is-open" : "menu-trigger"}
@@ -4684,6 +4692,7 @@ function App() {
             onClick={() => {
               setIsFileMenuOpen(false);
               setIsSpriteMenuOpen(false);
+              setIsViewMenuOpen(false);
               setIsEditMenuOpen((value) => !value);
               setIsPasteSpecialMenuOpen(false);
               setIsShiftPixelsMenuOpen(false);
@@ -4724,10 +4733,10 @@ function App() {
           </div>}
         </div>
         <div className="file-menu" ref={spriteMenuRef} onPointerEnter={() => {
-          if (!preferences.general.expandMenusOnHover || !hasOpenDocument || (!isFileMenuOpen && !isEditMenuOpen && !isSpriteMenuOpen)) return;
-          setIsFileMenuOpen(false); setIsEditMenuOpen(false); setIsSpriteMenuOpen(true);
+          if (!preferences.general.expandMenusOnHover || !hasOpenDocument || (!isFileMenuOpen && !isEditMenuOpen && !isSpriteMenuOpen && !isViewMenuOpen)) return;
+          setIsFileMenuOpen(false); setIsEditMenuOpen(false); setIsSpriteMenuOpen(true); setIsViewMenuOpen(false);
         }}>
-          <button className={isSpriteMenuOpen ? "menu-trigger is-open" : "menu-trigger"} type="button" disabled={!hasOpenDocument} aria-haspopup="menu" aria-expanded={isSpriteMenuOpen} onClick={() => { setIsFileMenuOpen(false); setIsEditMenuOpen(false); setIsImageEffectsMenuOpen(false); setIsSpriteMenuOpen((value) => !value); }}>
+          <button className={isSpriteMenuOpen ? "menu-trigger is-open" : "menu-trigger"} type="button" disabled={!hasOpenDocument} aria-haspopup="menu" aria-expanded={isSpriteMenuOpen} onClick={() => { setIsFileMenuOpen(false); setIsEditMenuOpen(false); setIsViewMenuOpen(false); setIsImageEffectsMenuOpen(false); setIsSpriteMenuOpen((value) => !value); }}>
             {language === "zh" ? "图像" : "Sprite"} <ChevronDown size={14} aria-hidden="true" />
           </button>
           {isSpriteMenuOpen && <div className="file-menu-popover sprite-menu-popover" role="menu" aria-label={language === "zh" ? "图像" : "Sprite"}>
@@ -4761,6 +4770,38 @@ function App() {
             <button type="button" role="menuitem" onClick={() => { setIsSpriteMenuOpen(false); mutateDocument("Flip Sprite Vertically", () => flipDocument(pixelDocument, "vertical")); }}><FlipVertical2 size={16} />{ui.flipVertical}</button>
             <div className="menu-divider" role="separator" />
             <button type="button" role="menuitem" onClick={() => { setIsSpriteMenuOpen(false); openColorProfileDialog(); }}><Sun size={16} />{language === "zh" ? "颜色配置" : "Color configuration"}</button>
+          </div>}
+        </div>
+        <div className="file-menu" ref={viewMenuRef} onPointerEnter={() => {
+          if (!preferences.general.expandMenusOnHover || (!isFileMenuOpen && !isEditMenuOpen && !isSpriteMenuOpen && !isViewMenuOpen)) return;
+          setIsFileMenuOpen(false); setIsEditMenuOpen(false); setIsSpriteMenuOpen(false); setIsViewMenuOpen(true);
+        }}>
+          <button className={isViewMenuOpen ? "menu-trigger is-open" : "menu-trigger"} type="button" aria-haspopup="menu" aria-expanded={isViewMenuOpen} onClick={() => { setIsFileMenuOpen(false); setIsEditMenuOpen(false); setIsSpriteMenuOpen(false); setIsViewMenuOpen((value) => !value); }}>
+            {language === "zh" ? "视图" : "View"} <ChevronDown size={14} aria-hidden="true" />
+          </button>
+          {isViewMenuOpen && <div className="file-menu-popover view-menu-popover" role="menu" aria-label={language === "zh" ? "视图" : "View"}>
+            <button type="button" role="menuitemcheckbox" aria-checked={inspectorVisible} onClick={() => { setInspectorVisible((value) => !value); setIsViewMenuOpen(false); }}>
+              {inspectorVisible ? <Eye size={16} /> : <EyeOff size={16} />}
+              {inspectorVisible ? (language === "zh" ? "隐藏侧栏" : "Hide Inspector") : (language === "zh" ? "显示侧栏" : "Show Inspector")}
+            </button>
+            <button type="button" role="menuitemcheckbox" aria-checked={timelineVisible} onClick={() => { setTimelineVisible((value) => !value); setIsViewMenuOpen(false); }}>
+              {timelineVisible ? <Eye size={16} /> : <EyeOff size={16} />}
+              {timelineVisible ? (language === "zh" ? "隐藏时间轴" : "Hide Timeline") : (language === "zh" ? "显示时间轴" : "Show Timeline")}
+            </button>
+            <div className="menu-divider" role="separator" />
+            <button type="button" role="menuitemcheckbox" aria-checked={showPixelGrid} onClick={() => { setShowPixelGrid((value) => !value); setIsViewMenuOpen(false); }}><Grid2X2 size={16} />{language === "zh" ? "像素网格" : "Pixel Grid"}</button>
+            <button type="button" role="menuitemcheckbox" disabled={!hasOpenDocument} aria-checked={onionSkin} onClick={() => { setOnionSkin((value) => !value); setIsViewMenuOpen(false); }}><Eye size={16} />{language === "zh" ? "洋葱皮" : "Onion Skin"}</button>
+            <button type="button" role="menuitem" disabled={!hasOpenDocument} onClick={() => { setIsViewMenuOpen(false); toggleDetachedPreview(); }}><Eye size={16} />{language === "zh" ? "独立动画预览" : "Detached Preview"}</button>
+            <div className="menu-divider" role="separator" />
+            <button type="button" role="menuitem" onClick={() => {
+              setInspectorWidth(defaultWorkspaceDimensions.inspectorWidth);
+              setTimelineHeight(defaultWorkspaceDimensions.timelineHeight);
+              setInspectorVisible(defaultWorkspaceVisibility.inspectorVisible);
+              setTimelineVisible(defaultWorkspaceVisibility.timelineVisible);
+              setWorkspaceLayoutSelected("");
+              setWorkspaceLayoutNotice("reset");
+              setIsViewMenuOpen(false);
+            }}><RotateCcw size={16} />{language === "zh" ? "重置工作区布局" : "Reset Workspace Layout"}</button>
           </div>}
         </div>
         <div className="document-tab-strip">
@@ -5010,7 +5051,7 @@ function App() {
         />
       </main>
 
-      <aside className="inspector">
+      {inspectorVisible && <aside className="inspector">
         <section className="panel-section color-section">
           <div className="color-section-header">
             <h2>{ui.color}</h2>
@@ -5335,24 +5376,24 @@ function App() {
 
         {recentProjects.length > 0 && <section className="panel-section recent-section"><h2>{ui.recent}</h2>{recentProjects.map((path) => <button className="recent-project" key={path} title={path} onClick={() => void openRecentProject(path)}>{path.split(/[\\/]/).pop()}</button>)}</section>}
 
-      </aside>
+      </aside>}
 
-      <div
+      {inspectorVisible && <div
         className="inspector-resizer"
         role="separator"
         aria-orientation="vertical"
         aria-label={language === "zh" ? "调整侧栏宽度" : "Resize inspector"}
         onPointerDown={(event) => beginPanelResize("inspector", event)}
-      />
+      />}
 
-      <div
+      {timelineVisible && <div
         className="timeline-resizer"
         role="separator"
         aria-orientation="horizontal"
         aria-label={language === "zh" ? "调整时间轴高度" : "Resize timeline"}
         onPointerDown={(event) => beginPanelResize("timeline", event)}
-      />
-      <section className="timeline-panel" aria-label={ui.animation}>
+      />}
+      {timelineVisible && <section className="timeline-panel" aria-label={ui.animation}>
         <header className="timeline-toolbar">
           <div className="timeline-toolbar-row">
             <div className="timeline-title">{ui.layers} / {ui.animation}</div>
@@ -5503,7 +5544,7 @@ function App() {
             })}</div>)}
           </div>
         </div>
-      </section>
+      </section>}
       </>}
 
       {hasOpenDocument && previewOpen && <aside className="animation-preview" aria-label={language === "zh" ? "动画预览" : "Animation preview"}>
@@ -5541,7 +5582,7 @@ function App() {
         <form className="canvas-dialog editor-dialog preferences-dialog" role="dialog" aria-modal="true" aria-label={language === "zh" ? "偏好设置" : "Preferences"} onSubmit={(event) => { event.preventDefault(); setSettingsOpen(false); }}>
           <h2>{language === "zh" ? "偏好设置" : "Preferences"}</h2>
           <PreferencesPanel preferences={preferences} onChange={applyPreferences} zh={language === "zh"} />
-          <div className="preferences-heading"><span>{language === "zh" ? "工作区布局" : "Workspace layouts"}</span><button type="button" onClick={() => { setInspectorWidth(defaultWorkspaceDimensions.inspectorWidth); setTimelineHeight(defaultWorkspaceDimensions.timelineHeight); setWorkspaceLayoutNotice("reset"); }}>{language === "zh" ? "重置布局" : "Reset layout"}</button></div>
+          <div className="preferences-heading"><span>{language === "zh" ? "工作区布局" : "Workspace layouts"}</span><button type="button" onClick={() => { setInspectorWidth(defaultWorkspaceDimensions.inspectorWidth); setTimelineHeight(defaultWorkspaceDimensions.timelineHeight); setInspectorVisible(defaultWorkspaceVisibility.inspectorVisible); setTimelineVisible(defaultWorkspaceVisibility.timelineVisible); setWorkspaceLayoutNotice("reset"); }}>{language === "zh" ? "重置布局" : "Reset layout"}</button></div>
           <div className="preferences-general">
             <label className="dialog-field"><span>{language === "zh" ? "侧栏宽度" : "Inspector width"}</span><input type="number" min="190" max="420" value={inspectorWidth} onChange={(event) => setInspectorWidth(Math.max(190, Math.min(420, Math.round(Number(event.target.value) || 190))))} /></label>
             <label className="dialog-field"><span>{language === "zh" ? "时间轴高度" : "Timeline height"}</span><input type="number" min="150" max="520" value={timelineHeight} onChange={(event) => setTimelineHeight(Math.max(150, Math.min(520, Math.round(Number(event.target.value) || 150))))} /></label>

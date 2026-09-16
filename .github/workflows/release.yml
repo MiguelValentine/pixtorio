@@ -1,0 +1,140 @@
+name: Build Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build ${{ matrix.name }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Windows x64
+            runner: windows-latest
+            platform: windows/amd64
+            artifact: Pixtorio-windows-x64
+          - name: macOS Universal
+            runner: macos-14
+            platform: darwin/universal
+            artifact: Pixtorio-macos-universal
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Apply release version
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          const version = process.env.GITHUB_REF_NAME.replace(/^v/, '');
+          if (!/^\d+\.\d+\.\d+$/.test(version)) {
+            throw new Error('Release tags must use vMAJOR.MINOR.PATCH, for example v0.1.0');
+          }
+          const config = JSON.parse(fs.readFileSync('wails.json', 'utf8'));
+          config.info.productVersion = version;
+          fs.writeFileSync('wails.json', JSON.stringify(config, null, 2) + '\n');
+          NODE
+
+      - name: Install frontend dependencies
+        run: npm --prefix frontend ci
+
+      - name: Check frontend
+        run: npm --prefix frontend run check
+
+      - name: Test frontend
+        run: npm --prefix frontend test
+
+      - name: Build frontend
+        run: npm --prefix frontend run build
+
+      - name: Test Go
+        run: go test ./...
+
+      - name: Build desktop application
+        run: go run github.com/wailsapp/wails/v2/cmd/wails@v2.15.0 build -platform "${{ matrix.platform }}" -s
+
+      - name: Package Windows executable
+        if: runner.os == 'Windows'
+        run: |
+          test -s build/bin/Pixtorio.exe
+          mkdir -p release
+          cp build/bin/Pixtorio.exe release/Pixtorio-windows-x64.exe
+
+      - name: Package macOS application
+        if: runner.os == 'macOS'
+        run: |
+          test -x build/bin/Pixtorio.app/Contents/MacOS/Pixtorio
+          lipo -verify_arch x86_64 arm64 build/bin/Pixtorio.app/Contents/MacOS/Pixtorio
+          mkdir -p release
+          ditto -c -k --sequesterRsrc --keepParent build/bin/Pixtorio.app release/Pixtorio-macos-universal.zip
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: release/*
+          if-no-files-found: error
+          retention-days: 14
+
+  release:
+    name: Create draft release
+    if: startsWith(github.ref, 'refs/tags/')
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - name: Download release artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: Pixtorio-*
+          merge-multiple: true
+          path: release
+
+      - name: Create draft and upload binaries
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            draft=$(gh release view "$RELEASE_TAG" --json isDraft --jq '.isDraft')
+            if [ "$draft" != "true" ]; then
+              echo "Refusing to overwrite a published release. Use a new version tag."
+              exit 1
+            fi
+            gh release upload "$RELEASE_TAG" release/* --clobber
+          else
+            gh release create "$RELEASE_TAG" release/* \
+              --verify-tag --draft --generate-notes --title "Pixtorio $RELEASE_TAG"
+          fi

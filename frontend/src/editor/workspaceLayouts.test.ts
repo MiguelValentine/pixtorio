@@ -1,11 +1,12 @@
 import {describe, expect, it} from "vitest";
-import {deleteWorkspaceLayout, readWorkspaceLayouts, saveWorkspaceLayout, type WorkspaceLayout} from "./workspaceLayouts";
+import {defaultWorkspaceVisibility, deleteWorkspaceLayout, readWorkspaceLayouts, readWorkspaceVisibility, resetWorkspaceVisibility, saveWorkspaceLayout, saveWorkspaceVisibility, type WorkspaceLayout} from "./workspaceLayouts";
 
 function createStorage(initial: string | null = null) {
   let value = initial;
   return {
     getItem: () => value,
     setItem: (_key: string, nextValue: string) => { value = nextValue; },
+    removeItem: () => { value = null; },
   };
 }
 
@@ -88,5 +89,30 @@ describe("workspace layouts", () => {
 
     expect(() => saveWorkspaceLayout(storage, {name: "Layout", inspectorWidth: 228, timelineHeight: 254})).toThrow(error);
     expect(() => deleteWorkspaceLayout(storage, "Layout")).toThrow(error);
+  });
+});
+
+describe("workspace visibility", () => {
+  it("defaults to showing both panels and round-trips explicit visibility", () => {
+    const target = createStorage();
+    expect(readWorkspaceVisibility(target)).toEqual(defaultWorkspaceVisibility);
+
+    const visibility = {inspectorVisible: false, timelineVisible: true};
+    saveWorkspaceVisibility(target, visibility);
+    expect(readWorkspaceVisibility(target)).toEqual(visibility);
+  });
+
+  it("falls back to visible panels for malformed or incomplete data", () => {
+    expect(readWorkspaceVisibility(createStorage("not json"))).toEqual(defaultWorkspaceVisibility);
+    expect(readWorkspaceVisibility(createStorage(JSON.stringify({inspectorVisible: false})))).toEqual(defaultWorkspaceVisibility);
+    expect(readWorkspaceVisibility(createStorage(JSON.stringify({inspectorVisible: 0, timelineVisible: true})))).toEqual(defaultWorkspaceVisibility);
+  });
+
+  it("resets persisted visibility and rejects invalid values", () => {
+    const target = createStorage();
+    saveWorkspaceVisibility(target, {inspectorVisible: false, timelineVisible: false});
+    expect(resetWorkspaceVisibility(target)).toEqual(defaultWorkspaceVisibility);
+    expect(readWorkspaceVisibility(target)).toEqual(defaultWorkspaceVisibility);
+    expect(() => saveWorkspaceVisibility(target, {inspectorVisible: true, timelineVisible: "yes"} as never)).toThrow("Invalid workspace visibility");
   });
 });
