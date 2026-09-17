@@ -2,6 +2,9 @@ import {describe, expect, it} from "vitest";
 import {
   clampByte,
   clampPercent,
+  alphaDisplayMaximum,
+  alphaFromDisplay,
+  alphaToDisplay,
   colorToRgbaBytes,
   hslaToRgba,
   normalizeHSLA,
@@ -13,6 +16,15 @@ import {
 } from "./colorEditor";
 
 describe("color editor conversions", () => {
+  it("converts alpha values between percentage and byte display ranges", () => {
+    expect(alphaDisplayMaximum("percent")).toBe(100);
+    expect(alphaDisplayMaximum("byte")).toBe(255);
+    expect(alphaToDisplay(50, "percent")).toBe(50);
+    expect(alphaToDisplay(50, "byte")).toBe(128);
+    expect(alphaFromDisplay(128, "byte")).toBeCloseTo(50.19607843137255);
+    expect(alphaFromDisplay(50, "percent")).toBe(50);
+  });
+
   it("normalizes invalid RGB and alpha input without producing NaN", () => {
     expect(normalizeRGBA({r: "300", g: -2, b: "invalid", a: "125"})).toEqual({r: 255, g: 0, b: 0, a: 100});
     expect(normalizeRGBA({r: Number.NaN, a: Number.POSITIVE_INFINITY}, {r: 12, g: 34, b: 56, a: 78})).toEqual({r: 12, g: 34, b: 56, a: 78});

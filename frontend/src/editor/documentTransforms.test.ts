@@ -73,7 +73,7 @@ describe("document transforms", () => {
       {id: "vertical", axis: "horizontal", position: 1},
       {id: "horizontal", axis: "vertical", position: 1},
     ]);
-    expect(document.slices[0].keys[0]).toMatchObject({x: 1, y: 1, width: 1, height: 2, pivot: {x: 1, y: 1}});
+    expect(document.slices[0].keys[0]).toMatchObject({x: 1, y: 1, width: 1, height: 2, pivot: {x: 0, y: 1}});
     expect(document.settings.gridWidth).toBe(4);
     expect(document.settings.gridHeight).toBe(2);
     expect(document.pixelAspectRatio).toEqual({width: 1, height: 1});

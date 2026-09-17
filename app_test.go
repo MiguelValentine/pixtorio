@@ -125,6 +125,47 @@ func TestDecodeRGBABase64ValidatesDimensionsAndLength(t *testing.T) {
 	}
 }
 
+func TestDecodeAtlasRGBABase64UsesExportDimensionsWithoutImportLimit(t *testing.T) {
+	want := make([]byte, 2049*4)
+	want[3] = 255
+	encoded := base64.StdEncoding.EncodeToString(want)
+	got, err := decodeAtlasRGBABase64(2049, 1, encoded)
+	if err != nil || !bytes.Equal(got, want) {
+		t.Fatalf("decodeAtlasRGBABase64() = %v, %v; want %d decoded bytes", len(got), err, len(want))
+	}
+
+	for _, test := range []struct {
+		name          string
+		width, height int
+	}{
+		{name: "width exceeds export limit", width: maxAtlasOutputDimension + 1, height: 1},
+		{name: "height exceeds export limit", width: 1, height: maxAtlasOutputDimension + 1},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if _, err := decodeAtlasRGBABase64(test.width, test.height, ""); err == nil {
+				t.Fatalf("decodeAtlasRGBABase64(%d, %d) expected dimension error", test.width, test.height)
+			}
+		})
+	}
+}
+
+func TestValidAtlasOutputDimensions(t *testing.T) {
+	for _, test := range []struct {
+		width, height int
+		want          bool
+	}{
+		{width: 2049, height: 1, want: true},
+		{width: maxAtlasOutputDimension, height: maxAtlasOutputDimension, want: true},
+		{width: maxAtlasOutputDimension + 1, height: 1, want: false},
+		{width: 1, height: maxAtlasOutputDimension + 1, want: false},
+		{width: 0, height: 1, want: false},
+	} {
+		if got := validAtlasOutputDimensions(test.width, test.height); got != test.want {
+			t.Fatalf("validAtlasOutputDimensions(%d, %d) = %t, want %t", test.width, test.height, got, test.want)
+		}
+	}
+}
+
 func TestDecodeRGBAFramesReportsTheInvalidFrame(t *testing.T) {
 	valid := base64.StdEncoding.EncodeToString([]byte{1, 2, 3, 4})
 	if _, err := decodeRGBAFrames(1, 1, []string{valid, "bad"}); err == nil || !strings.Contains(err.Error(), "frame 2") {
@@ -342,6 +383,99 @@ func TestWriteSpriteSheetAtlasMetadataAtomically(t *testing.T) {
 		t.Fatal(err)
 	} else if len(matches) != 0 {
 		t.Fatalf("temporary atlas files remain: %v", matches)
+	}
+}
+
+func TestWritePackedAtlasFilesHonorsJSONFlagAndUsesOutputImageName(t *testing.T) {
+	directory := t.TempDir()
+	path := filepath.Join(directory, "atlas.png")
+	pixels := []byte{255, 0, 0, 255, 0, 0, 0, 0}
+	metadata := `{"format":"pixtorio-atlas-v1","image":"placeholder.png","width":2,"height":1,"frames":[]}`
+
+	if err := writePackedAtlasFiles(path, 2, 1, pixels, metadata, false); err != nil {
+		t.Fatalf("writePackedAtlasFiles(false) error = %v", err)
+	}
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("packed atlas image missing: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(directory, "atlas.json")); !os.IsNotExist(err) {
+		t.Fatalf("packed atlas metadata should be absent when disabled, stat error = %v", err)
+	}
+
+	if err := writePackedAtlasFiles(path, 2, 1, pixels, metadata, true); err != nil {
+		t.Fatalf("writePackedAtlasFiles(true) error = %v", err)
+	}
+	data, err := os.ReadFile(filepath.Join(directory, "atlas.json"))
+	if err != nil {
+		t.Fatalf("read packed atlas metadata: %v", err)
+	}
+	var decoded map[string]any
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		t.Fatalf("decode packed atlas metadata: %v", err)
+	}
+	if decoded["image"] != "atlas.png" {
+		t.Fatalf("metadata image = %#v, want atlas.png", decoded["image"])
+	}
+	if matches, err := filepath.Glob(filepath.Join(directory, ".atlas.json.tmp-*")); err != nil {
+		t.Fatal(err)
+	} else if len(matches) != 0 {
+		t.Fatalf("temporary packed atlas metadata remains: %v", matches)
+	}
+}
+
+func TestWritePackedAtlasFilesSupportsAtlasAbovePNGImportLimit(t *testing.T) {
+	const width = maxPNGImportDimension + 1
+	path := filepath.Join(t.TempDir(), "large-atlas.png")
+	pixels := make([]byte, width*4)
+	pixels[3] = 255
+	if err := writePackedAtlasFiles(path, width, 1, pixels, "", false); err != nil {
+		t.Fatalf("writePackedAtlasFiles() error = %v", err)
+	}
+	file, err := os.Open(path)
+	if err != nil {
+		t.Fatalf("open packed atlas: %v", err)
+	}
+	config, err := png.DecodeConfig(file)
+	_ = file.Close()
+	if err != nil {
+		t.Fatalf("decode packed atlas config: %v", err)
+	}
+	if config.Width != width || config.Height != 1 {
+		t.Fatalf("packed atlas dimensions = %dx%d, want %dx1", config.Width, config.Height, width)
+	}
+}
+
+func TestWritePackedAtlasFilesPreservesCompleteSpriteSheetMetadata(t *testing.T) {
+
+	directory := t.TempDir()
+	path := filepath.Join(directory, "split-sheet.png")
+	metadata := `{"format":"pixtorio-atlas-v1","canvas":{"width":2,"height":1},"layers":[{"id":"layer"}],"frames":[{"id":"frame","frame":{"x":0,"y":0,"width":2,"height":1}}]}`
+	if err := writePackedAtlasFiles(path, 2, 1, []byte{255, 0, 0, 255, 0, 0, 0, 0}, metadata, true); err != nil {
+		t.Fatalf("writePackedAtlasFiles() error = %v", err)
+	}
+	data, err := os.ReadFile(filepath.Join(directory, "split-sheet.json"))
+	if err != nil {
+		t.Fatalf("read sprite sheet metadata: %v", err)
+	}
+	var decoded map[string]any
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		t.Fatalf("decode sprite sheet metadata: %v", err)
+	}
+	if decoded["image"] != "split-sheet.png" || decoded["format"] != "pixtorio-atlas-v1" {
+		t.Fatalf("metadata header was not preserved: %#v", decoded)
+	}
+	if _, ok := decoded["layers"].([]any); !ok {
+		t.Fatalf("complete layer metadata was not preserved: %#v", decoded["layers"])
+	}
+	frames, ok := decoded["frames"].([]any)
+	if !ok || len(frames) != 1 {
+		t.Fatalf("complete frame metadata was not preserved: %#v", decoded["frames"])
+	}
+}
+
+func TestMarshalPackedAtlasMetadataRejectsNonObject(t *testing.T) {
+	if _, err := marshalPackedAtlasMetadata("atlas.png", "[]"); err == nil {
+		t.Fatal("marshalPackedAtlasMetadata() expected object validation error")
 	}
 }
 

@@ -3,12 +3,15 @@ import {createDocument, getActiveCel} from "./document";
 import {
   addTile,
   clearTileReferences,
+  cleanupTileset,
+  cleanupTilesetInPlace,
   convertImageCelToTilemap,
   convertImageLayerToTilemap,
   createTilemapData,
   createTileset,
   deleteTile,
   drawTilemapPixel,
+  drawTilemapPixelInPlace,
   findTile,
   flipTilePixels,
   flipTileValue,
@@ -18,6 +21,7 @@ import {
   syncTileIndexes,
   syncTilePixels,
   tileReferenceCount,
+  tileReferenceCountInTilemaps,
   validateTileset,
 } from "./tilemap";
 import {tileFlipDiagonal as documentTileFlipDiagonal, tileFlipX as documentTileFlipX, tileFlipY as documentTileFlipY} from "./document";
@@ -197,5 +201,123 @@ describe("tilemap core", () => {
     expect(stack.tileset.tiles).toHaveLength(2);
     expect([...stack.cel.tilemap!.tiles]).toEqual([2, 1]);
     expect(tileReferenceCount(stack.cel.tilemap!, 1)).toBe(1);
+  });
+
+  it("compacts auto-edited tiles across all tilemap buffers while preserving flags and indexed authority", () => {
+    const red = tilePixels(
+      [255, 0, 0, 255], [255, 0, 0, 255],
+      [255, 0, 0, 255], [255, 0, 0, 255],
+    );
+    const green = tilePixels(
+      [0, 255, 0, 255], [0, 255, 0, 255],
+      [0, 255, 0, 255], [0, 255, 0, 255],
+    );
+    const indexedRed = new Uint8Array([1, 1, 1, 1]);
+    const tileset = createTileset({
+      tileWidth: 2,
+      tileHeight: 2,
+      tiles: [
+        {id: 1, pixels: red, indexes: indexedRed},
+        {id: 2, pixels: red.slice(), indexes: indexedRed.slice()},
+        {id: 3, pixels: green, indexes: new Uint8Array([2, 2, 2, 2])},
+      ],
+    });
+    const first = createTilemapData(2, 1);
+    first.tiles.set([2 | documentTileFlipX, 1]);
+    const second = createTilemapData(1, 1);
+    second.tiles[0] = 3;
+    const result = cleanupTileset(tileset, [first, second]);
+
+    expect(result.changed).toBe(true);
+    expect(result.deduplicatedTileIDs).toEqual([2]);
+    expect(result.removedTileIDs).toEqual([]);
+    expect(result.tileIDMap.get(2)).toBe(1);
+    expect(result.tileset.tiles.map((tile) => tile.id)).toEqual([1, 3]);
+    expect([...result.tilemaps[0].tiles]).toEqual([(1 | documentTileFlipX) >>> 0, 1]);
+    expect([...result.tilemaps[1].tiles]).toEqual([3]);
+    expect(result.tileset.tiles[0].indexes).toEqual(indexedRed);
+    expect(tileReferenceCountInTilemaps([first, second], 1)).toBe(1);
+  });
+
+  it("removes unreferenced auto-created tiles and keeps linked tilemap buffers in place", () => {
+    const base = tilePixels(
+      [10, 20, 30, 255], [10, 20, 30, 255],
+      [10, 20, 30, 255], [10, 20, 30, 255],
+    );
+    const tileset = createTileset({tileWidth: 2, tileHeight: 2, tiles: [{id: 1, pixels: base}]});
+    const linked = createTilemapData(2, 1);
+    linked.tiles.set([1, 1]);
+    const cel = {
+      id: "cel",
+      linkId: "link",
+      opacity: 1,
+      zIndex: 0,
+      layerId: "layer",
+      frameId: "frame",
+      x: 0,
+      y: 0,
+      width: 4,
+      height: 2,
+      pixels: new Uint8ClampedArray(32),
+      tilemap: linked,
+    };
+    const other = createTilemapData(1, 1);
+    other.tiles[0] = 1;
+    const edited = drawTilemapPixelInPlace(cel, tileset, 0, 0, [0, 200, 0, 255], {
+      mode: "auto",
+      referenceTilemaps: [linked, other],
+    });
+    expect(edited.created).toBe(true);
+    expect(tileReferenceCountInTilemaps([linked], edited.tileId)).toBe(1);
+    const tilemapIdentity = linked;
+    const compacted = cleanupTilesetInPlace(tileset, [linked, other]);
+
+    expect(compacted.removedTileIDs).toEqual([]);
+    expect(tileset.tiles.map((tile) => tile.id)).toEqual([1, 2]);
+    expect(linked).toBe(tilemapIdentity);
+    expect([...linked.tiles]).toEqual([2, 1]);
+    expect([...other.tiles]).toEqual([1]);
+
+    linked.tiles[0] = 0;
+    const removed = cleanupTilesetInPlace(tileset, [linked, other]);
+    expect(removed.removedTileIDs).toEqual([2]);
+    expect(tileset.tiles.map((tile) => tile.id)).toEqual([1]);
+    expect([...linked.tiles]).toEqual([0, 1]);
+  });
+
+  it("writes transparent tile pixels to the configured indexed transparent slot", () => {
+    const transparent = "#ff00ffff";
+    const opaque = "#0000ffff";
+    const tileset = createTileset({
+      tileWidth: 1,
+      tileHeight: 1,
+      tiles: [{id: 1, pixels: tilePixels([255, 0, 0, 255]), indexes: new Uint8Array([1])}],
+    });
+    const cel = {
+      id: "cel",
+      linkId: "link",
+      opacity: 1,
+      zIndex: 0,
+      layerId: "layer",
+      frameId: "frame",
+      x: 0,
+      y: 0,
+      width: 1,
+      height: 1,
+      pixels: new Uint8ClampedArray([255, 0, 0, 255]),
+      indexes: new Uint8Array([1]),
+      tilemap: {columns: 1, rows: 1, tiles: new Uint32Array([1])},
+    };
+
+    drawTilemapPixelInPlace(cel, tileset, 0, 0, [0, 0, 0, 0], {
+      mode: "manual",
+      palette: [opaque, transparent],
+      transparentIndex: 1,
+    });
+
+    expect(tileset.tiles[0].indexes).toEqual(new Uint8Array([1]));
+    expect(tileset.tiles[0].pixels).toEqual(new Uint8ClampedArray([255, 0, 255, 0]));
+    expect(cel.indexes).toEqual(new Uint8Array([1]));
+    expect(cel.pixels).toEqual(new Uint8ClampedArray([255, 0, 255, 0]));
   });
 });

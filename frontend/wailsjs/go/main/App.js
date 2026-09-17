@@ -50,12 +50,24 @@ export function SaveGIF(arg1, arg2, arg3, arg4, arg5, arg6, arg7) {
   return window['go']['main']['App']['SaveGIF'](arg1, arg2, arg3, arg4, arg5, arg6, arg7);
 }
 
+export function SaveGIFWithOptions(arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8, arg9, arg10) {
+  return window['go']['main']['App']['SaveGIFWithOptions'](arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8, arg9, arg10);
+}
+
 export function SavePNG(arg1, arg2, arg3, arg4) {
   return window['go']['main']['App']['SavePNG'](arg1, arg2, arg3, arg4);
 }
 
 export function SavePNGSequence(arg1, arg2, arg3, arg4, arg5) {
   return window['go']['main']['App']['SavePNGSequence'](arg1, arg2, arg3, arg4, arg5);
+}
+
+export function SavePNGWithOptions(arg1, arg2, arg3, arg4, arg5, arg6, arg7) {
+  return window['go']['main']['App']['SavePNGWithOptions'](arg1, arg2, arg3, arg4, arg5, arg6, arg7);
+}
+
+export function SavePackedAtlas(arg1, arg2, arg3, arg4, arg5, arg6) {
+  return window['go']['main']['App']['SavePackedAtlas'](arg1, arg2, arg3, arg4, arg5, arg6);
 }
 
 export function SavePixio(arg1, arg2, arg3) {
@@ -72,6 +84,10 @@ export function SaveRecovery(arg1) {
 
 export function SaveSpriteSheet(arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8, arg9, arg10) {
   return window['go']['main']['App']['SaveSpriteSheet'](arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8, arg9, arg10);
+}
+
+export function SaveSpriteSheetWithOptions(arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8, arg9, arg10, arg11, arg12, arg13) {
+  return window['go']['main']['App']['SaveSpriteSheetWithOptions'](arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8, arg9, arg10, arg11, arg12, arg13);
 }
 
 export function SetMCPReady(arg1) {

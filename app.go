@@ -33,6 +33,7 @@ type App struct {
 }
 
 const maxPNGImportDimension = 2048
+const maxAtlasOutputDimension = 16384
 const recoveryFormat = "pixtorio-recovery-v2"
 
 type recoverySnapshot struct {
@@ -588,10 +589,35 @@ func closeConfirmationDialog(language string) (runtime.MessageDialogOptions, str
 }
 
 func decodeRGBABase64(width, height int, encoded string) ([]byte, error) {
-	if !validPNGImportDimensions(width, height) {
+	return decodeRGBABase64WithLimit(width, height, encoded, maxPNGImportDimension)
+}
+
+func validAtlasOutputDimensions(width, height int) bool {
+	return width > 0 && height > 0 && width <= maxAtlasOutputDimension && height <= maxAtlasOutputDimension
+}
+
+func decodeAtlasRGBABase64(width, height int, encoded string) ([]byte, error) {
+	if !validAtlasOutputDimensions(width, height) {
 		return nil, fmt.Errorf("invalid image dimensions")
 	}
-	expectedBytes := width * height * 4
+	return decodeRGBABase64WithLimit(width, height, encoded, maxAtlasOutputDimension)
+}
+
+func decodeRGBABase64WithLimit(width, height int, encoded string, maxDimension int) ([]byte, error) {
+	if maxDimension <= 0 || width <= 0 || height <= 0 || width > maxDimension || height > maxDimension {
+		return nil, fmt.Errorf("invalid image dimensions")
+	}
+	maxInt := int(^uint(0) >> 1)
+	if width > maxInt/height {
+		return nil, fmt.Errorf("invalid image dimensions")
+	}
+	pixelCount := width * height
+	if pixelCount > maxInt/4 {
+		return nil, fmt.Errorf("invalid image dimensions")
+	}
+	expectedBytes := pixelCount * 4
+	// Check the encoded length before DecodeString so malformed requests with
+	// large dimensions cannot trigger a large allocation.
 	if len(encoded) != base64.StdEncoding.EncodedLen(expectedBytes) {
 		return nil, fmt.Errorf("invalid RGBA pixel data")
 	}
@@ -616,6 +642,12 @@ func decodeRGBAFrames(width, height int, encodedFrames []string) ([][]uint8, err
 
 // SavePNG asks for a destination and writes an RGBA canvas as a PNG image.
 func (a *App) SavePNG(width, height int, encodedPixels, language string) (string, error) {
+	return a.SavePNGWithOptions(width, height, encodedPixels, false, 1, 1, language)
+}
+
+// SavePNGWithOptions asks for a destination and writes an RGBA canvas as PNG,
+// optionally applying the document pixel aspect ratio as square-pixel output.
+func (a *App) SavePNGWithOptions(width, height int, encodedPixels string, applyPixelRatio bool, pixelAspectWidth, pixelAspectHeight int, language string) (string, error) {
 	if a.ctx == nil {
 		return "", fmt.Errorf("application is not ready")
 	}
@@ -639,10 +671,86 @@ func (a *App) SavePNG(width, height int, encodedPixels, language string) (string
 		path += ".png"
 	}
 
-	if err := pngexport.WriteFile(path, width, height, pixels); err != nil {
+	if err := pngexport.WriteFileWithOptions(path, width, height, pixels, pngexport.PNGOptions{
+		ApplyPixelRatio:   applyPixelRatio,
+		PixelAspectWidth:  pixelAspectWidth,
+		PixelAspectHeight: pixelAspectHeight,
+	}); err != nil {
 		return "", err
 	}
 	return path, nil
+}
+
+// SavePackedAtlas asks for a destination and writes a packed atlas image.
+// The frontend supplies pixels and metadata after applying any requested
+// pixel-aspect conversion so the PNG and its optional sidecar share geometry.
+func (a *App) SavePackedAtlas(width, height int, encodedPixels, metadataJSON string, writeJSON bool, language string) (string, error) {
+	if a.ctx == nil {
+		return "", fmt.Errorf("application is not ready")
+	}
+	pixels, err := decodeAtlasRGBABase64(width, height, encodedPixels)
+	if err != nil {
+		return "", err
+	}
+	if writeJSON {
+		if _, err := marshalPackedAtlasMetadata("atlas.png", metadataJSON); err != nil {
+			return "", err
+		}
+	}
+
+	dialogs := localizedFileDialogs(language)
+	path, err := runtime.SaveFileDialog(a.ctx, runtime.SaveDialogOptions{
+		Title:           dialogs.exportSheetTitle,
+		DefaultFilename: dialogs.defaultSheet,
+		Filters:         []runtime.FileFilter{{DisplayName: dialogs.pngFilter, Pattern: "*.png"}},
+	})
+	if err != nil || path == "" {
+		return path, err
+	}
+	if !strings.EqualFold(filepath.Ext(path), ".png") {
+		path += ".png"
+	}
+	if err := writePackedAtlasFiles(path, width, height, pixels, metadataJSON, writeJSON); err != nil {
+		return "", err
+	}
+	return path, nil
+}
+
+func writePackedAtlasFiles(path string, width, height int, pixels []uint8, metadataJSON string, writeJSON bool) error {
+	var metadata []byte
+	var err error
+	if writeJSON {
+		metadata, err = marshalPackedAtlasMetadata(filepath.Base(path), metadataJSON)
+		if err != nil {
+			return err
+		}
+	}
+	if err := pngexport.WriteFile(path, width, height, pixels); err != nil {
+		return err
+	}
+	if writeJSON {
+		metadataPath := strings.TrimSuffix(path, filepath.Ext(path)) + ".json"
+		if err := writeBytesAtomically(metadataPath, "atlas metadata", metadata); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func marshalPackedAtlasMetadata(imageName, raw string) ([]byte, error) {
+	var metadata map[string]any
+	if err := json.Unmarshal([]byte(raw), &metadata); err != nil {
+		return nil, fmt.Errorf("decode atlas metadata: %w", err)
+	}
+	if len(metadata) == 0 {
+		return nil, fmt.Errorf("atlas metadata must be a JSON object")
+	}
+	metadata["image"] = imageName
+	data, err := json.MarshalIndent(metadata, "", "  ")
+	if err != nil {
+		return nil, fmt.Errorf("encode atlas metadata: %w", err)
+	}
+	return append(data, '\n'), nil
 }
 
 func (a *App) SavePNGSequence(width, height int, encodedFrames []string, stem, language string) (string, error) {
@@ -689,6 +797,12 @@ func sanitizeSequenceStem(value string) string {
 }
 
 func (a *App) SaveGIF(width, height int, encodedFrames []string, durationsMS []int, scale, loopCount int, language string) (string, error) {
+	return a.SaveGIFWithOptions(width, height, encodedFrames, durationsMS, scale, loopCount, false, 1, 1, language)
+}
+
+// SaveGIFWithOptions asks for a destination and writes an animated GIF,
+// optionally applying the document pixel aspect ratio.
+func (a *App) SaveGIFWithOptions(width, height int, encodedFrames []string, durationsMS []int, scale, loopCount int, applyPixelRatio bool, pixelAspectWidth, pixelAspectHeight int, language string) (string, error) {
 	if a.ctx == nil {
 		return "", fmt.Errorf("application is not ready")
 	}
@@ -704,13 +818,25 @@ func (a *App) SaveGIF(width, height int, encodedFrames []string, durationsMS []i
 	if !strings.EqualFold(filepath.Ext(path), ".gif") {
 		path += ".gif"
 	}
-	if err := pngexport.WriteGIFWithOptions(path, width, height, frames, durationsMS, pngexport.GIFOptions{Scale: scale, LoopCount: loopCount}); err != nil {
+	if err := pngexport.WriteGIFWithOptions(path, width, height, frames, durationsMS, pngexport.GIFOptions{
+		Scale:             scale,
+		LoopCount:         loopCount,
+		ApplyPixelRatio:   applyPixelRatio,
+		PixelAspectWidth:  pixelAspectWidth,
+		PixelAspectHeight: pixelAspectHeight,
+	}); err != nil {
 		return "", err
 	}
 	return path, nil
 }
 
 func (a *App) SaveSpriteSheet(width, height int, encodedFrames []string, layout string, columns, scale, borderPadding, shapePadding int, writeJSON bool, language string) (string, error) {
+	return a.SaveSpriteSheetWithOptions(width, height, encodedFrames, layout, columns, scale, borderPadding, shapePadding, writeJSON, false, 1, 1, language)
+}
+
+// SaveSpriteSheetWithOptions asks for a destination and writes a sprite sheet,
+// optionally applying the document pixel aspect ratio.
+func (a *App) SaveSpriteSheetWithOptions(width, height int, encodedFrames []string, layout string, columns, scale, borderPadding, shapePadding int, writeJSON bool, applyPixelRatio bool, pixelAspectWidth, pixelAspectHeight int, language string) (string, error) {
 	if a.ctx == nil {
 		return "", fmt.Errorf("application is not ready")
 	}
@@ -727,11 +853,14 @@ func (a *App) SaveSpriteSheet(width, height int, encodedFrames []string, layout 
 		path += ".png"
 	}
 	layoutResult, err := pngexport.WriteSpriteSheetWithOptions(path, width, height, frames, pngexport.SpriteSheetOptions{
-		Layout:        layout,
-		Columns:       columns,
-		Scale:         scale,
-		BorderPadding: borderPadding,
-		ShapePadding:  shapePadding,
+		Layout:            layout,
+		Columns:           columns,
+		Scale:             scale,
+		BorderPadding:     borderPadding,
+		ShapePadding:      shapePadding,
+		ApplyPixelRatio:   applyPixelRatio,
+		PixelAspectWidth:  pixelAspectWidth,
+		PixelAspectHeight: pixelAspectHeight,
 	})
 	if err != nil {
 		return "", err

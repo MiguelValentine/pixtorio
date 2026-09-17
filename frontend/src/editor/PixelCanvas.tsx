@@ -62,6 +62,7 @@ import {
   type TransformMode,
   type TransformQuad,
 } from "./transform";
+import {nextSliceSelection, orderedSliceOverlays, selectedSliceBounds} from "./sliceHitTesting";
 
 interface PixelCanvasProps {
   width: number;
@@ -128,6 +129,7 @@ interface PixelCanvasProps {
   guides: ReadonlyArray<{id: string; axis: "horizontal" | "vertical"; position: number}>;
   sliceOverlays: ReadonlyArray<{id: string; x: number; y: number; width: number; height: number; color: string}>;
   activeSliceId: string;
+  selectedSliceIds?: ReadonlyArray<string>;
   selectionAntialias: boolean;
   tool: ToolID;
   editable: boolean;
@@ -147,15 +149,20 @@ interface PixelCanvasProps {
   transformMode: TransformMode;
   transformPivot: Point | null;
   onTransformPivotChange: (point: Point) => void;
+  /** Builds the initial transform selection from the active Cel's content. */
+  onTransformSelectionFromContent?: () => Selection | null;
   onGuideChange: (id: string, position: number) => void;
   onGridOffsetChange: (x: number, y: number) => void;
   onSliceBoundsChange: (id: string, bounds: {x: number; y: number; width: number; height: number}) => void;
+  onSliceBatchBoundsChange?: (changes: Array<{id: string; bounds: {x: number; y: number; width: number; height: number}}>) => void;
   onSliceCreate?: (bounds: {x: number; y: number; width: number; height: number}) => void;
   onSelectionChange: (selection: Selection | null) => void;
   onCrop: (bounds: Selection) => void;
   textPreview?: {width: number; height: number; pixels: Uint8ClampedArray} | null;
   onTextPlace?: (point: Point) => void;
   onActiveSliceChange?: (id: string) => void;
+  onSliceSelectionChange?: (ids: string[]) => void;
+  onSliceDoubleClick?: (id: string) => void;
   onTilemapPointer?: (phase: "start" | "move" | "end", point: Point, secondary: boolean) => boolean;
   onCelMovePointer?: (phase: "start" | "move" | "end", start: Point, point: Point, options: {lockAxis: boolean; autoSelect: boolean}) => boolean;
   interactionGuardRef?: {current: (() => boolean) | null};
@@ -242,7 +249,15 @@ type StagedCurveGesture = {
 type CanvasAidGesture =
   | {kind: "guide"; id: string; axis: "horizontal" | "vertical"; position: number}
   | {kind: "grid"; x: number; y: number}
-  | {kind: "slice"; id: string; start: Point; origin: Selection; current: Selection; handle: TransformHandle | null};
+  | {
+    kind: "slice";
+    id: string;
+    start: Point;
+    origin: Selection;
+    current: Selection;
+    handle: TransformHandle | null;
+    items: Array<{id: string; origin: Selection; current: Selection}>;
+  };
 
 const zoomLevels = [1, 2, 4, 6, 8, 12, 16, 24, 32];
 const transformHandleSize = 8;
@@ -529,6 +544,7 @@ export function PixelCanvas({
   guides,
   sliceOverlays,
   activeSliceId,
+  selectedSliceIds = [],
   selectionAntialias,
   tool,
   editable,
@@ -548,9 +564,11 @@ export function PixelCanvas({
   transformMode,
   transformPivot,
   onTransformPivotChange,
+  onTransformSelectionFromContent,
   onGuideChange,
   onGridOffsetChange,
   onSliceBoundsChange,
+  onSliceBatchBoundsChange,
   onSliceCreate,
   onSelectionChange,
   onCrop,
@@ -559,6 +577,8 @@ export function PixelCanvas({
   onCelMovePointer,
   onTextPlace,
   onActiveSliceChange,
+  onSliceSelectionChange,
+  onSliceDoubleClick,
   interactionGuardRef,
 }: PixelCanvasProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -575,7 +595,12 @@ export function PixelCanvas({
   const canvasAidGestureRef = useRef<CanvasAidGesture | null>(null);
   const [guidePreview, setGuidePreview] = useState<{id: string; position: number} | null>(null);
   const [gridPreview, setGridPreview] = useState<Point | null>(null);
-  const [slicePreview, setSlicePreview] = useState<{id: string; bounds: Selection} | null>(null);
+  const [slicePreview, setSlicePreview] = useState<{
+    id: string;
+    bounds: Selection;
+    batch?: Array<{id: string; bounds: Selection}>;
+    group?: Selection;
+  } | null>(null);
   const selectionOutlineRef = useRef<{
     selection: Selection;
     viewportX: number;
@@ -974,13 +999,19 @@ export function PixelCanvas({
     }
     context.restore();
 
+    const previewByID = new Map(slicePreview?.batch?.map((entry) => [entry.id, entry.bounds]) ?? []);
+    const previewGroup = slicePreview?.group;
+    const selectedGroup = selectedSliceIds.length > 1 && selectedSliceIds.includes(activeSliceId)
+      ? selectedSliceBounds(sliceOverlays, selectedSliceIds)
+      : null;
     for (const slice of sliceOverlays) {
-      const bounds = slicePreview?.id === slice.id ? slicePreview.bounds : slice;
+      const bounds = previewByID.get(slice.id) ?? (slicePreview?.id === slice.id ? slicePreview.bounds : slice);
       const active = slice.id === activeSliceId;
+      const selected = selectedSliceIds.includes(slice.id);
       context.save();
-      context.setLineDash(active ? [] : [4, 3]);
+      context.setLineDash(selected ? [] : [4, 3]);
       context.strokeStyle = slice.color;
-      context.lineWidth = active ? 2 : 1;
+      context.lineWidth = active ? 2 : selected ? 1.5 : 1;
       context.strokeRect(
         Math.round(viewport.x + bounds.x * zoom) + 0.5,
         Math.round(viewport.y + bounds.y * zoom) + 0.5,
@@ -988,7 +1019,8 @@ export function PixelCanvas({
         bounds.height * zoom,
       );
       if (active && (tool === "slice" || (tool === "transform" && !selection))) {
-        for (const {x, y} of transformHandles(selectionQuad(bounds), viewport, zoom)) {
+        const handleBounds = selectedGroup ? (previewGroup ?? selectedGroup) : bounds;
+        for (const {x, y} of transformHandles(selectionQuad(handleBounds), viewport, zoom)) {
           context.fillStyle = slice.color;
           context.fillRect(Math.round(x - transformHandleSize / 2), Math.round(y - transformHandleSize / 2), transformHandleSize, transformHandleSize);
           context.strokeStyle = lightTheme ? "#ffffff" : "#25262a";
@@ -997,7 +1029,7 @@ export function PixelCanvas({
       }
       context.restore();
     }
-    if (slicePreview && !sliceOverlays.some((slice) => slice.id === slicePreview.id)) {
+    if (slicePreview && slicePreview.id === "new") {
       const bounds = slicePreview.bounds;
       context.save();
       context.setLineDash([5, 3]);
@@ -1084,7 +1116,7 @@ export function PixelCanvas({
         context.restore();
       }
     }
-  }, [activeSliceId, brushShape, brushSize, cropPreview, displayDirtyBounds, displayPixels, editable, gridLineColor, gridLineOpacity, gridPreview, guideColor, guidePreview, guides, gridHeight, gridOffsetX, gridOffsetY, gridWidth, height, lightTheme, pixelGridColor, pixelGridOpacity, preferredCheckerDark, preferredCheckerLight, preferredCheckerSize, revision, selection, showPixelGrid, showSelectionEdges, sliceOverlays, slicePreview, snapToGrid, surfaceSize, symmetryAxisX, symmetryAxisY, symmetryX, symmetryY, tiledX, tiledY, tool, transformPivot, transformPreviewQuad, viewport, width, zoom]);
+  }, [activeSliceId, brushShape, brushSize, cropPreview, displayDirtyBounds, displayPixels, editable, gridLineColor, gridLineOpacity, gridPreview, guideColor, guidePreview, guides, gridHeight, gridOffsetX, gridOffsetY, gridWidth, height, lightTheme, pixelGridColor, pixelGridOpacity, preferredCheckerDark, preferredCheckerLight, preferredCheckerSize, revision, selectedSliceIds, selection, showPixelGrid, showSelectionEdges, sliceOverlays, slicePreview, snapToGrid, surfaceSize, symmetryAxisX, symmetryAxisY, symmetryX, symmetryY, tiledX, tiledY, tool, transformPivot, transformPreviewQuad, viewport, width, zoom]);
 
   const previewBrush = useMemo(
     () => rotatedBrush ? resizeBitmapBrush(rotatedBrush, brushSize) : null,
@@ -1448,17 +1480,65 @@ export function PixelCanvas({
       return;
     }
     if (tool === "slice" && event.button === 0) {
-      const orderedSlices = [
-        ...sliceOverlays.filter((candidate) => candidate.id === activeSliceId),
-        ...sliceOverlays.filter((candidate) => candidate.id !== activeSliceId).reverse(),
-      ];
+      const selectedGroupIDs = selectedSliceIds.length > 1 && selectedSliceIds.includes(activeSliceId)
+        ? selectedSliceIds
+        : [];
+      const selectedGroupOrigin = selectedSliceBounds(sliceOverlays, selectedGroupIDs);
+      const selectedGroupHandle = selectedGroupOrigin
+        ? hitTransformHandle(point, selectionQuad(selectedGroupOrigin), viewport, zoom)
+        : null;
+      if (selectedGroupOrigin && selectedGroupHandle) {
+        const items = sliceOverlays
+          .filter((slice) => selectedGroupIDs.includes(slice.id))
+          .map((slice) => ({id: slice.id, origin: {x: slice.x, y: slice.y, width: slice.width, height: slice.height}, current: {x: slice.x, y: slice.y, width: slice.width, height: slice.height}}));
+        if (items.length > 1) {
+          canvasAidGestureRef.current = {
+            kind: "slice",
+            id: activeSliceId,
+            start: pixel,
+            origin: selectedGroupOrigin,
+            current: selectedGroupOrigin,
+            handle: selectedGroupHandle,
+            items,
+          };
+          setSlicePreview({
+            id: activeSliceId,
+            bounds: items.find((item) => item.id === activeSliceId)?.origin ?? selectedGroupOrigin,
+            batch: items.map((item) => ({id: item.id, bounds: item.origin})),
+            group: selectedGroupOrigin,
+          });
+          event.currentTarget.setPointerCapture(event.pointerId);
+          return;
+        }
+      }
+      const orderedSlices = orderedSliceOverlays(sliceOverlays, activeSliceId);
       for (const slice of orderedSlices) {
         const origin = {x: slice.x, y: slice.y, width: slice.width, height: slice.height};
         const handle = hitTransformHandle(point, selectionQuad(origin), viewport, zoom);
         if (!handle && !containsPoint(origin, pixel.x, pixel.y)) continue;
+        if (event.detail >= 2) {
+          onActiveSliceChange?.(slice.id);
+          onSliceDoubleClick?.(slice.id);
+          return;
+        }
+        const additive = event.shiftKey || event.metaKey || event.ctrlKey;
+        onSliceSelectionChange?.(nextSliceSelection(selectedSliceIds, slice.id, additive));
         onActiveSliceChange?.(slice.id);
-        canvasAidGestureRef.current = {kind: "slice", id: slice.id, start: pixel, origin, current: origin, handle};
-        setSlicePreview({id: slice.id, bounds: origin});
+        const batchIDs = !additive && selectedSliceIds.length > 1 && selectedSliceIds.includes(slice.id)
+          ? selectedSliceIds
+          : [slice.id];
+        const items = sliceOverlays
+          .filter((candidate) => batchIDs.includes(candidate.id))
+          .map((candidate) => ({id: candidate.id, origin: {x: candidate.x, y: candidate.y, width: candidate.width, height: candidate.height}, current: {x: candidate.x, y: candidate.y, width: candidate.width, height: candidate.height}}));
+        const groupOrigin = selectedSliceBounds(sliceOverlays, batchIDs) ?? origin;
+        const groupHandle = items.length > 1 ? null : handle;
+        canvasAidGestureRef.current = {kind: "slice", id: slice.id, start: pixel, origin: groupOrigin, current: groupOrigin, handle: groupHandle, items};
+        setSlicePreview({
+          id: slice.id,
+          bounds: origin,
+          batch: items.length > 1 ? items.map((item) => ({id: item.id, bounds: item.origin})) : undefined,
+          group: items.length > 1 ? groupOrigin : undefined,
+        });
         event.currentTarget.setPointerCapture(event.pointerId);
         return;
       }
@@ -1482,17 +1562,76 @@ export function PixelCanvas({
         event.currentTarget.setPointerCapture(event.pointerId);
         return;
       }
-      const slice = sliceOverlays.find((candidate) => candidate.id === activeSliceId);
-      if (slice) {
-        const origin = {x: slice.x, y: slice.y, width: slice.width, height: slice.height};
-        const handle = hitTransformHandle(point, selectionQuad(origin), viewport, zoom);
-        if (handle || containsPoint(origin, pixel.x, pixel.y)) {
-          canvasAidGestureRef.current = {kind: "slice", id: slice.id, start: pixel, origin, current: origin, handle};
-          setSlicePreview({id: slice.id, bounds: origin});
+      const selectedGroupIDs = selectedSliceIds.length > 1 && selectedSliceIds.includes(activeSliceId)
+        ? selectedSliceIds
+        : [];
+      const selectedGroupOrigin = selectedSliceBounds(sliceOverlays, selectedGroupIDs);
+      const selectedGroupHandle = selectedGroupOrigin
+        ? hitTransformHandle(point, selectionQuad(selectedGroupOrigin), viewport, zoom)
+        : null;
+      if (selectedGroupOrigin && selectedGroupHandle) {
+        const items = sliceOverlays
+          .filter((candidate) => selectedGroupIDs.includes(candidate.id))
+          .map((candidate) => ({id: candidate.id, origin: {x: candidate.x, y: candidate.y, width: candidate.width, height: candidate.height}, current: {x: candidate.x, y: candidate.y, width: candidate.width, height: candidate.height}}));
+        if (items.length > 1) {
+          canvasAidGestureRef.current = {
+            kind: "slice",
+            id: activeSliceId,
+            start: pixel,
+            origin: selectedGroupOrigin,
+            current: selectedGroupOrigin,
+            handle: selectedGroupHandle,
+            items,
+          };
+          setSlicePreview({
+            id: activeSliceId,
+            bounds: items.find((item) => item.id === activeSliceId)?.origin ?? selectedGroupOrigin,
+            batch: items.map((item) => ({id: item.id, bounds: item.origin})),
+            group: selectedGroupOrigin,
+          });
           event.currentTarget.setPointerCapture(event.pointerId);
           return;
         }
       }
+      const slice = orderedSliceOverlays(sliceOverlays, activeSliceId).find((candidate) => {
+        const origin = {x: candidate.x, y: candidate.y, width: candidate.width, height: candidate.height};
+        const handle = hitTransformHandle(point, selectionQuad(origin), viewport, zoom);
+        return handle || containsPoint(origin, pixel.x, pixel.y);
+      });
+      if (slice) {
+        const origin = {x: slice.x, y: slice.y, width: slice.width, height: slice.height};
+        const handle = hitTransformHandle(point, selectionQuad(origin), viewport, zoom);
+        const additive = event.shiftKey || event.metaKey || event.ctrlKey;
+        onSliceSelectionChange?.(nextSliceSelection(selectedSliceIds, slice.id, additive));
+        onActiveSliceChange?.(slice.id);
+        const batchIDs = !additive && selectedSliceIds.length > 1 && selectedSliceIds.includes(slice.id)
+          ? selectedSliceIds
+          : [slice.id];
+        const items = sliceOverlays
+          .filter((candidate) => batchIDs.includes(candidate.id))
+          .map((candidate) => ({id: candidate.id, origin: {x: candidate.x, y: candidate.y, width: candidate.width, height: candidate.height}, current: {x: candidate.x, y: candidate.y, width: candidate.width, height: candidate.height}}));
+        const groupOrigin = selectedSliceBounds(sliceOverlays, batchIDs) ?? origin;
+        const groupHandle = items.length > 1 ? null : handle;
+        canvasAidGestureRef.current = {kind: "slice", id: slice.id, start: pixel, origin: groupOrigin, current: groupOrigin, handle: groupHandle, items};
+        setSlicePreview({
+          id: slice.id,
+          bounds: origin,
+          batch: items.length > 1 ? items.map((item) => ({id: item.id, bounds: item.origin})) : undefined,
+          group: items.length > 1 ? groupOrigin : undefined,
+        });
+        event.currentTarget.setPointerCapture(event.pointerId);
+        return;
+      }
+      const contentSelection = onTransformSelectionFromContent?.();
+      if (contentSelection) {
+        onSelectionChange(contentSelection);
+        onTransformPivotChange({
+          x: contentSelection.x + contentSelection.width / 2,
+          y: contentSelection.y + contentSelection.height / 2,
+        });
+        setTransformPreviewQuad(selectionQuad(contentSelection));
+      }
+      return;
     }
     if (tool === "transform") {
       if (event.button !== 0 || !selection) return;
@@ -1737,7 +1876,27 @@ export function PixelCanvas({
           };
         }
         canvasAidGesture.current = bounds;
-        setSlicePreview({id: canvasAidGesture.id, bounds});
+        const scaleX = bounds.width / canvasAidGesture.origin.width;
+        const scaleY = bounds.height / canvasAidGesture.origin.height;
+        const nextItems = canvasAidGesture.items.map((item) => {
+          const next = canvasAidGesture.handle
+            ? {
+              x: bounds.x + Math.round((item.origin.x - canvasAidGesture.origin.x) * scaleX),
+              y: bounds.y + Math.round((item.origin.y - canvasAidGesture.origin.y) * scaleY),
+              width: Math.max(1, Math.round(item.origin.width * scaleX)),
+              height: Math.max(1, Math.round(item.origin.height * scaleY)),
+            }
+            : {
+              x: item.origin.x + (bounds.x - canvasAidGesture.origin.x),
+              y: item.origin.y + (bounds.y - canvasAidGesture.origin.y),
+              width: item.origin.width,
+              height: item.origin.height,
+            };
+          item.current = next;
+          return {id: item.id, bounds: next};
+        });
+        const activeBounds = nextItems.find((item) => item.id === canvasAidGesture.id)?.bounds ?? bounds;
+        setSlicePreview({id: canvasAidGesture.id, bounds: activeBounds, batch: nextItems, group: bounds});
       }
       return;
     }
@@ -2024,7 +2183,21 @@ export function PixelCanvas({
         || canvasAidGesture.current.y !== canvasAidGesture.origin.y
         || canvasAidGesture.current.width !== canvasAidGesture.origin.width
         || canvasAidGesture.current.height !== canvasAidGesture.origin.height) {
-        onSliceBoundsChange(canvasAidGesture.id, canvasAidGesture.current);
+        const changedItems = canvasAidGesture.items.filter((item) => (
+          item.current.x !== item.origin.x
+          || item.current.y !== item.origin.y
+          || item.current.width !== item.origin.width
+          || item.current.height !== item.origin.height
+        ));
+        if (changedItems.length > 1) {
+          const changes = changedItems.map((item) => ({id: item.id, bounds: item.current}));
+          if (onSliceBatchBoundsChange) onSliceBatchBoundsChange(changes);
+          else for (const change of changes) onSliceBoundsChange(change.id, change.bounds);
+        } else if (changedItems.length === 1) {
+          onSliceBoundsChange(changedItems[0].id, changedItems[0].current);
+        } else {
+          onSliceBoundsChange(canvasAidGesture.id, canvasAidGesture.current);
+        }
       }
       canvasAidGestureRef.current = null;
       setGuidePreview(null);

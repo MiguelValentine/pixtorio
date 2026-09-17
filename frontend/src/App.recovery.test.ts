@@ -174,6 +174,11 @@ describe("serialization status localization", () => {
     expect(localizeStatus("Exported 12 PNG frames", "en")).toBe("Exported 12 PNG frames");
   });
 
+  it("localizes oversized browser PNG imports", () => {
+    expect(localizeStatus("invalid PNG dimensions", "zh")).toBe("PNG 尺寸无效");
+    expect(localizeStatus("invalid PNG dimensions", "en")).toBe("invalid PNG dimensions");
+  });
+
   it("localizes every decodeProject validation error", () => {
     expect(localizeStatus("Project JSON is invalid", "zh")).toBe("项目 JSON 无效");
     expect(localizeStatus("Project document is invalid", "zh")).toBe("项目文档无效");

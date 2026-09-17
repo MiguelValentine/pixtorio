@@ -19,22 +19,35 @@ const (
 	maxGIFLoopCount         = 1<<16 - 1
 )
 
+// PNGOptions controls optional square-pixel conversion for a PNG export.
+type PNGOptions struct {
+	ApplyPixelRatio   bool `json:"applyPixelRatio"`
+	PixelAspectWidth  int  `json:"pixelAspectWidth"`
+	PixelAspectHeight int  `json:"pixelAspectHeight"`
+}
+
 // GIFOptions controls optional animated GIF export behavior. A zero Scale
 // uses 1x output. A LoopCount of 0 means loop forever and -1 means play once.
 type GIFOptions struct {
-	Scale     int `json:"scale"`
-	LoopCount int `json:"loopCount"`
+	Scale             int  `json:"scale"`
+	LoopCount         int  `json:"loopCount"`
+	ApplyPixelRatio   bool `json:"applyPixelRatio"`
+	PixelAspectWidth  int  `json:"pixelAspectWidth"`
+	PixelAspectHeight int  `json:"pixelAspectHeight"`
 }
 
 // SpriteSheetOptions controls sprite sheet layout. Padding values are in
 // output pixels and are left transparent. An empty Layout uses horizontal
 // packing, and a zero Columns value uses one column per frame in a grid.
 type SpriteSheetOptions struct {
-	Layout        string `json:"layout"`
-	Columns       int    `json:"columns"`
-	Scale         int    `json:"scale"`
-	BorderPadding int    `json:"borderPadding"`
-	ShapePadding  int    `json:"shapePadding"`
+	Layout            string `json:"layout"`
+	Columns           int    `json:"columns"`
+	Scale             int    `json:"scale"`
+	BorderPadding     int    `json:"borderPadding"`
+	ShapePadding      int    `json:"shapePadding"`
+	ApplyPixelRatio   bool   `json:"applyPixelRatio"`
+	PixelAspectWidth  int    `json:"pixelAspectWidth"`
+	PixelAspectHeight int    `json:"pixelAspectHeight"`
 }
 
 const (
@@ -62,6 +75,12 @@ type SpriteSheetLayoutResult struct {
 }
 
 func WriteFile(path string, width, height int, pixels []uint8) error {
+	return WriteFileWithOptions(path, width, height, pixels, PNGOptions{})
+}
+
+// WriteFileWithOptions writes an RGBA canvas as a PNG image, optionally applying
+// the document pixel aspect ratio as nearest-neighbor geometry.
+func WriteFileWithOptions(path string, width, height int, pixels []uint8, options PNGOptions) error {
 	if err := validateImageDimensions(width, height); err != nil {
 		return err
 	}
@@ -71,6 +90,13 @@ func WriteFile(path string, width, height int, pixels []uint8) error {
 	}
 	if len(pixels) != want {
 		return fmt.Errorf("invalid RGBA buffer: got %d bytes, want %d", len(pixels), want)
+	}
+	if options.ApplyPixelRatio {
+		var err error
+		width, height, pixels, err = applyRatioIfRequested(width, height, pixels, options.ApplyPixelRatio, options.PixelAspectWidth, options.PixelAspectHeight)
+		if err != nil {
+			return err
+		}
 	}
 
 	img := &image.NRGBA{
@@ -104,11 +130,23 @@ func WriteGIFWithOptions(path string, width, height int, frames [][]uint8, durat
 	if options.LoopCount < -1 || options.LoopCount > maxGIFLoopCount {
 		return fmt.Errorf("GIF loop count must be between -1 and %d", maxGIFLoopCount)
 	}
-	scaledWidth, err := scaledDimension(width, scale)
+	ratioWidth, ratioHeight, err := exportPixelRatio(options.ApplyPixelRatio, options.PixelAspectWidth, options.PixelAspectHeight)
 	if err != nil {
 		return fmt.Errorf("GIF %w", err)
 	}
-	scaledHeight, err := scaledDimension(height, scale)
+	pixelScaleX, err := checkedMul(scale, ratioWidth)
+	if err != nil {
+		return fmt.Errorf("GIF dimensions overflow")
+	}
+	pixelScaleY, err := checkedMul(scale, ratioHeight)
+	if err != nil {
+		return fmt.Errorf("GIF dimensions overflow")
+	}
+	scaledWidth, err := scaledDimension(width, pixelScaleX)
+	if err != nil {
+		return fmt.Errorf("GIF %w", err)
+	}
+	scaledHeight, err := scaledDimension(height, pixelScaleY)
 	if err != nil {
 		return fmt.Errorf("GIF %w", err)
 	}
@@ -151,9 +189,9 @@ func WriteGIFWithOptions(path string, width, height int, frames [][]uint8, durat
 					pixel.A = 255
 					colorIndex = uint8(opaquePalette.Index(pixel) + 1)
 				}
-				for scaledY := 0; scaledY < scale; scaledY++ {
-					for scaledX := 0; scaledX < scale; scaledX++ {
-						indexed.SetColorIndex(x*scale+scaledX, y*scale+scaledY, colorIndex)
+				for scaledY := 0; scaledY < pixelScaleY; scaledY++ {
+					for scaledX := 0; scaledX < pixelScaleX; scaledX++ {
+						indexed.SetColorIndex(x*pixelScaleX+scaledX, y*pixelScaleY+scaledY, colorIndex)
 					}
 				}
 			}
@@ -201,16 +239,28 @@ func WriteSpriteSheetWithOptions(path string, width, height int, frames [][]uint
 
 	output := image.NewNRGBA(image.Rect(0, 0, layout.Width, layout.Height))
 	scale := normalizedScaleOrDefault(options.Scale)
+	ratioWidth, ratioHeight, err := exportPixelRatio(options.ApplyPixelRatio, options.PixelAspectWidth, options.PixelAspectHeight)
+	if err != nil {
+		return SpriteSheetLayoutResult{}, fmt.Errorf("sprite sheet %w", err)
+	}
+	pixelScaleX, err := checkedMul(scale, ratioWidth)
+	if err != nil {
+		return SpriteSheetLayoutResult{}, fmt.Errorf("sprite sheet dimensions overflow")
+	}
+	pixelScaleY, err := checkedMul(scale, ratioHeight)
+	if err != nil {
+		return SpriteSheetLayoutResult{}, fmt.Errorf("sprite sheet dimensions overflow")
+	}
 	for index, pixels := range frames {
 		rect := layout.FrameRects[index]
 		for y := 0; y < height; y++ {
 			for x := 0; x < width; x++ {
 				sourceOffset := (y*width + x) * 4
-				outputOffsetX := rect.X + x*scale
-				outputOffsetY := rect.Y + y*scale
-				for scaledY := 0; scaledY < scale; scaledY++ {
+				outputOffsetX := rect.X + x*pixelScaleX
+				outputOffsetY := rect.Y + y*pixelScaleY
+				for scaledY := 0; scaledY < pixelScaleY; scaledY++ {
 					rowOffset := (outputOffsetY + scaledY) * output.Stride
-					for scaledX := 0; scaledX < scale; scaledX++ {
+					for scaledX := 0; scaledX < pixelScaleX; scaledX++ {
 						destinationOffset := rowOffset + (outputOffsetX+scaledX)*4
 						copy(output.Pix[destinationOffset:destinationOffset+4], pixels[sourceOffset:sourceOffset+4])
 					}
@@ -248,6 +298,18 @@ func CalculateSpriteSheetLayout(width, height, frameCount int, options SpriteShe
 	if err != nil {
 		return SpriteSheetLayoutResult{}, fmt.Errorf("sprite sheet %w", err)
 	}
+	ratioWidth, ratioHeight, err := exportPixelRatio(options.ApplyPixelRatio, options.PixelAspectWidth, options.PixelAspectHeight)
+	if err != nil {
+		return SpriteSheetLayoutResult{}, fmt.Errorf("sprite sheet %w", err)
+	}
+	pixelScaleX, err := checkedMul(scale, ratioWidth)
+	if err != nil {
+		return SpriteSheetLayoutResult{}, fmt.Errorf("sprite sheet dimensions overflow")
+	}
+	pixelScaleY, err := checkedMul(scale, ratioHeight)
+	if err != nil {
+		return SpriteSheetLayoutResult{}, fmt.Errorf("sprite sheet dimensions overflow")
+	}
 	layout := strings.ToLower(options.Layout)
 	if layout == "" {
 		layout = SpriteSheetLayoutHorizontal
@@ -256,11 +318,11 @@ func CalculateSpriteSheetLayout(width, height, frameCount int, options SpriteShe
 		return SpriteSheetLayoutResult{}, fmt.Errorf("unsupported sprite sheet layout %q", options.Layout)
 	}
 
-	scaledWidth, err := scaledDimension(width, scale)
+	scaledWidth, err := scaledDimension(width, pixelScaleX)
 	if err != nil {
 		return SpriteSheetLayoutResult{}, fmt.Errorf("sprite sheet %w", err)
 	}
-	scaledHeight, err := scaledDimension(height, scale)
+	scaledHeight, err := scaledDimension(height, pixelScaleY)
 	if err != nil {
 		return SpriteSheetLayoutResult{}, fmt.Errorf("sprite sheet %w", err)
 	}

@@ -32,8 +32,22 @@ func TestMCPDesktopSmoke(t *testing.T) {
 	}
 	defer session.Close()
 	tools, err := session.ListTools(ctx, nil)
-	if err != nil || len(tools.Tools) != 14 {
+	if err != nil {
 		t.Fatalf("tools: %v, %v", tools, err)
+	}
+	availableTools := make(map[string]bool, len(tools.Tools))
+	for _, tool := range tools.Tools {
+		availableTools[tool.Name] = true
+	}
+	for _, name := range []string{
+		"pixtorio_list_documents", "pixtorio_create_document", "pixtorio_get_document",
+		"pixtorio_edit_document", "pixtorio_undo", "pixtorio_redo", "pixtorio_read_pixels",
+		"pixtorio_get_preview", "pixtorio_save_project", "pixtorio_open_project",
+		"pixtorio_export_image", "pixtorio_close_document",
+	} {
+		if !availableTools[name] {
+			t.Fatalf("missing desktop MCP tool %q in %v", name, tools.Tools)
+		}
 	}
 	for attempt := 0; attempt < 30; attempt++ {
 		ready, err := session.CallTool(ctx, &mcp.CallToolParams{Name: "pixtorio_list_documents", Arguments: map[string]any{}})

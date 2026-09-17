@@ -1,9 +1,13 @@
 import {describe, expect, it} from "vitest";
+import {CommandHistory, DocumentStateCommand} from "./history";
 import {
   addLayer,
   addLayerGroup,
   addFrame,
+  addEmptyFrame,
+  adjacentFrameID,
   addFrameTag,
+  addSlice,
   celKey,
   cloneDocument,
   compositeFrame,
@@ -17,6 +21,7 @@ import {
   deleteFrames,
   duplicateFrame,
   duplicateFrames,
+  duplicateDocument,
   duplicateLayer,
   getLayerByID,
   getActiveCel,
@@ -423,9 +428,8 @@ describe("background layers", () => {
     expect(background.opacity).toBe(1);
     expect(background.blendMode).toBe("normal");
 
-    const secondFrame = addFrame(document);
-    expect(getCel(document, background.id, secondFrame.id)).toBeNull();
-    const ensured = ensureCel(document, background.id, secondFrame.id);
+    const secondFrame = addEmptyFrame(document);
+    const ensured = getCel(document, background.id, secondFrame.id);
     expect(ensured).not.toBeNull();
     expect(Array.from(ensured!.pixels)).toEqual([255, 0, 0, 255, 255, 0, 0, 255]);
   });
@@ -478,12 +482,46 @@ describe("background layers", () => {
 });
 
 describe("frame operations", () => {
+  it("inserts a truly empty frame without inheriting a continuous Cel", () => {
+    const document = createDocument({width: 2, height: 1});
+    const layer = document.layers[0];
+    layer.continuous = true;
+    const sourceFrameId = document.activeFrameId;
+    const sourceCel = getCel(document, layer.id, sourceFrameId)!;
+    sourceCel.pixels.set([9, 8, 7, 255, 0, 0, 0, 0]);
+
+    const empty = addEmptyFrame(document, 240);
+
+    expect(document.frames.map((frame) => frame.id)).toEqual([sourceFrameId, empty.id]);
+    expect(empty.durationMs).toBe(240);
+    expect(document.activeFrameId).toBe(empty.id);
+    expect(getCel(document, layer.id, empty.id)).toBeNull();
+    expect(adjacentFrameID(document, empty.id, -1)).toBe(sourceFrameId);
+    expect(adjacentFrameID(document, sourceFrameId, -1)).toBeNull();
+    expect(adjacentFrameID(document, empty.id, 1)).toBeNull();
+  });
+
+  it("restores an empty-frame insertion through document history", () => {
+    const document = createDocument({width: 1, height: 1});
+    const before = cloneDocument(document);
+    const history = new CommandHistory<PixelDocument>();
+    addEmptyFrame(document);
+    history.commit(new DocumentStateCommand(before, document, "New Empty Frame"));
+
+    expect(history.undo(document)?.label).toBe("New Empty Frame");
+    expect(document.frames).toHaveLength(1);
+    expect(document.activeFrameId).toBe(before.activeFrameId);
+    history.redo(document);
+    expect(document.frames).toHaveLength(2);
+    expect(getCel(document, document.activeLayerId, document.activeFrameId)).toBeNull();
+  });
+
   it("creates, duplicates, moves, and deletes complete per-layer cel sets", () => {
     const document = createDocument({width: 2, height: 1});
     const base = document.frames[0];
     const layer = document.layers[0];
     setPixel(getCel(document, layer.id, base.id)!.pixels, 2, 1, 0, 0, [1, 2, 3, 255]);
-    const blank = addFrame(document, 80);
+    const blank = addEmptyFrame(document, 80);
     ensureCel(document, layer.id, blank.id);
     expect(getCel(document, layer.id, blank.id)?.pixels).toEqual(new Uint8ClampedArray(8));
     const copy = duplicateFrame(document, base.id)!;
@@ -809,6 +847,71 @@ describe("document cloning", () => {
     target.cels[celKey(target.layers[0].id, target.activeFrameId)].pixels[0] = 77;
     expect(source.layers[0].visible).toBe(true);
     expect(source.cels[celKey(source.layers[0].id, source.activeFrameId)].pixels[0]).toBe(0);
+  });
+
+  it("duplicates a sprite with fresh IDs while preserving sparse, linked, indexed, and tilemap data", () => {
+    const document = createDocument({
+      name: "source.pixio",
+      width: 2,
+      height: 1,
+      colorMode: "indexed",
+      palette: ["#00000000", "#ff0000ff"],
+    });
+    const firstFrame = document.frames[0];
+    const sourceCel = getActiveCel(document);
+    sourceCel.indexes!.set([1, 0]);
+    sourceCel.pixels.set([255, 0, 0, 255, 0, 0, 0, 0]);
+    const secondFrame = addFrame(document, 240);
+    const linkedCel = ensureCel(document, document.activeLayerId, secondFrame.id)!;
+    linkCels(document, document.activeLayerId, [firstFrame.id, secondFrame.id], firstFrame.id);
+    expect(linkedCel.pixels).toBe(sourceCel.pixels);
+    expect(linkedCel.indexes).toBe(sourceCel.indexes);
+    const tag = addFrameTag(document, "Walk", firstFrame.id, secondFrame.id)!;
+    const slice = addSlice(document, "Body", {x: 0, y: 0, width: 2, height: 1, frameId: firstFrame.id})!;
+    const thirdFrame = addEmptyFrame(document, 300);
+    document.activeFrameId = thirdFrame.id;
+    const duplicate = duplicateDocument(document, "source copy.pixio");
+
+    expect(duplicate.name).toBe("source copy.pixio");
+    expect(duplicate).not.toBe(document);
+    expect(duplicate.palette.id).not.toBe(document.palette.id);
+    expect(duplicate.activeLayerId).not.toBe(document.activeLayerId);
+    expect(duplicate.activeFrameId).not.toBe(document.activeFrameId);
+    expect(duplicate.layers.map((layer) => layer.id)).not.toEqual(document.layers.map((layer) => layer.id));
+    expect(duplicate.frames.map((frame) => frame.id)).not.toEqual(document.frames.map((frame) => frame.id));
+    expect(Object.values(duplicate.cels)).toHaveLength(Object.values(document.cels).length);
+    const duplicateFirstCel = getCel(duplicate, duplicate.activeLayerId, duplicate.frames[0].id)!;
+    const duplicateSecondCel = getCel(duplicate, duplicate.activeLayerId, duplicate.frames[1].id)!;
+    expect(duplicateFirstCel.indexes).toEqual(sourceCel.indexes);
+    expect(duplicateFirstCel.pixels).not.toBe(sourceCel.pixels);
+    expect(duplicateFirstCel.linkId).not.toBe(sourceCel.linkId);
+    expect(duplicateSecondCel.pixels).toBe(duplicateFirstCel.pixels);
+    expect(duplicateSecondCel.indexes).toBe(duplicateFirstCel.indexes);
+    expect(getCel(duplicate, duplicate.activeLayerId, duplicate.frames[2].id)).toBeNull();
+    expect(duplicate.activeFrameId).toBe(duplicate.frames[2].id);
+    expect(duplicate.tags[0].id).not.toBe(tag.id);
+    expect(duplicate.tags[0].fromFrameId).toBe(duplicate.frames[0].id);
+    expect(duplicate.tags[0].toFrameId).toBe(duplicate.frames[1].id);
+    expect(duplicate.slices[0].id).not.toBe(slice.id);
+    expect(duplicate.slices[0].keys[0].frameId).toBe(duplicate.frames[0].id);
+
+    const duplicateCel = duplicateFirstCel;
+    duplicateCel.pixels[0] = 0;
+    expect(sourceCel.pixels[0]).toBe(255);
+
+    const tilemapSource = createDocument({name: "tiles.pixio", width: 2, height: 1});
+    getActiveCel(tilemapSource).pixels.set([255, 0, 0, 255, 0, 255, 0, 255]);
+    const converted = convertImageLayerToTilemap(tilemapSource, tilemapSource.activeLayerId, {tileWidth: 1, tileHeight: 1});
+    tilemapSource.layers[0] = converted.layer;
+    tilemapSource.tilesets = [converted.tileset];
+    tilemapSource.cels = {[celKey(converted.layer.id, tilemapSource.activeFrameId)]: converted.cels[0]};
+    tilemapSource.activeLayerId = converted.layer.id;
+    const tilemapDuplicate = duplicateDocument(tilemapSource, "tiles copy.pixio");
+    const duplicateTilemapLayer = tilemapDuplicate.layers[0];
+    const duplicateTilemapCel = getCel(tilemapDuplicate, duplicateTilemapLayer.id, tilemapDuplicate.activeFrameId)!;
+    expect(duplicateTilemapLayer.tilesetId).not.toBe(converted.layer.tilesetId);
+    expect(duplicateTilemapCel.tilemap?.tiles).toEqual(converted.cels[0].tilemap?.tiles);
+    expect(duplicateTilemapCel.tilemap?.tiles).not.toBe(converted.cels[0].tilemap?.tiles);
   });
 });
 

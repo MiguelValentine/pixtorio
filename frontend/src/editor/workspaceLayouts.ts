@@ -21,12 +21,14 @@ export const defaultWorkspaceVisibility: WorkspaceVisibility = {
 
 const workspaceLayoutsStorageKey = "pixtorio-workspace-layouts";
 const workspaceVisibilityStorageKey = "pixtorio-workspace-visibility";
+const workspaceCanvasOnlyStorageKey = "pixtorio-workspace-canvas-only";
 const inspectorWidthRange = {min: 190, max: 420};
 const timelineHeightRange = {min: 150, max: 520};
 
 type WorkspaceLayoutReadStorage = Pick<Storage, "getItem">;
 type WorkspaceLayoutWriteStorage = Pick<Storage, "getItem" | "setItem">;
 type WorkspaceVisibilityStorage = Pick<Storage, "getItem" | "setItem" | "removeItem">;
+type WorkspaceCanvasOnlyStorage = Pick<Storage, "getItem" | "setItem" | "removeItem">;
 
 function normalizeWorkspaceLayout(value: unknown): WorkspaceLayout | null {
   if (typeof value !== "object" || value === null) return null;
@@ -124,6 +126,24 @@ export function saveWorkspaceVisibility(storage: WorkspaceVisibilityStorage, vis
 export function resetWorkspaceVisibility(storage: WorkspaceVisibilityStorage): WorkspaceVisibility {
   storage.removeItem(workspaceVisibilityStorageKey);
   return {...defaultWorkspaceVisibility};
+}
+
+export function readWorkspaceCanvasOnly(storage: WorkspaceLayoutReadStorage): boolean {
+  try {
+    return storage.getItem(workspaceCanvasOnlyStorageKey) === "true";
+  } catch {
+    return false;
+  }
+}
+
+export function saveWorkspaceCanvasOnly(storage: WorkspaceCanvasOnlyStorage, canvasOnly: boolean): void {
+  if (typeof canvasOnly !== "boolean") throw new Error("Invalid canvas-only mode");
+  storage.setItem(workspaceCanvasOnlyStorageKey, String(canvasOnly));
+}
+
+export function resetWorkspaceCanvasOnly(storage: WorkspaceCanvasOnlyStorage): false {
+  storage.removeItem(workspaceCanvasOnlyStorageKey);
+  return false;
 }
 
 function isWorkspaceVisibility(value: unknown): value is WorkspaceVisibility {

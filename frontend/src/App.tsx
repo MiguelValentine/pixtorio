@@ -1,4 +1,4 @@
-import {useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent} from "react";
+import {useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type DragEvent as ReactDragEvent, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent} from "react";
 import {GIFEncoder, applyPalette, quantize} from "gifenc";
 import {flushSync} from "react-dom";
 import {
@@ -24,6 +24,7 @@ import {
   Layers,
   Eye,
   EyeOff,
+  Fullscreen,
   FileImage,
   FileDown,
   FilePlus,
@@ -38,6 +39,7 @@ import {
   Merge,
   MoreHorizontal,
   Move,
+  PanelTopOpen,
   Minus,
   PaintBucket,
   Pause,
@@ -61,6 +63,7 @@ import {
   Square,
   SquaresUnite,
   Sun,
+  Target,
   Type,
   ZoomIn,
   Slice as SliceIcon,
@@ -73,14 +76,16 @@ import {
   WandSparkles,
   type LucideIcon,
 } from "lucide-react";
-import {ClearRecovery, ClipboardReadImage, ClipboardWriteImage, ImportPNG, ImportPNGSequence, LoadRecovery, OpenPixio, OpenPixioPath, OpenStartupProject, SaveGIF, SavePixio, SavePixioPath, SavePNG, SavePNGSequence, SaveRecovery, SaveSpriteSheet, SetWindowCloseState} from "../wailsjs/go/main/App";
-import {ClipboardGetText, ClipboardSetText, EventsOn} from "../wailsjs/runtime/runtime";
+import {ClearRecovery, ClipboardReadImage, ClipboardWriteImage, ImportPNG, ImportPNGSequence, LoadRecovery, OpenPixio, OpenPixioPath, OpenStartupProject, SaveGIFWithOptions, SavePackedAtlas, SavePixio, SavePixioPath, SavePNGWithOptions, SavePNGSequence, SaveRecovery, SetWindowCloseState} from "../wailsjs/go/main/App";
+import {ClipboardGetText, ClipboardSetText, EventsOn, WindowFullscreen, WindowIsFullscreen, WindowUnfullscreen} from "../wailsjs/runtime/runtime";
 import {ClaimMCPCommand, CompleteMCPCommand, SetMCPReady} from "../wailsjs/go/main/App";
 import {handleMCPWorkspaceCommand, type MCPWorkspaceTab} from "./editor/mcpWorkspace";
-import {defaultWorkspaceDimensions, defaultWorkspaceVisibility, readWorkspaceLayouts, readWorkspaceVisibility, saveWorkspaceLayout, saveWorkspaceVisibility, deleteWorkspaceLayout} from "./editor/workspaceLayouts";
-import {readPreferences, savePreferences, type AppPreferences} from "./editor/preferences";
+import {defaultWorkspaceDimensions, defaultWorkspaceVisibility, readWorkspaceCanvasOnly, readWorkspaceLayouts, readWorkspaceVisibility, saveWorkspaceCanvasOnly, saveWorkspaceLayout, saveWorkspaceVisibility, deleteWorkspaceLayout} from "./editor/workspaceLayouts";
+import {applyNewDocumentPreferenceDefaults, readPreferences, savePreferences, type AppPreferences} from "./editor/preferences";
+import {shouldAutoShowTimeline, timelineStructure} from "./editor/timelineVisibility";
 import {readDefaultPalette, saveDefaultPalette, resetDefaultPalette} from "./editor/defaultPalette";
 import {applyDocumentPalette, relocateTransparentIndex} from "./editor/paletteOperations";
+import {applyPixelAspectRatio, resizePixels} from "./editor/pixelAspectRatio";
 import {CurveEditor} from "./CurveEditor";
 import {BrushPresetPanel} from "./BrushPresetPanel";
 import {BrushDynamicsPanel} from "./BrushDynamicsPanel";
@@ -98,8 +103,11 @@ import {
   addLayerGroup,
   addTilemapLayer,
   addFrame,
+  addEmptyFrame,
+  adjacentFrameID,
   addFrameTag,
   addSlice,
+  addSliceKey,
   cloneDocument,
   compositeFrame,
   compositeFrameForExport,
@@ -110,8 +118,10 @@ import {
   deleteFrames,
   deleteFrameTag,
   deleteSlice,
+  deleteSliceKey,
   deleteLayer,
   deleteCel,
+  duplicateDocument,
   duplicateLayer,
   flattenVisibleLayers,
   duplicateFrames,
@@ -151,15 +161,19 @@ import {
   unlinkCels,
   updateFrameTag,
   updateSlice,
+  updateSliceKey,
   type BlendMode,
   type ColorMode,
   type PixelBounds,
+  type SliceKeyUpdate,
   type TagDirection,
   type PixelDocument,
+  type TilemapData,
   type LayerRole,
 } from "./editor/document";
 import {
   addTileInPlace,
+  cleanupTilesetInPlace,
   convertImageLayerToTilemap,
   createTileset,
   deleteTileInPlace,
@@ -168,8 +182,11 @@ import {
   setTileCellInPlace,
   type TilePixelSyncMode,
 } from "./editor/tilemap";
-import {constrainColorToMode, convertDocumentColorMode, exportPaletteText, extractPalette, parsePaletteText, refreshIndexedDocument, sortPalette, syncIndexedCel, type DitherMode, type PaletteFileFormat} from "./editor/colorModes";
+import {constrainColorToMode, convertDocumentColorMode, exportPaletteText, extractPalette, parsePaletteText, refreshIndexedDocument, refreshTilemapCaches, sortPalette, syncIndexedCel, type DitherMode, type PaletteFileFormat} from "./editor/colorModes";
 import {
+  alphaDisplayMaximum,
+  alphaFromDisplay,
+  alphaToDisplay,
   clampByte,
   clampPercent,
   hslaToRgba,
@@ -197,12 +214,17 @@ import {
   maskChannelsInPlace,
   type ChannelMask,
 } from "./editor/adjustments";
-import {exportSliceMetadata, packAtlas, sliceSpriteSheet} from "./editor/gameAssets";
+import {buildSpriteSheet, exportAtlasMetadata, exportSpriteSheetMetadata, packAtlas, sliceSpriteSheet, validPNGImportDimensions, type SpriteSheetImportLayout} from "./editor/gameAssets";
+import {deleteSlices, moveSlices, resizeSliceKeys, reuseSliceColor, scaleSlices} from "./editor/sliceOperations";
+import {touchedSliceIds} from "./editor/sliceHitTesting";
 import {DocumentStateCommand, CommandHistory, defaultHistoryLimitBytes, PixelEditCommand} from "./editor/history";
-import {assignCommandShortcut, commandForShortcutEvent, defaultCommandShortcuts, normalizeShortcut, shortcutFromEvent, type CommandShortcutID} from "./editor/shortcuts";
+import {assignCommandShortcut, commandForShortcutEvent, defaultCommandShortcuts, documentOptionalCommandIDs, formatShortcutForPlatform, normalizeShortcut, shortcutFromEvent, type CommandShortcutID} from "./editor/shortcuts";
+import {adjacentFocusedFrameId, focusTagIdForFrame, focusedFrameIdAtEntry, focusedFrameRange, tagContainsFrame} from "./editor/timelineFocus";
 import {deserializePixelClipboard, enqueueSerialTask, orderFrameIDs, serializePixelClipboard} from "./editor/appHelpers";
 import {clearCelSelection, copyCelSelection, pasteCelSelection, type CelAddress, type CelClipboard} from "./editor/celClipboard";
+import {canCopyFramesToDocument, canCopyLayersToDocument, copyFramesToDocument, copyLayersToDocument} from "./editor/crossDocumentCopy";
 import {pasteClipboardAsNewLayer, selectionToNewLayer as applySelectionToNewLayer} from "./editor/editOperations";
+import {applyLayerProperties, existingCelsForLayers, linkedCelsForSelection, type LayerPropertyUpdate} from "./editor/layerProperties";
 import {LayerThumbnail} from "./editor/LayerThumbnail";
 import {FrameCompositeCache} from "./editor/compositingCache";
 import {PixelCanvas, type SelectionMode} from "./editor/PixelCanvas";
@@ -222,7 +244,6 @@ import {
   moveSelection,
   maskForSelection,
   selectByColor,
-  selectOpaquePixels,
   shrinkSelection,
   selectionCoverageAt,
   shiftPixelsWrapped,
@@ -241,8 +262,10 @@ import {
 } from "./editor/selection";
 import {bytesToBase64, decodeProject, encodeProject} from "./editor/serialization";
 import {celSelectionKey, normalizeCelSelection, selectTimelineCel, selectedCelAddresses} from "./editor/timelineSelection";
+import {duplicateLinkedTimelineCels, duplicateTimelineCels, transferTimelineCels} from "./editor/timelineCelOperations";
 import {MAX_BRUSH_SIZE, MIN_BRUSH_SIZE, createBitmapBrush, toolShortcuts, type BitmapBrush, type BrushDynamicsOptions, type BrushShape, type GradientDither, type GradientType, type ShapeFillMode, type InkMode, type RGBA, type ToolID} from "./editor/tools";
 import {rotateClipboardWithPivot, type TransformMode} from "./editor/transform";
+import {layerOpaqueContentSelection} from "./editor/contentSelection";
 
 const zoomLevels = [1, 2, 4, 6, 8, 12, 16, 24, 32];
 const tools: Array<{id: ToolID; icon: LucideIcon}> = [
@@ -303,8 +326,28 @@ type CommandScope = "canvas" | "layer" | "frame" | "cels";
 type ToolShortcutAssignments = Record<ToolID, string>;
 
 const commandShortcutLabels: Record<Language, Record<CommandShortcutID, string>> = {
-  en: {new: "New", open: "Open", save: "Save", saveAs: "Save As", undo: "Undo", redo: "Redo", selectAll: "Select All", deselect: "Deselect", copy: "Copy", cut: "Cut", paste: "Paste", delete: "Delete"},
-  zh: {new: "新建", open: "打开", save: "保存", saveAs: "另存为", undo: "撤销", redo: "重做", selectAll: "全选", deselect: "取消选择", copy: "复制", cut: "剪切", paste: "粘贴", delete: "删除"},
+  en: {
+    new: "New", newFromSelection: "New from selection", open: "Open", importPNG: "Import PNG", importSpriteSheet: "Import sprite sheet", importPNGSequence: "Import PNG sequence", save: "Save", saveAs: "Save as", exportPNG: "Export PNG", exportGIF: "Export animated GIF", exportSpriteSheet: "Export sprite sheet", exportPNGSequence: "Export PNG sequence", closeDocument: "Close document",
+    undo: "Undo", redo: "Redo", selectAll: "Select all", deselect: "Deselect", reselect: "Reselect", copy: "Copy", copyMerged: "Copy merged", cut: "Cut", paste: "Paste", pasteSpecialNewSprite: "Paste as new sprite", pasteSpecialNewLayer: "Paste as new layer", pasteSpecialReferenceLayer: "Paste as reference layer", fillSelection: "Fill selection", strokeSelection: "Stroke selection", copySelectionToLayer: "Copy selection to new layer", cutSelectionToLayer: "Cut selection to new layer", copySelectedFramesToDocument: "Copy selected frames to another document", copySelectedLayersToDocument: "Copy selected layers to another document", shiftPixelsLeft: "Shift pixels left", shiftPixelsRight: "Shift pixels right", shiftPixelsUp: "Shift pixels up", shiftPixelsDown: "Shift pixels down",
+    selectOpaque: "Select opaque pixels", selectColor: "Select foreground color", selectAllLayerCels: "Select all cels in layer", selectLinkedCels: "Select linked cels", invertSelection: "Invert selection", growSelection: "Grow selection", shrinkSelection: "Shrink selection", borderSelection: "Selection border", featherSelection: "Feather selection", scaleSelection: "Scale selection", rotateSelectionCCW: "Rotate selection counterclockwise", rotateSelectionCW: "Rotate selection clockwise", flipSelectionHorizontal: "Flip selection horizontally", flipSelectionVertical: "Flip selection vertically", applySelectionPosition: "Apply selection position", applySelectionRotation: "Rotate selection", createBrushFromSelection: "Create brush from selection", createPatternFromSelection: "Create pattern from selection", createSliceFromSelection: "Create slice from selection",
+    duplicateSprite: "Duplicate sprite", spriteSize: "Sprite size", canvasSize: "Canvas size", trimCanvas: "Trim transparent borders", rotateSpriteCW: "Rotate sprite clockwise", rotateSpriteCCW: "Rotate sprite counterclockwise", rotateSprite180: "Rotate sprite 180 degrees", flipSpriteHorizontal: "Flip sprite horizontally", flipSpriteVertical: "Flip sprite vertically", colorConfiguration: "Color configuration", adjustmentBrightnessContrast: "Brightness / contrast", adjustmentHSL: "Hue / saturation", adjustmentInvert: "Invert", adjustmentConvolution: "Convolution", adjustmentMedian: "Median", adjustmentDespeckle: "Despeckle", adjustmentCurves: "Curves", adjustmentHSVHSL: "HSV / HSL", adjustmentChannels: "Channels", effectOutline: "Outline", effectShading: "Shading",
+    addPaletteColor: "Add palette color", updatePaletteColor: "Edit palette color", removePaletteColor: "Remove palette color", extractPalette: "Extract palette", sortPalette: "Sort palette", saveDefaultPalette: "Save default palette", applyDefaultPalette: "Apply default palette", resetDefaultPalette: "Restore built-in palette", importPalette: "Import palette", exportGPL: "Export GPL palette", exportJASCPAL: "Export JASC-PAL palette",
+    addLayer: "Add layer", addGroup: "Add layer group", addTilemapLayer: "Add tilemap layer", convertLayerToTilemap: "Convert layer to tilemap", duplicateLayer: "Duplicate layer", layerProperties: "Layer properties", moveLayerUp: "Move layer up", moveLayerDown: "Move layer down", mergeLayerDown: "Merge layer down", mergeSelectedLayers: "Merge selected layers", flattenVisibleLayers: "Flatten visible layers", toggleLayerVisibility: "Toggle layer visibility", toggleLayerLock: "Toggle layer lock", toggleAlphaLock: "Toggle alpha lock", toggleContinuous: "Toggle continuous cel",
+    addFrame: "Add frame", newEmptyFrame: "New empty frame", duplicateFrame: "Duplicate frame", deleteFrame: "Delete frame", moveFrameBackward: "Move frame earlier", moveFrameForward: "Move frame later", previousFrame: "Previous frame", nextFrame: "Next frame", reverseFrames: "Reverse selected frames", createCels: "Create cels", duplicateCels: "Duplicate cels", duplicateLinkedCels: "Duplicate linked cels", deleteCels: "Delete cels", linkCels: "Link cels", unlinkCels: "Unlink cels", celProperties: "Cel properties", applyCelTransform: "Apply cel transform", rasterizeCels: "Rasterize cels", togglePlayback: "Play / pause animation", addTag: "Add frame tag", editTag: "Edit frame tag", deleteTag: "Delete frame tag", focusTag: "Focus active tag",
+    toggleInspector: "Toggle inspector", toggleTimeline: "Toggle timeline", togglePixelGrid: "Toggle pixel grid", toggleOnionSkin: "Toggle onion skin", toggleCanvasOnly: "Canvas-only mode", showAllPanels: "Show all panels", toggleFullscreen: "Toggle full screen", detachedPreview: "Detached animation preview", resetWorkspace: "Reset workspace layout", showHistory: "Show history", openPreferences: "Open preferences", toggleTheme: "Toggle theme", switchLanguage: "Switch language",
+    toggleGridSnap: "Toggle grid snapping", toggleMirrorX: "Toggle horizontal mirror", toggleMirrorY: "Toggle vertical mirror", toggleTileX: "Toggle horizontal tiling", toggleTileY: "Toggle vertical tiling", addVerticalGuide: "Add vertical guide", addHorizontalGuide: "Add horizontal guide", setRGBA: "Use RGBA mode", setGrayscale: "Use grayscale mode", setIndexed: "Use indexed mode", setBitmap: "Use bitmap mode", zoomIn: "Zoom in", zoomOut: "Zoom out", delete: "Delete",
+  },
+  zh: {
+    new: "新建", newFromSelection: "从选区新建", open: "打开", importPNG: "导入 PNG", importSpriteSheet: "导入精灵图", importPNGSequence: "导入 PNG 序列", save: "保存", saveAs: "另存为", exportPNG: "导出 PNG", exportGIF: "导出 GIF 动画", exportSpriteSheet: "导出精灵图", exportPNGSequence: "导出 PNG 序列", closeDocument: "关闭文件",
+    undo: "撤销", redo: "重做", selectAll: "全选", deselect: "取消选择", reselect: "重新选择", copy: "复制", copyMerged: "复制合并结果", cut: "剪切", paste: "粘贴", pasteSpecialNewSprite: "粘贴为新项目", pasteSpecialNewLayer: "粘贴为新图层", pasteSpecialReferenceLayer: "粘贴为参考图层", fillSelection: "填充选区", strokeSelection: "描边选区", copySelectionToLayer: "复制选区到新图层", cutSelectionToLayer: "剪切选区到新图层", copySelectedFramesToDocument: "复制所选帧到其他文件", copySelectedLayersToDocument: "复制所选图层到其他文件", shiftPixelsLeft: "向左环绕平移像素", shiftPixelsRight: "向右环绕平移像素", shiftPixelsUp: "向上环绕平移像素", shiftPixelsDown: "向下环绕平移像素",
+    selectOpaque: "选择不透明像素", selectColor: "选择前景色", selectAllLayerCels: "选择当前图层全部动画格", selectLinkedCels: "选择链接动画格", invertSelection: "反选", growSelection: "扩展选区", shrinkSelection: "收缩选区", borderSelection: "选区边框", featherSelection: "羽化选区", scaleSelection: "缩放选区", rotateSelectionCCW: "逆时针旋转选区", rotateSelectionCW: "顺时针旋转选区", flipSelectionHorizontal: "水平翻转选区", flipSelectionVertical: "垂直翻转选区", applySelectionPosition: "应用选区位置", applySelectionRotation: "旋转选区", createBrushFromSelection: "从选区创建笔刷", createPatternFromSelection: "从选区创建图案", createSliceFromSelection: "从选区创建切片",
+    duplicateSprite: "复制精灵", spriteSize: "缩放图像内容", canvasSize: "画布尺寸", trimCanvas: "裁去透明边缘", rotateSpriteCW: "顺时针旋转图像", rotateSpriteCCW: "逆时针旋转图像", rotateSprite180: "旋转图像 180 度", flipSpriteHorizontal: "水平翻转图像", flipSpriteVertical: "垂直翻转图像", colorConfiguration: "颜色配置", adjustmentBrightnessContrast: "亮度 / 对比度", adjustmentHSL: "色相 / 饱和度", adjustmentInvert: "反相", adjustmentConvolution: "卷积", adjustmentMedian: "中值滤波", adjustmentDespeckle: "去斑", adjustmentCurves: "曲线", adjustmentHSVHSL: "HSV / HSL", adjustmentChannels: "通道", effectOutline: "轮廓", effectShading: "着色",
+    addPaletteColor: "添加调色板颜色", updatePaletteColor: "编辑调色板颜色", removePaletteColor: "移除调色板颜色", extractPalette: "提取调色板", sortPalette: "整理调色板", saveDefaultPalette: "保存默认调色板", applyDefaultPalette: "应用默认调色板", resetDefaultPalette: "恢复内置调色板", importPalette: "导入调色板", exportGPL: "导出 GPL 调色板", exportJASCPAL: "导出 JASC-PAL 调色板",
+    addLayer: "新建图层", addGroup: "新建图层组", addTilemapLayer: "新建图块地图图层", convertLayerToTilemap: "将图层转换为图块地图", duplicateLayer: "复制图层", layerProperties: "图层属性", moveLayerUp: "上移图层", moveLayerDown: "下移图层", mergeLayerDown: "向下合并图层", mergeSelectedLayers: "合并所选图层", flattenVisibleLayers: "拼合可见图层", toggleLayerVisibility: "切换图层可见性", toggleLayerLock: "切换图层锁定", toggleAlphaLock: "切换锁定透明度", toggleContinuous: "切换连续动画格",
+    addFrame: "新建帧", newEmptyFrame: "新建空帧", duplicateFrame: "复制帧", deleteFrame: "删除帧", moveFrameBackward: "前移帧", moveFrameForward: "后移帧", previousFrame: "上一帧", nextFrame: "下一帧", reverseFrames: "反转所选帧", createCels: "创建动画格", duplicateCels: "复制动画格", duplicateLinkedCels: "复制并链接动画格", deleteCels: "删除动画格", linkCels: "链接动画格", unlinkCels: "取消链接动画格", celProperties: "动画格属性", applyCelTransform: "应用动画格变换", rasterizeCels: "栅格化动画格", togglePlayback: "播放 / 暂停动画", addTag: "添加帧标签", editTag: "编辑帧标签", deleteTag: "删除帧标签", focusTag: "聚焦当前帧标签",
+    toggleInspector: "显示 / 隐藏侧栏", toggleTimeline: "显示 / 隐藏时间轴", togglePixelGrid: "切换像素网格", toggleOnionSkin: "切换洋葱皮", toggleCanvasOnly: "画布独占模式", showAllPanels: "显示所有面板", toggleFullscreen: "切换全屏", detachedPreview: "独立动画预览", resetWorkspace: "重置工作区布局", showHistory: "显示历史记录", openPreferences: "打开偏好设置", toggleTheme: "切换主题", switchLanguage: "切换语言",
+    toggleGridSnap: "切换网格吸附", toggleMirrorX: "切换水平对称", toggleMirrorY: "切换垂直对称", toggleTileX: "切换水平平铺", toggleTileY: "切换垂直平铺", addVerticalGuide: "添加垂直辅助线", addHorizontalGuide: "添加水平辅助线", setRGBA: "使用 RGBA 模式", setGrayscale: "使用灰度模式", setIndexed: "使用索引色模式", setBitmap: "使用位图模式", zoomIn: "放大", zoomOut: "缩小", delete: "删除",
+  },
 };
 
 interface EditorTab {
@@ -343,7 +386,13 @@ interface CelMoveSession {
   deltaY: number;
 }
 
-type ExportKind = "gif" | "sheet";
+interface TimelineCelDragSession {
+  sourceAddresses: CelAddress[];
+  sourceAnchor: CelAddress;
+  copy: boolean;
+}
+
+type ExportKind = "png" | "gif" | "sheet";
 type SpriteSheetLayout = "horizontal" | "vertical" | "grid";
 
 interface TagDialogState {
@@ -354,6 +403,46 @@ interface TagDialogState {
   direction: TagDirection;
   color: string;
   repeat: number;
+}
+
+interface CrossDocumentCopyDialogState {
+  mode: "frames" | "layers";
+  sourceTabId: string;
+  frameIds: string[];
+  layerIds: string[];
+  targetTabId: string;
+}
+
+type TriStateProperty = "keep" | "on" | "off";
+type LayerRoleProperty = "keep" | LayerRole;
+
+interface LayerPropertiesDialogState {
+  layerIds: string[];
+  name: string;
+  opacity: string;
+  blendMode: "keep" | BlendMode;
+  role: LayerRoleProperty;
+  visible: TriStateProperty;
+  locked: TriStateProperty;
+  alphaLock: TriStateProperty;
+  continuous: TriStateProperty;
+}
+
+interface SlicePropertiesDialogState {
+  sliceId: string;
+  frameId: string;
+  name: string;
+  color: string;
+  x: string;
+  y: string;
+  width: string;
+  height: string;
+  centerX: string;
+  centerY: string;
+  centerWidth: string;
+  centerHeight: string;
+  pivotX: string;
+  pivotY: string;
 }
 
 type AdjustmentKind = "brightness-contrast" | "hsl" | "invert" | "convolution" | "median" | "despeckle" | "curves" | "hsv-hsl" | "channel-mask" | "outline";
@@ -433,6 +522,7 @@ interface SpriteImportDialogState {
   image: PNGResponse;
   frameWidth: number;
   frameHeight: number;
+  layout: SpriteSheetImportLayout;
   offsetX: number;
   offsetY: number;
   paddingX: number;
@@ -559,7 +649,7 @@ function syncTabToActiveTag(tab: EditorTab) {
   tab.loopEndFrameId = tag.toFrameId;
   setTabCommandScope(tab, "frame");
   if (!frameIds.includes(tab.document.activeFrameId)) {
-    tab.document.activeFrameId = tag.direction === "reverse" ? tag.toFrameId : tag.fromFrameId;
+    tab.document.activeFrameId = focusedFrameIdAtEntry(tab.document, {tagId: tag.id}) ?? tag.fromFrameId;
   }
   return true;
 }
@@ -580,7 +670,7 @@ export function normalizeTabTimeline(tab: EditorTab, syncActiveTag = false) {
   tab.selectedLayerIds = tab.selectedLayerIds.filter((layerId) => validLayerIds.has(layerId));
   if (tab.selectedLayerIds.length === 0) tab.selectedLayerIds = [tab.document.activeLayerId];
   if (!validLayerIds.has(tab.layerSelectionAnchorId)) tab.layerSelectionAnchorId = tab.document.activeLayerId;
-  if (tab.commandScope === "cels" && activeLayer && isImageLayer(activeLayer)) {
+  if (tab.commandScope === "cels" && activeLayer && isCelLayer(activeLayer)) {
     const normalized = normalizeCelSelection(
       tab.document,
       tab.selectedCelKeys,
@@ -596,10 +686,12 @@ export function normalizeTabTimeline(tab: EditorTab, syncActiveTag = false) {
   }
 }
 
-function setTabCommandScope(tab: EditorTab, scope: Exclude<CommandScope, "cels">) {
+function setTabCommandScope(tab: EditorTab, scope: CommandScope) {
   tab.commandScope = scope;
-  tab.selectedCelKeys = [];
-  tab.celSelectionAnchor = null;
+  if (scope !== "cels") {
+    tab.selectedCelKeys = [];
+    tab.celSelectionAnchor = null;
+  }
   if (scope !== "canvas") tab.selection = null;
   if (scope === "layer" && !tab.selectedLayerIds.includes(tab.document.activeLayerId)) {
     tab.selectedLayerIds = [tab.document.activeLayerId];
@@ -741,7 +833,7 @@ export function parsePNGResponse(payload: string): PNGResponse {
     throw new Error("Invalid PNG response");
   }
   const {name, width, height, pixels: encodedPixels} = parsed;
-  if (!Number.isInteger(width) || !Number.isInteger(height) || width <= 0 || height <= 0 || width > 2048 || height > 2048) {
+  if (!validPNGImportDimensions(width, height)) {
     throw new Error("Invalid PNG response");
   }
   let binary: string;
@@ -845,12 +937,12 @@ const labels: Record<Language, {
   moveLayerUp: string; moveLayerDown: string; mergeLayerDown: string; hideLayer: string; showLayer: string;
   renameLayer: string; lockLayer: string; unlockLayer: string; collapseGroup: string; expandGroup: string;
   opacity: string; layerOpacity: string; blendMode: string; normal: string; multiply: string; screen: string; overlay: string;
-  animation: string; addFrame: string; duplicateFrame: string; deleteFrame: string; moveFrameBackward: string;
-  moveFrameForward: string; frames: string; pause: string; play: string; onionSkin: string; loop: string;
-  linkCels: string; unlinkCels: string; tags: string; noTag: string; addTag: string; editTag: string; deleteTag: string;
+  animation: string; addFrame: string; newEmptyFrame: string; duplicateFrame: string; deleteFrame: string; moveFrameBackward: string;
+  moveFrameForward: string; previousFrame: string; nextFrame: string; frames: string; pause: string; play: string; onionSkin: string; loop: string;
+  linkCels: string; unlinkCels: string; duplicateCels: string; duplicateLinkedCels: string; tags: string; noTag: string; addTag: string; editTag: string; deleteTag: string; focusTag: string;
   celTransform: string; angle: string; offsetX: string; offsetY: string; applyCelTransform: string; rasterizeCels: string;
   tagName: string; direction: string; forward: string; reverse: string; pingpong: string; loopStart: string; loopEnd: string;
-  exportOptions: string; export: string; scale: string; playback: string; once: string; forever: string; repeatCount: string;
+  exportOptions: string; export: string; scale: string; applyPixelRatio: string; playback: string; once: string; forever: string; repeatCount: string;
   frameRange: string; allFrames: string; selectedFrames: string; loopRange: string; layout: string;
   sheetHorizontal: string; sheetVertical: string; sheetGrid: string; columns: string; borderPadding: string; framePadding: string; atlasJSON: string;
   to: string; zoomOut: string; zoomIn: string; newDocument: string; resizeCanvas: string; width: string; height: string;
@@ -877,12 +969,12 @@ const labels: Record<Language, {
     moveLayerUp: "Move layer up", moveLayerDown: "Move layer down", mergeLayerDown: "Merge layer down", hideLayer: "Hide layer", showLayer: "Show layer",
     renameLayer: "Rename layer", lockLayer: "Lock layer", unlockLayer: "Unlock layer", collapseGroup: "Collapse group", expandGroup: "Expand group",
     opacity: "Opacity", layerOpacity: "Layer opacity", blendMode: "Blend mode", normal: "Normal", multiply: "Multiply", screen: "Screen", overlay: "Overlay",
-    animation: "Animation", addFrame: "Add frame", duplicateFrame: "Duplicate frame", deleteFrame: "Delete frame", moveFrameBackward: "Move frame earlier",
-    moveFrameForward: "Move frame later", frames: "Frames", pause: "Pause", play: "Play", onionSkin: "Onion skin", loop: "Loop",
-    linkCels: "Link selected cels", unlinkCels: "Unlink selected cels", tags: "Frame tags", noTag: "No active tag", addTag: "Add frame tag", editTag: "Edit frame tag", deleteTag: "Delete frame tag",
+    animation: "Animation", addFrame: "Add frame", newEmptyFrame: "New empty frame", duplicateFrame: "Duplicate frame", deleteFrame: "Delete frame", moveFrameBackward: "Move frame earlier",
+    moveFrameForward: "Move frame later", previousFrame: "Previous frame", nextFrame: "Next frame", frames: "Frames", pause: "Pause", play: "Play", onionSkin: "Onion skin", loop: "Loop",
+    linkCels: "Link selected cels", unlinkCels: "Unlink selected cels", duplicateCels: "Duplicate selected cels", duplicateLinkedCels: "Duplicate selected cels as linked", tags: "Frame tags", noTag: "No active tag", addTag: "Add frame tag", editTag: "Edit frame tag", deleteTag: "Delete frame tag", focusTag: "Focus active tag",
     celTransform: "Selected cel transform", angle: "Angle", offsetX: "Offset X", offsetY: "Offset Y", applyCelTransform: "Apply to selected cels", rasterizeCels: "Rasterize to canvas",
     tagName: "Tag name", direction: "Direction", forward: "Forward", reverse: "Reverse", pingpong: "Ping-pong", loopStart: "Loop start", loopEnd: "Loop end",
-    exportOptions: "Export options", export: "Export", scale: "Scale", playback: "Playback", once: "Once", forever: "Forever", repeatCount: "Repeat count",
+    exportOptions: "Export options", export: "Export", scale: "Scale", applyPixelRatio: "Apply pixel ratio", playback: "Playback", once: "Once", forever: "Forever", repeatCount: "Repeat count",
     frameRange: "Frame range", allFrames: "All frames", selectedFrames: "Selected frames", loopRange: "Loop range", layout: "Layout",
     sheetHorizontal: "Horizontal", sheetVertical: "Vertical", sheetGrid: "Grid", columns: "Columns", borderPadding: "Border padding", framePadding: "Frame padding", atlasJSON: "Write atlas JSON",
     to: "to", zoomOut: "Zoom out", zoomIn: "Zoom in",
@@ -911,12 +1003,12 @@ const labels: Record<Language, {
     moveLayerUp: "上移图层", moveLayerDown: "下移图层", mergeLayerDown: "向下合并图层", hideLayer: "隐藏图层", showLayer: "显示图层",
     renameLayer: "重命名图层", lockLayer: "锁定图层", unlockLayer: "解锁图层", collapseGroup: "折叠图层组", expandGroup: "展开图层组",
     opacity: "不透明度", layerOpacity: "图层不透明度", blendMode: "混合模式", normal: "正常", multiply: "正片叠底", screen: "滤色", overlay: "叠加",
-    animation: "动画", addFrame: "新建帧", duplicateFrame: "复制帧", deleteFrame: "删除帧", moveFrameBackward: "前移帧",
-    moveFrameForward: "后移帧", frames: "帧", pause: "暂停", play: "播放", onionSkin: "洋葱皮", loop: "循环",
-    linkCels: "链接所选动画格", unlinkCels: "取消链接所选动画格", tags: "帧标签", noTag: "未选择帧标签", addTag: "添加帧标签", editTag: "编辑帧标签", deleteTag: "删除帧标签",
+    animation: "动画", addFrame: "新建帧", newEmptyFrame: "新建空帧", duplicateFrame: "复制帧", deleteFrame: "删除帧", moveFrameBackward: "前移帧",
+    moveFrameForward: "后移帧", previousFrame: "上一帧", nextFrame: "下一帧", frames: "帧", pause: "暂停", play: "播放", onionSkin: "洋葱皮", loop: "循环",
+    linkCels: "链接所选动画格", unlinkCels: "取消链接所选动画格", duplicateCels: "复制所选动画格", duplicateLinkedCels: "复制并链接所选动画格", tags: "帧标签", noTag: "未选择帧标签", addTag: "添加帧标签", editTag: "编辑帧标签", deleteTag: "删除帧标签", focusTag: "聚焦当前帧标签",
     celTransform: "所选动画格变换", angle: "角度", offsetX: "水平偏移", offsetY: "垂直偏移", applyCelTransform: "应用到所选动画格", rasterizeCels: "栅格化到画布",
     tagName: "标签名称", direction: "方向", forward: "正向", reverse: "反向", pingpong: "往返", loopStart: "循环起点", loopEnd: "循环终点",
-    exportOptions: "导出选项", export: "导出", scale: "缩放", playback: "播放方式", once: "一次", forever: "无限循环", repeatCount: "循环次数",
+    exportOptions: "导出选项", export: "导出", scale: "缩放", applyPixelRatio: "应用像素宽高比", playback: "播放方式", once: "一次", forever: "无限循环", repeatCount: "循环次数",
     frameRange: "帧范围", allFrames: "全部帧", selectedFrames: "所选帧", loopRange: "循环范围", layout: "布局",
     sheetHorizontal: "横向", sheetVertical: "纵向", sheetGrid: "网格", columns: "列数", borderPadding: "外边距", framePadding: "帧间距", atlasJSON: "生成图集 JSON",
     to: "至", zoomOut: "缩小", zoomIn: "放大",
@@ -991,6 +1083,8 @@ const chineseStatus: Record<string, string> = {
   "Paste as Reference Layer": "粘贴为参考图层",
   "Created project from clipboard": "已从剪贴板创建项目",
   "Selected All": "已全选",
+  "Selected All Cels": "已选择当前图层全部动画格",
+  "Selected Linked Cels": "已选择链接动画格",
   "Selection cleared": "已取消选区",
   "Scale Selection": "缩放选区",
   "Rotate Selection Clockwise": "顺时针旋转选区",
@@ -1055,6 +1149,7 @@ const chineseStatus: Record<string, string> = {
   "Change Tiled Preview": "修改平铺预览",
   "Change Onion Skin": "修改洋葱皮",
   "Change Layer Role": "修改图层角色",
+  "Layer Properties": "图层属性",
   "Duplicate Layers": "复制图层",
   "Move Layers": "移动图层",
   "Merge Selected Layers": "合并所选图层",
@@ -1101,6 +1196,10 @@ const chineseStatus: Record<string, string> = {
   "Flip Sprite Horizontally": "水平翻转精灵",
   "Flip Sprite Vertically": "垂直翻转精灵",
   "Add Slice": "添加切片",
+  "Move Slices": "移动切片",
+  "Scale Slices": "缩放切片",
+  "Delete Slices": "删除切片",
+  "Slice Properties": "切片属性",
   "Edit Slice": "编辑切片",
   "Edit Slice Pivot": "编辑切片中心点",
   "Rename Slice": "重命名切片",
@@ -1267,7 +1366,7 @@ async function readPixelClipboardImage(): Promise<PixelClipboard | null> {
     if (!type) continue;
     const bitmap = await createImageBitmap(await item.getType(type));
     try {
-      if (bitmap.width <= 0 || bitmap.height <= 0 || bitmap.width > 2048 || bitmap.height > 2048) throw new Error("Invalid clipboard image dimensions");
+      if (!validPNGImportDimensions(bitmap.width, bitmap.height)) throw new Error("Invalid clipboard image dimensions");
       const canvas = document.createElement("canvas");
       canvas.width = bitmap.width;
       canvas.height = bitmap.height;
@@ -1320,14 +1419,18 @@ async function chooseBrowserFiles(accept: string) {
 
 async function decodeBrowserPNG(file: File) {
   const image = await createImageBitmap(file);
-  const canvas = document.createElement("canvas");
-  canvas.width = image.width;
-  canvas.height = image.height;
-  const context = canvas.getContext("2d", {willReadFrequently: true});
-  if (!context) throw new Error("PNG import is unavailable");
-  context.drawImage(image, 0, 0);
-  image.close();
-  return {name: file.name, width: canvas.width, height: canvas.height, pixels: context.getImageData(0, 0, canvas.width, canvas.height).data};
+  try {
+    if (!validPNGImportDimensions(image.width, image.height)) throw new Error("invalid PNG dimensions");
+    const canvas = document.createElement("canvas");
+    canvas.width = image.width;
+    canvas.height = image.height;
+    const context = canvas.getContext("2d", {willReadFrequently: true});
+    if (!context) throw new Error("PNG import is unavailable");
+    context.drawImage(image, 0, 0);
+    return {name: file.name, width: canvas.width, height: canvas.height, pixels: context.getImageData(0, 0, canvas.width, canvas.height).data};
+  } finally {
+    image.close();
+  }
 }
 
 async function browserPNGBlob(width: number, height: number, pixels: Uint8ClampedArray) {
@@ -1340,12 +1443,15 @@ async function browserPNGBlob(width: number, height: number, pixels: Uint8Clampe
   return canvasBlob(canvas, "image/png");
 }
 
-function browserGIFBlob(width: number, height: number, frames: Uint8ClampedArray[], durations: number[], loopCount: number) {
+function browserGIFBlob(width: number, height: number, frames: Uint8ClampedArray[], durations: number[], loopCount: number, scale = 1) {
   const encoder = GIFEncoder();
+  const outputWidth = width * scale;
+  const outputHeight = height * scale;
   for (let index = 0; index < frames.length; index += 1) {
-    const palette = quantize(frames[index], 256, {format: "rgba4444", oneBitAlpha: true});
+    const frame = scale === 1 ? frames[index] : resizePixels(width, height, frames[index], scale, scale).pixels;
+    const palette = quantize(frame, 256, {format: "rgba4444", oneBitAlpha: true});
     const transparentIndex = palette.findIndex((color) => color[3] === 0);
-    encoder.writeFrame(applyPalette(frames[index], palette, "rgba4444"), width, height, {
+    encoder.writeFrame(applyPalette(frame, palette, "rgba4444"), outputWidth, outputHeight, {
       palette,
       delay: durations[index],
       repeat: index === 0 ? loopCount : undefined,
@@ -1355,40 +1461,6 @@ function browserGIFBlob(width: number, height: number, frames: Uint8ClampedArray
   }
   encoder.finish();
   return new Blob([new Uint8Array(encoder.bytes())], {type: "image/gif"});
-}
-
-async function browserSpriteSheetBlob(
-  width: number,
-  height: number,
-  frames: Uint8ClampedArray[],
-  layout: SpriteSheetLayout,
-  requestedColumns: number,
-  scale: number,
-  borderPadding: number,
-  framePadding: number,
-) {
-  const columns = layout === "vertical" ? 1 : layout === "horizontal" ? frames.length : Math.max(1, Math.min(frames.length, requestedColumns));
-  const rows = Math.ceil(frames.length / columns);
-  const frameWidth = width * scale;
-  const frameHeight = height * scale;
-  const canvas = document.createElement("canvas");
-  canvas.width = borderPadding * 2 + columns * frameWidth + Math.max(0, columns - 1) * framePadding;
-  canvas.height = borderPadding * 2 + rows * frameHeight + Math.max(0, rows - 1) * framePadding;
-  const context = canvas.getContext("2d");
-  if (!context) throw new Error("Sprite sheet export is unavailable");
-  context.imageSmoothingEnabled = false;
-  const source = document.createElement("canvas");
-  source.width = width;
-  source.height = height;
-  const sourceContext = source.getContext("2d");
-  if (!sourceContext) throw new Error("Sprite sheet export is unavailable");
-  for (let index = 0; index < frames.length; index += 1) {
-    sourceContext.putImageData(new ImageData(new Uint8ClampedArray(frames[index]), width, height), 0, 0);
-    const column = index % columns;
-    const row = Math.floor(index / columns);
-    context.drawImage(source, borderPadding + column * (frameWidth + framePadding), borderPadding + row * (frameHeight + framePadding), frameWidth, frameHeight);
-  }
-  return canvasBlob(canvas, "image/png");
 }
 
 async function webEncodePixio(document: string) {
@@ -1461,22 +1533,7 @@ function createBlankDocument(language: Language, width = 64, height = 64, colorM
   });
   document.palette.name = palette.name;
   document.palette.transparentIndex = palette.transparentIndex;
-  if (preferences) {
-    document.colorProfile = preferences.color.defaultProfile === "display-p3"
-      ? {type: "display-p3", name: "Display P3"}
-      : preferences.color.defaultProfile === "none"
-        ? {type: "none", name: "Unassigned"}
-        : {type: "srgb", name: "sRGB"};
-    document.settings.gridWidth = preferences.grid.width;
-    document.settings.gridHeight = preferences.grid.height;
-    document.settings.gridOffsetX = preferences.grid.offsetX;
-    document.settings.gridOffsetY = preferences.grid.offsetY;
-    document.settings.onionPreviousFrames = preferences.timeline.onionPreviousFrames;
-    document.settings.onionNextFrames = preferences.timeline.onionNextFrames;
-    document.settings.onionOpacity = preferences.timeline.onionOpacity / 100;
-    document.settings.onionPreviousColor = `${preferences.timeline.onionPreviousColor}ff`;
-    document.settings.onionNextColor = `${preferences.timeline.onionNextColor}ff`;
-  }
+  if (preferences) applyNewDocumentPreferenceDefaults(document, preferences);
   if (colorMode === "indexed") for (const cel of Object.values(document.cels)) cel.indexes?.fill(palette.transparentIndex);
   return document;
 }
@@ -1510,6 +1567,7 @@ function App() {
   const tilemapLastPointRef = useRef<{x: number; y: number} | null>(null);
   const tilemapEditChangedRef = useRef(false);
   const celMoveSessionRef = useRef<CelMoveSession | null>(null);
+  const timelineCelDragRef = useRef<TimelineCelDragSession | null>(null);
   const mcpInteractionGuardRef = useRef<(() => boolean) | null>(null);
   const mcpHandlerRef = useRef<(name: string, args: unknown) => unknown>(() => { throw new Error("Editor not ready"); });
   const playbackDirectionRef = useRef<1 | -1>(1);
@@ -1592,6 +1650,11 @@ function App() {
   const [selectionYDraft, setSelectionYDraft] = useState(0);
   const [selectionRotationDraft, setSelectionRotationDraft] = useState(0);
   const [activeSliceId, setActiveSliceId] = useState("");
+  const [selectedSliceIds, setSelectedSliceIds] = useState<string[]>([]);
+  const [sliceMoveX, setSliceMoveX] = useState(0);
+  const [sliceMoveY, setSliceMoveY] = useState(0);
+  const [sliceScaleX, setSliceScaleX] = useState(100);
+  const [sliceScaleY, setSliceScaleY] = useState(100);
   const [selectedPaletteIndex, setSelectedPaletteIndex] = useState(0);
   const [selectedTool, setSelectedTool] = useState<ToolID>("pencil");
   const [moveAutoSelect, setMoveAutoSelect] = useState(false);
@@ -1602,8 +1665,10 @@ function App() {
   const [isPlaying, setIsPlaying] = useState(false);
   const [onionSkin, setOnionSkin] = useState(false);
   const [tagDialog, setTagDialog] = useState<TagDialogState | null>(null);
+  const [crossDocumentCopyDialog, setCrossDocumentCopyDialog] = useState<CrossDocumentCopyDialogState | null>(null);
   const [exportDialog, setExportDialog] = useState<ExportKind | null>(null);
   const [exportScale, setExportScale] = useState(1);
+  const [exportApplyPixelRatio, setExportApplyPixelRatio] = useState(false);
   const [exportFrameRange, setExportFrameRange] = useState<"all" | "selected" | "loop">("all");
   const [exportDirection, setExportDirection] = useState<TagDirection>("forward");
   const [gifLoopMode, setGifLoopMode] = useState<"once" | "forever" | "count">("forever");
@@ -1646,8 +1711,12 @@ function App() {
   const [isPaletteMenuOpen, setIsPaletteMenuOpen] = useState(false);
   const [inspectorVisible, setInspectorVisible] = useState(() => readWorkspaceVisibility(localStorage).inspectorVisible ?? defaultWorkspaceVisibility.inspectorVisible);
   const [timelineVisible, setTimelineVisible] = useState(() => readWorkspaceVisibility(localStorage).timelineVisible ?? defaultWorkspaceVisibility.timelineVisible);
+  const [canvasOnly, setCanvasOnly] = useState(() => readWorkspaceCanvasOnly(localStorage));
+  const [isFullscreen, setIsFullscreen] = useState(false);
   const [tabScrollState, setTabScrollState] = useState({canGoBack: false, canGoForward: false});
   const [canvasDialog, setCanvasDialog] = useState<"new" | "resize" | "sprite-size" | null>(null);
+  const [layerPropertiesDialog, setLayerPropertiesDialog] = useState<LayerPropertiesDialogState | null>(null);
+  const [slicePropertiesDialog, setSlicePropertiesDialog] = useState<SlicePropertiesDialogState | null>(null);
   const [canvasWidthDraft, setCanvasWidthDraft] = useState(64);
   const [canvasHeightDraft, setCanvasHeightDraft] = useState(64);
   const [newDocumentColorMode, setNewDocumentColorMode] = useState<ColorMode>(preferences.color.defaultColorMode);
@@ -1865,13 +1934,15 @@ function App() {
     if (colorEditorMode === "rgba") {
       setEditedColor({
         ...editedRGBA,
-        [channel]: channel === "a" ? clampPercent(value, editedRGBA.a) : clampByte(value, editedRGBA[channel as keyof RGBAColor]),
+        [channel]: channel === "a" ? alphaFromDisplay(value, preferences.color.alphaRange, editedRGBA.a) : clampByte(value, editedRGBA[channel as keyof RGBAColor]),
       });
       return;
     }
     const next = {
       ...editedHSLA,
-      [channel]: channel === "h" ? value : clampPercent(value, editedHSLA[channel as keyof HSLAColor]),
+      [channel]: channel === "h" ? value : channel === "a"
+        ? alphaFromDisplay(value, preferences.color.alphaRange, editedHSLA.a)
+        : clampPercent(value, editedHSLA[channel as keyof HSLAColor]),
     };
     setEditedColor(hslaToRgba(next));
   };
@@ -1880,18 +1951,18 @@ function App() {
       {key: "r", label: "R", value: editedRGBA.r, maximum: 255},
       {key: "g", label: "G", value: editedRGBA.g, maximum: 255},
       {key: "b", label: "B", value: editedRGBA.b, maximum: 255},
-      {key: "a", label: "A", value: editedRGBA.a, maximum: 100},
+      {key: "a", label: "A", value: alphaToDisplay(editedRGBA.a, preferences.color.alphaRange), maximum: alphaDisplayMaximum(preferences.color.alphaRange)},
     ] as const
     : [
       {key: "h", label: "H", value: editedHSLA.h, maximum: 360},
       {key: "s", label: "S", value: editedHSLA.s, maximum: 100},
       {key: "l", label: "L", value: editedHSLA.l, maximum: 100},
-      {key: "a", label: "A", value: editedHSLA.a, maximum: 100},
+      {key: "a", label: "A", value: alphaToDisplay(editedHSLA.a, preferences.color.alphaRange), maximum: alphaDisplayMaximum(preferences.color.alphaRange)},
     ] as const;
   const editedColorText = colorEditorMode === "rgba"
-    ? `rgba(${editedRGBA.r}, ${editedRGBA.g}, ${editedRGBA.b}, ${Math.round(editedRGBA.a)}%)`
-    : `hsla(${Math.round(editedHSLA.h)}, ${Math.round(editedHSLA.s)}%, ${Math.round(editedHSLA.l)}%, ${Math.round(editedHSLA.a)}%)`;
-  const editedColorSummary = `${editedColor.toUpperCase()} · ${Math.round(editedAlpha)}%`;
+    ? `rgba(${editedRGBA.r}, ${editedRGBA.g}, ${editedRGBA.b}, ${Math.round(alphaToDisplay(editedRGBA.a, preferences.color.alphaRange))}${preferences.color.alphaRange === "percent" ? "%" : ""})`
+    : `hsla(${Math.round(editedHSLA.h)}, ${Math.round(editedHSLA.s)}%, ${Math.round(editedHSLA.l)}%, ${Math.round(alphaToDisplay(editedHSLA.a, preferences.color.alphaRange))}${preferences.color.alphaRange === "percent" ? "%" : ""})`;
+  const editedColorSummary = `${editedColor.toUpperCase()} · ${Math.round(alphaToDisplay(editedAlpha, preferences.color.alphaRange))}${preferences.color.alphaRange === "percent" ? "%" : ""}`;
   const colorChipBackground = (color: string, alpha?: number) => {
     const parsed = parseEditorHexColor(color) ?? {r: 0, g: 0, b: 0, a: 100};
     const overlay = `rgba(${parsed.r}, ${parsed.g}, ${parsed.b}, ${clampPercent(alpha ?? parsed.a) / 100})`;
@@ -1919,10 +1990,11 @@ function App() {
       : [])
     : selectedCels;
   const activeTag = pixelDocument.tags.find((tag) => tag.id === activeTab.activeTagId) ?? null;
+  const focusableTagId = activeTag?.id ?? focusTagIdForFrame(pixelDocument, pixelDocument.activeFrameId) ?? focusTagIdForFrame(pixelDocument, selectedFrameIds[0]);
   const activeSlice = pixelDocument.slices.find((slice) => slice.id === activeSliceId) ?? pixelDocument.slices[0] ?? null;
-  const activeSliceKey = activeSlice?.keys.find((key) => key.frameId === pixelDocument.activeFrameId) ?? activeSlice?.keys[0] ?? null;
+  const activeSliceKey = activeSlice?.keys.find((key) => key.frameId === pixelDocument.activeFrameId) ?? null;
   const sliceOverlays = pixelDocument.slices.flatMap((slice) => {
-    const key = slice.keys.find((candidate) => candidate.frameId === pixelDocument.activeFrameId) ?? slice.keys[0];
+    const key = slice.keys.find((candidate) => candidate.frameId === pixelDocument.activeFrameId);
     return key ? [{id: slice.id, x: key.x, y: key.y, width: key.width, height: key.height, color: slice.color}] : [];
   });
   const timelineEntries = timelineLayerEntries(pixelDocument).filter(({layer}) => {
@@ -1942,7 +2014,7 @@ function App() {
   const activeLayerLocked = isLayerEffectivelyLocked(pixelDocument, activeLayer);
   const selectedCelsEditable = selectedCels.length > 0 && selectedCels.every(({layerId}) => {
     const layer = getLayerByID(pixelDocument, layerId);
-    return Boolean(layer && isImageLayer(layer) && !isLayerEffectivelyLocked(pixelDocument, layer));
+    return Boolean(layer && isCelLayer(layer) && !isLayerEffectivelyLocked(pixelDocument, layer));
   });
   const transformTargetCelsEditable = transformTargetCels.length > 0 && transformTargetCels.every(({layerId}) => {
     const layer = getLayerByID(pixelDocument, layerId);
@@ -2191,6 +2263,27 @@ function App() {
     saveWorkspaceVisibility(localStorage, {inspectorVisible, timelineVisible});
   }, [inspectorVisible, timelineVisible]);
   useEffect(() => {
+    saveWorkspaceCanvasOnly(localStorage, canvasOnly);
+  }, [canvasOnly]);
+  useEffect(() => {
+    let disposed = false;
+    const sync = () => {
+      if (hasWailsRuntimeBridge()) {
+        void WindowIsFullscreen().then((value) => {
+          if (!disposed) setIsFullscreen(value);
+        }).catch(() => undefined);
+      } else {
+        setIsFullscreen(typeof document !== "undefined" && Boolean(document.fullscreenElement));
+      }
+    };
+    sync();
+    document.addEventListener("fullscreenchange", sync);
+    return () => {
+      disposed = true;
+      document.removeEventListener("fullscreenchange", sync);
+    };
+  }, []);
+  useEffect(() => {
     const previousSize = previousBrushSizeRef.current;
     previousBrushSizeRef.current = brushSize;
     if (previousSize === brushSize) return;
@@ -2300,12 +2393,11 @@ function App() {
   const previousTimelineStructureRef = useRef({tabID: activeTab.id, layers: pixelDocument.layers.length, frames: pixelDocument.frames.length});
   useEffect(() => {
     const previous = previousTimelineStructureRef.current;
-    if (previous.tabID === activeTab.id
-      && preferences.timeline.autoShow
-      && (pixelDocument.layers.length > previous.layers || pixelDocument.frames.length > previous.frames)) {
+    const current = timelineStructure(activeTab.id, pixelDocument.layers.length, pixelDocument.frames.length);
+    if (shouldAutoShowTimeline(previous, current, preferences.timeline.autoShow)) {
       setTimelineVisible(true);
     }
-    previousTimelineStructureRef.current = {tabID: activeTab.id, layers: pixelDocument.layers.length, frames: pixelDocument.frames.length};
+    previousTimelineStructureRef.current = current;
   }, [activeTab.id, pixelDocument.frames.length, pixelDocument.layers.length, preferences.timeline.autoShow, revision]);
 
   useEffect(() => {
@@ -2494,7 +2586,7 @@ function App() {
     activeDocumentId: activeTabID || tabs[0]?.id || "",
     assertIdle: () => {
       const focused = document.activeElement;
-      if (!recoveryReady || isPlaying || celPropertiesDialog || canvasDialog || exportDialog || tagDialog || adjustmentDialog || spriteImportDialog || settingsOpen || historyOpen || opacityBeforeRef.current
+      if (!recoveryReady || isPlaying || celPropertiesDialog || canvasDialog || layerPropertiesDialog || slicePropertiesDialog || exportDialog || tagDialog || crossDocumentCopyDialog || adjustmentDialog || spriteImportDialog || settingsOpen || historyOpen || opacityBeforeRef.current
         || saveQueuesRef.current.size > 0 || mcpInteractionGuardRef.current?.()
         || focused instanceof HTMLInputElement || focused instanceof HTMLTextAreaElement
         || (focused instanceof HTMLElement && focused.isContentEditable)) {
@@ -2548,16 +2640,19 @@ function App() {
     return () => { unsubscribe(); void SetMCPReady(false); };
   }, [recoveryReady]);
 
-  const exportPNG = useCallback(async () => {
+  const exportPNG = useCallback(async (applyPixelRatio = false) => {
     setStatus("Exporting...");
     try {
       const pixels = compositeFrameForExport(pixelDocument);
+      const browserPixels = applyPixelRatio
+        ? applyPixelAspectRatio(pixelDocument.width, pixelDocument.height, pixels, pixelDocument.pixelAspectRatio)
+        : {width: pixelDocument.width, height: pixelDocument.height, pixels};
       if (!hasWailsAppBridge()) {
-        downloadBlob(await browserPNGBlob(pixelDocument.width, pixelDocument.height, pixels), `${displayProjectName(pixelDocument.name).replace(/\.pixio$/i, "")}.png`);
+        downloadBlob(await browserPNGBlob(browserPixels.width, browserPixels.height, browserPixels.pixels), `${displayProjectName(pixelDocument.name).replace(/\.pixio$/i, "")}.png`);
         setStatus("Exported PNG");
         return;
       }
-      const path = await SavePNG(pixelDocument.width, pixelDocument.height, bytesToBase64(pixels), language);
+      const path = await SavePNGWithOptions(pixelDocument.width, pixelDocument.height, bytesToBase64(pixels), applyPixelRatio, pixelDocument.pixelAspectRatio.width, pixelDocument.pixelAspectRatio.height, language);
       setStatus(path ? `Exported ${path.split(/[\\/]/).pop()}` : "Export cancelled");
     } catch (error) {
       setStatus(error instanceof Error ? error.message : "Export failed");
@@ -2595,11 +2690,22 @@ function App() {
   }, [language, pixelDocument, resolvedExportFrameIDs, setStatus]);
 
   const exportAnimation = useCallback(async (kind: ExportKind) => {
-    setStatus(`Exporting ${kind === "gif" ? "GIF" : "sprite sheet"}...`);
+    setStatus(`Exporting ${kind === "png" ? "PNG" : kind === "gif" ? "GIF" : "sprite sheet"}...`);
     try {
+      if (kind === "png") {
+        await exportPNG(exportApplyPixelRatio);
+        setExportDialog(null);
+        return;
+      }
       const frameIds = resolvedExportFrameIDs();
       const frames = frameIds.map((frameId) => bytesToBase64(compositeFrameForExport(pixelDocument, frameId)));
       const rawFrames = frameIds.map((frameId) => compositeFrameForExport(pixelDocument, frameId));
+      const browserFrameSize = exportApplyPixelRatio
+        ? applyPixelAspectRatio(pixelDocument.width, pixelDocument.height, rawFrames[0], pixelDocument.pixelAspectRatio)
+        : {width: pixelDocument.width, height: pixelDocument.height};
+      const browserFrames = exportApplyPixelRatio
+        ? rawFrames.map((frame) => applyPixelAspectRatio(pixelDocument.width, pixelDocument.height, frame, pixelDocument.pixelAspectRatio).pixels)
+        : rawFrames;
       const loopCount = gifLoopMode === "once" ? -1 : gifLoopMode === "forever" ? 0 : Math.max(1, Math.min(65535, Math.round(gifLoopCount)));
       const stem = displayProjectName(pixelDocument.name).replace(/\.pixio$/i, "");
       if (kind === "sheet" && sheetSplitBy !== "none") {
@@ -2619,11 +2725,24 @@ function App() {
           if (group.frameIds.length === 0) continue;
           const groupFrames = group.frameIds.map((frameId) => compositeFrameForExport(group.document, frameId));
           const name = `${stem}-${safeName(group.name)}-sheet`;
+          const browserGroupFrames = exportApplyPixelRatio
+            ? groupFrames.map((frame) => applyPixelAspectRatio(pixelDocument.width, pixelDocument.height, frame, pixelDocument.pixelAspectRatio).pixels)
+            : groupFrames;
+          const sheet = buildSpriteSheet(browserGroupFrames, browserFrameSize.width, browserFrameSize.height, {
+            layout: sheetLayout,
+            columns: sheetColumns,
+            scale: exportScale,
+            borderPadding: sheetBorderPadding,
+            framePadding: sheetFramePadding,
+          });
+          const metadata = exportSpriteSheetMetadata(group.document, group.frameIds, sheet, `${name}.png`, {applyPixelRatio: exportApplyPixelRatio});
+          const metadataJSON = sheetAtlasJSON ? JSON.stringify(metadata, null, 2) : "";
           if (hasWailsAppBridge()) {
-            await SaveSpriteSheet(pixelDocument.width, pixelDocument.height, groupFrames.map(bytesToBase64), sheetLayout, sheetColumns, exportScale, sheetBorderPadding, sheetFramePadding, sheetAtlasJSON, language);
+            const path = await SavePackedAtlas(sheet.width, sheet.height, bytesToBase64(sheet.pixels), metadataJSON, sheetAtlasJSON, language);
+            if (!path) return;
           } else {
-            downloadBlob(await browserSpriteSheetBlob(pixelDocument.width, pixelDocument.height, groupFrames, sheetLayout, sheetColumns, exportScale, sheetBorderPadding, sheetFramePadding), `${name}.png`);
-            if (sheetAtlasJSON) downloadBlob(new Blob([JSON.stringify(exportSliceMetadata(pixelDocument, group.frameIds), null, 2)], {type: "application/json"}), `${name}.json`);
+            downloadBlob(await browserPNGBlob(sheet.width, sheet.height, sheet.pixels), `${name}.png`);
+            if (sheetAtlasJSON) downloadBlob(new Blob([metadataJSON], {type: "application/json"}), `${name}.json`);
           }
         }
         setStatus(`Exported ${sheetSplitBy} sprite sheets`);
@@ -2631,68 +2750,81 @@ function App() {
         return;
       }
       if (kind === "sheet" && sheetPacked) {
+        const atlasFrames = exportApplyPixelRatio ? browserFrames : rawFrames;
+        const atlasWidth = browserFrameSize.width;
+        const atlasHeight = browserFrameSize.height;
         const atlas = packAtlas(
-          rawFrames,
-          pixelDocument.width,
-          pixelDocument.height,
+          atlasFrames,
+          atlasWidth,
+          atlasHeight,
           frameIds,
           frameIds.map((frameId) => pixelDocument.frames.find((frame) => frame.id === frameId)?.durationMs ?? 100),
           sheetFramePadding,
         );
-        const atlasJSON = JSON.stringify({
-          format: "pixtorio-atlas-v1",
-          image: `${stem}-atlas.png`,
-          width: atlas.width,
-          height: atlas.height,
-          frames: atlas.frames,
-          slices: exportSliceMetadata(pixelDocument, frameIds),
-        }, null, 2);
+        const atlasMetadata = exportAtlasMetadata(pixelDocument, frameIds, atlas, `${stem}-atlas.png`, {applyPixelRatio: exportApplyPixelRatio});
+        const atlasJSON = sheetAtlasJSON ? JSON.stringify(atlasMetadata, null, 2) : "";
         if (!hasWailsAppBridge()) {
           downloadBlob(await browserPNGBlob(atlas.width, atlas.height, atlas.pixels), `${stem}-atlas.png`);
+          if (sheetAtlasJSON) downloadBlob(new Blob([atlasJSON], {type: "application/json"}), `${stem}-atlas.json`);
         } else {
-          await SavePNG(atlas.width, atlas.height, bytesToBase64(atlas.pixels), language);
+          const path = await SavePackedAtlas(atlas.width, atlas.height, bytesToBase64(atlas.pixels), atlasJSON, sheetAtlasJSON, language);
+          setStatus(path ? `Exported ${path.split(/[\\/]/).pop()}` : "Export cancelled");
+          if (!path) return;
         }
-        downloadBlob(new Blob([atlasJSON], {type: "application/json"}), `${stem}-atlas.json`);
-        setStatus("Exported packed atlas");
+        if (!hasWailsAppBridge()) setStatus("Exported packed atlas");
         setExportDialog(null);
         return;
       }
       if (!hasWailsAppBridge()) {
         if (kind === "gif") {
-          downloadBlob(browserGIFBlob(pixelDocument.width, pixelDocument.height, rawFrames, frameIds.map((frameId) => pixelDocument.frames.find((frame) => frame.id === frameId)?.durationMs ?? 100), loopCount), `${stem}.gif`);
+          downloadBlob(browserGIFBlob(browserFrameSize.width, browserFrameSize.height, browserFrames, frameIds.map((frameId) => pixelDocument.frames.find((frame) => frame.id === frameId)?.durationMs ?? 100), loopCount, exportScale), `${stem}.gif`);
         } else {
-          downloadBlob(await browserSpriteSheetBlob(pixelDocument.width, pixelDocument.height, rawFrames, sheetLayout, sheetColumns, exportScale, sheetBorderPadding, sheetFramePadding), `${stem}-sheet.png`);
+          const sheet = buildSpriteSheet(browserFrames, browserFrameSize.width, browserFrameSize.height, {
+            layout: sheetLayout,
+            columns: sheetColumns,
+            scale: exportScale,
+            borderPadding: sheetBorderPadding,
+            framePadding: sheetFramePadding,
+          });
+          const image = `${stem}-sheet.png`;
+          downloadBlob(await browserPNGBlob(sheet.width, sheet.height, sheet.pixels), image);
+          if (sheetAtlasJSON) {
+            const metadata = exportSpriteSheetMetadata(pixelDocument, frameIds, sheet, image, {applyPixelRatio: exportApplyPixelRatio});
+            downloadBlob(new Blob([JSON.stringify(metadata, null, 2)], {type: "application/json"}), `${stem}-sheet.json`);
+          }
         }
         setStatus(`Exported ${kind === "gif" ? "GIF" : "sprite sheet"}`);
         setExportDialog(null);
         return;
       }
       const path = kind === "gif"
-        ? await SaveGIF(
+        ? await SaveGIFWithOptions(
           pixelDocument.width,
           pixelDocument.height,
           frames,
           frameIds.map((frameId) => pixelDocument.frames.find((frame) => frame.id === frameId)?.durationMs ?? 100),
           exportScale,
           loopCount,
+          exportApplyPixelRatio,
+          pixelDocument.pixelAspectRatio.width,
+          pixelDocument.pixelAspectRatio.height,
           language,
         )
-        : await SaveSpriteSheet(
-          pixelDocument.width,
-          pixelDocument.height,
-          frames,
-          sheetLayout,
-          sheetColumns,
-          exportScale,
-          sheetBorderPadding,
-          sheetFramePadding,
-          sheetAtlasJSON,
-          language,
-        );
+        : await (async () => {
+          const sheet = buildSpriteSheet(browserFrames, browserFrameSize.width, browserFrameSize.height, {
+            layout: sheetLayout,
+            columns: sheetColumns,
+            scale: exportScale,
+            borderPadding: sheetBorderPadding,
+            framePadding: sheetFramePadding,
+          });
+          const metadata = exportSpriteSheetMetadata(pixelDocument, frameIds, sheet, `${stem}-sheet.png`, {applyPixelRatio: exportApplyPixelRatio});
+          return SavePackedAtlas(sheet.width, sheet.height, bytesToBase64(sheet.pixels), sheetAtlasJSON ? JSON.stringify(metadata, null, 2) : "", sheetAtlasJSON, language);
+        })();
       setStatus(path ? `Exported ${path.split(/[\\/]/).pop()}` : "Export cancelled");
       if (path) setExportDialog(null);
     } catch (error) { setStatus(error instanceof Error ? error.message : "Export failed"); }
-  }, [exportScale, gifLoopCount, gifLoopMode, language, pixelDocument, resolvedExportFrameIDs, sheetAtlasJSON, sheetBorderPadding, sheetColumns, sheetFramePadding, sheetLayout, sheetPacked, sheetSplitBy]);
+  }, [exportApplyPixelRatio, exportPNG, exportScale, gifLoopCount, gifLoopMode, language, pixelDocument, resolvedExportFrameIDs, sheetAtlasJSON, sheetBorderPadding, sheetColumns, sheetFramePadding, sheetLayout, sheetPacked, sheetSplitBy]);
 
   const savePixio = useCallback((saveAs = false) => {
     const tab = activeTab;
@@ -2778,10 +2910,28 @@ function App() {
     setCanvasDialog("sprite-size");
   };
 
+  const duplicateCurrentSprite = () => {
+    const sourceName = pixelDocument.name.trim() || (language === "zh" ? "未命名.pixio" : "untitled.pixio");
+    const extension = /\.pixio$/i.test(sourceName) ? ".pixio" : "";
+    const stem = sourceName.replace(/\.pixio$/i, "") || (language === "zh" ? "未命名" : "untitled");
+    const copyLabel = language === "zh" ? "副本" : "copy";
+    const existingNames = new Set(tabs.map((tab) => displayProjectName(tab.document.name).toLocaleLowerCase("en-US")));
+    let name = `${stem} ${copyLabel}${extension}`;
+    let suffix = 2;
+    while (existingNames.has(displayProjectName(name).toLocaleLowerCase("en-US"))) name = `${stem} ${copyLabel} ${suffix++}${extension}`;
+    openDocumentTab(
+      duplicateDocument(pixelDocument, name),
+      language === "zh" ? `已复制 ${displayProjectName(sourceName)}` : `Duplicated ${displayProjectName(sourceName)}`,
+      undefined,
+      undefined,
+      true,
+    );
+  };
+
   const newDocumentFromSelection = () => {
     if (!selection || !activeCel) return;
     const clipboard = copySelection(activeCel.pixels, activeCel.width, selection);
-    const document = createBlankDocument(language, clipboard.width, clipboard.height, pixelDocument.colorMode);
+    const document = createBlankDocument(language, clipboard.width, clipboard.height, pixelDocument.colorMode, preferences);
     const cel = getActiveCel(document);
     cel.pixels.set(clipboard.pixels);
     if (document.colorMode === "indexed") syncIndexedCel(document, cel);
@@ -2977,6 +3127,7 @@ function App() {
         image: decoded,
         frameWidth: Math.min(64, decoded.width),
         frameHeight: Math.min(64, decoded.height),
+        layout: "matrix",
         offsetX: 0,
         offsetY: 0,
         paddingX: 0,
@@ -3258,7 +3409,7 @@ function App() {
   const pasteSpecialNewSprite = async () => {
     const clipboard = await readBestPixelClipboard();
     if (!clipboard) { setStatus("Unsupported clipboard content"); return; }
-    const document = createBlankDocument(language, clipboard.width, clipboard.height, pixelDocument.colorMode);
+    const document = createBlankDocument(language, clipboard.width, clipboard.height, pixelDocument.colorMode, preferences);
     const cel = getActiveCel(document);
     pasteClipboard(cel.pixels, cel.width, cel.height, clipboard, 0, 0);
     if (document.colorMode === "indexed") syncIndexedCel(document, cel);
@@ -3273,6 +3424,92 @@ function App() {
     celClipboardRef.current = clipboard;
     setStatus("Copied Cels");
     return true;
+  };
+
+  const openCrossDocumentCopyDialog = (mode: "frames" | "layers" = "frames") => {
+    if (isPlaying || tabs.length < 2) return;
+    if (mode === "frames" && selectedFrameIds.length === 0) return;
+    if (mode === "layers" && (activeTab.commandScope !== "layer" || selectedLayers.length === 0)) return;
+    const target = tabs.find((tab) => tab.id !== activeTab.id);
+    if (!target) return;
+    setCrossDocumentCopyDialog({
+      mode,
+      sourceTabId: activeTab.id,
+      frameIds: mode === "frames" ? [...selectedFrameIds] : [],
+      layerIds: mode === "layers" ? selectedLayers.map((layer) => layer.id) : [],
+      targetTabId: target.id,
+    });
+  };
+
+  const applyCrossDocumentCopy = () => {
+    const dialog = crossDocumentCopyDialog;
+    if (!dialog || isPlaying) return;
+    const sourceTab = tabs.find((tab) => tab.id === dialog.sourceTabId);
+    const targetTab = tabs.find((tab) => tab.id === dialog.targetTabId);
+    if (!sourceTab || !targetTab || sourceTab === targetTab) {
+      setCrossDocumentCopyDialog(null);
+      return;
+    }
+
+    const before = cloneDocument(targetTab.document);
+    const beforeTimeline = captureTabTimeline(targetTab);
+    if (dialog.mode === "frames") {
+      const result = copyFramesToDocument(sourceTab.document, dialog.frameIds, targetTab.document);
+      if (!result) {
+        setStatus(language === "zh"
+          ? "跨文档复制需要相同画布尺寸和颜色模式"
+          : "Cross-document copy requires matching canvas size and color mode");
+        return;
+      }
+
+      targetTab.selectedFrameIds = [...result.frameIds];
+      targetTab.frameSelectionAnchorId = result.frameIds[0];
+      targetTab.selectedLayerIds = [targetTab.document.activeLayerId];
+      targetTab.layerSelectionAnchorId = targetTab.document.activeLayerId;
+      targetTab.activeTagId = result.tagIds[0];
+      setTabCommandScope(targetTab, "frame");
+      targetTab.compositeCache.clear();
+      touchAllTabThumbnails(targetTab);
+      normalizeTabTimeline(targetTab);
+      targetTab.history.commit(new EditorDocumentStateCommand(
+        before,
+        targetTab.document,
+        language === "zh" ? "跨文档复制帧" : "Copy Frames to Document",
+        targetTab,
+        beforeTimeline,
+        captureTabTimeline(targetTab),
+      ));
+      targetTab.status = language === "zh" ? "已从其他文件复制帧" : "Copied frames from another document";
+    } else {
+      const result = copyLayersToDocument(sourceTab.document, dialog.layerIds, targetTab.document);
+      if (!result) {
+        setStatus(language === "zh"
+          ? "跨文档复制图层需要相同画布尺寸、颜色模式和帧数量"
+          : "Cross-document layer copy requires matching canvas size, color mode and frame count");
+        return;
+      }
+
+      targetTab.selectedLayerIds = [...result.layerIds];
+      targetTab.layerSelectionAnchorId = result.layerIds[0];
+      targetTab.document.activeLayerId = result.layerIds.find((layerId) => getLayerByID(targetTab.document, layerId)?.kind !== "group") ?? result.layerIds[0];
+      setTabCommandScope(targetTab, "layer");
+      targetTab.compositeCache.clear();
+      touchTabThumbnailCels(targetTab, result.celIds);
+      normalizeTabTimeline(targetTab);
+      targetTab.history.commit(new EditorDocumentStateCommand(
+        before,
+        targetTab.document,
+        language === "zh" ? "跨文档复制图层" : "Copy Layers to Document",
+        targetTab,
+        beforeTimeline,
+        captureTabTimeline(targetTab),
+      ));
+      targetTab.status = language === "zh" ? "已从其他文件复制图层" : "Copied layers from another document";
+    }
+    setCrossDocumentCopyDialog(null);
+    setActiveTabID(targetTab.id);
+    setIsPlaying(false);
+    invalidate();
   };
 
   const cutCurrentCels = () => {
@@ -3301,6 +3538,53 @@ function App() {
     }
     if (preferences.alerts.deleteCel && !window.confirm(language === "zh" ? "清除所选动画格？" : "Clear the selected cels?")) return false;
     return mutateDocument("Clear Cels", () => clearCelSelection(pixelDocument, selectedCels, backgroundClearColor));
+  };
+
+  const duplicateCurrentCels = (linked = false) => {
+    if (isPlaying) {
+      setStatus("Pause playback to edit");
+      return false;
+    }
+    const addresses = (activeTab.commandScope === "cels" && selectedCels.length > 0
+      ? selectedCels
+      : activeCel
+        ? [{layerId: activeCel.layerId, frameId: activeCel.frameId}]
+        : [])
+      .filter(({layerId, frameId}) => Boolean(getCel(pixelDocument, layerId, frameId)));
+    if (addresses.length === 0) return false;
+    const anchor = activeTab.celSelectionAnchor && addresses.some((address) =>
+      address.layerId === activeTab.celSelectionAnchor?.layerId
+      && address.frameId === activeTab.celSelectionAnchor?.frameId)
+      ? activeTab.celSelectionAnchor
+      : addresses[0];
+    let result: ReturnType<typeof duplicateTimelineCels> = null;
+    const changed = mutateDocument(linked ? ui.duplicateLinkedCels : ui.duplicateCels, () => {
+      result = linked
+        ? duplicateLinkedTimelineCels(pixelDocument, {
+          sourceAddresses: addresses,
+          sourceAnchor: anchor,
+          orderedLayerIds: allTimelineImageLayerIDs,
+          backgroundColor: backgroundClearColor,
+        })
+        : duplicateTimelineCels(pixelDocument, {
+          sourceAddresses: addresses,
+          sourceAnchor: anchor,
+          orderedLayerIds: allTimelineImageLayerIDs,
+          backgroundColor: backgroundClearColor,
+        });
+      if (!result || result.targetAddresses.length === 0) return false;
+      const firstTarget = result.targetAddresses[0];
+      activeTab.selectedCelKeys = result.targetAddresses.map(({layerId, frameId}) => celSelectionKey(layerId, frameId));
+      activeTab.celSelectionAnchor = {...firstTarget};
+      activeTab.selectedFrameIds = [...new Set(result.targetAddresses.map(({frameId}) => frameId))];
+      activeTab.frameSelectionAnchorId = firstTarget.frameId;
+      pixelDocument.activeLayerId = firstTarget.layerId;
+      pixelDocument.activeFrameId = firstTarget.frameId;
+      setTabCommandScope(activeTab, "cels");
+      return true;
+    });
+    if (!changed) setStatus(language === "zh" ? "无法复制所选动画格" : "Selected cels cannot be duplicated here");
+    return changed;
   };
 
   const pasteCurrentCels = () => {
@@ -3707,6 +3991,131 @@ function App() {
     });
   };
 
+  const openLayerProperties = () => {
+    if (isPlaying) return;
+    const targets = activeTab.commandScope === "layer" && selectedLayers.length ? selectedLayers : [activeLayer];
+    const layers = targets.filter((layer) => Boolean(getLayerByID(pixelDocument, layer.id)));
+    if (layers.length === 0) return;
+    const same = <T,>(read: (layer: typeof layers[number]) => T) => {
+      const first = read(layers[0]);
+      return layers.every((layer) => read(layer) === first) ? first : undefined;
+    };
+    const sameOpacity = same((layer) => layer.opacity);
+    const sameBlendMode = same((layer) => layer.blendMode);
+    const sameRole = same((layer) => layer.role);
+    const sameVisible = same((layer) => layer.visible);
+    const sameLocked = same((layer) => layer.locked);
+    const sameAlphaLock = same((layer) => layer.alphaLock);
+    const sameContinuous = same((layer) => layer.continuous);
+    setLayerPropertiesDialog({
+      layerIds: layers.map((layer) => layer.id),
+      name: layers.length === 1 ? layers[0].name : "",
+      opacity: sameOpacity === undefined ? "" : String(Math.round(sameOpacity * 100)),
+      blendMode: sameBlendMode ?? "keep",
+      role: sameRole ?? "keep",
+      visible: sameVisible === undefined ? "keep" : sameVisible ? "on" : "off",
+      locked: sameLocked === undefined ? "keep" : sameLocked ? "on" : "off",
+      alphaLock: sameAlphaLock === undefined ? "keep" : sameAlphaLock ? "on" : "off",
+      continuous: sameContinuous === undefined ? "keep" : sameContinuous ? "on" : "off",
+    });
+  };
+
+  const applyLayerPropertiesDialog = () => {
+    if (!layerPropertiesDialog) return;
+    const update: LayerPropertyUpdate = {};
+    const name = layerPropertiesDialog.name.trim();
+    if (name && layerPropertiesDialog.layerIds.length === 1) update.name = name;
+    if (layerPropertiesDialog.opacity.trim()) {
+      const opacity = Number(layerPropertiesDialog.opacity) / 100;
+      if (!Number.isFinite(opacity)) {
+        setStatus(language === "zh" ? "请输入有效的不透明度" : "Enter a valid opacity");
+        return;
+      }
+      update.opacity = opacity;
+    }
+    if (layerPropertiesDialog.blendMode !== "keep") update.blendMode = layerPropertiesDialog.blendMode;
+    if (layerPropertiesDialog.role !== "keep") update.role = layerPropertiesDialog.role;
+    const triState = (value: TriStateProperty) => value === "keep" ? undefined : value === "on";
+    const visible = triState(layerPropertiesDialog.visible);
+    const locked = triState(layerPropertiesDialog.locked);
+    const alphaLock = triState(layerPropertiesDialog.alphaLock);
+    const continuous = triState(layerPropertiesDialog.continuous);
+    if (visible !== undefined) update.visible = visible;
+    if (locked !== undefined) update.locked = locked;
+    if (alphaLock !== undefined) update.alphaLock = alphaLock;
+    if (continuous !== undefined) update.continuous = continuous;
+    const changed = mutateDocument("Layer Properties", () => applyLayerProperties(pixelDocument, layerPropertiesDialog.layerIds, update));
+    if (changed) setLayerPropertiesDialog(null);
+  };
+
+  const applySlicePropertiesDialog = () => {
+    if (!slicePropertiesDialog) return;
+    const slice = pixelDocument.slices.find((candidate) => candidate.id === slicePropertiesDialog.sliceId);
+    const key = slice?.keys.find((candidate) => candidate.frameId === slicePropertiesDialog.frameId);
+    if (!slice || !key) return;
+    const numberField = (value: string, fallback: number) => value.trim() === "" ? fallback : Number(value);
+    const x = Math.round(numberField(slicePropertiesDialog.x, key.x));
+    const y = Math.round(numberField(slicePropertiesDialog.y, key.y));
+    const width = Math.max(1, Math.round(numberField(slicePropertiesDialog.width, key.width)));
+    const height = Math.max(1, Math.round(numberField(slicePropertiesDialog.height, key.height)));
+    if (![x, y, width, height].every(Number.isFinite) || x < 0 || y < 0 || x + width > pixelDocument.width || y + height > pixelDocument.height) {
+      setStatus(language === "zh" ? "切片矩形必须位于画布内" : "Slice rectangle must stay inside the canvas");
+      return;
+    }
+    const hasCenter = [slicePropertiesDialog.centerX, slicePropertiesDialog.centerY, slicePropertiesDialog.centerWidth, slicePropertiesDialog.centerHeight].some((value) => value.trim() !== "");
+    let center: SliceKeyUpdate["center"] = undefined;
+    if (hasCenter) {
+      const centerX = Math.max(0, Math.round(numberField(slicePropertiesDialog.centerX, key.center?.x ?? 0)));
+      const centerY = Math.max(0, Math.round(numberField(slicePropertiesDialog.centerY, key.center?.y ?? 0)));
+      const centerWidth = Math.max(1, Math.round(numberField(slicePropertiesDialog.centerWidth, key.center?.width ?? width)));
+      const centerHeight = Math.max(1, Math.round(numberField(slicePropertiesDialog.centerHeight, key.center?.height ?? height)));
+      center = {x: centerX, y: centerY, width: centerWidth, height: centerHeight};
+    }
+    const hasPivot = [slicePropertiesDialog.pivotX, slicePropertiesDialog.pivotY].some((value) => value.trim() !== "");
+    const pivot = hasPivot
+      ? {x: Math.round(numberField(slicePropertiesDialog.pivotX, key.pivot?.x ?? 0)), y: Math.round(numberField(slicePropertiesDialog.pivotY, key.pivot?.y ?? 0))}
+      : undefined;
+    const color = `${slicePropertiesDialog.color.slice(0, 7)}${slice.color.slice(7, 9) || "ff"}`;
+    const changed = mutateDocument("Slice Properties", () => {
+      let changedAny = false;
+      if (slice.name !== slicePropertiesDialog.name.trim() || slice.color.toLowerCase() !== color.toLowerCase()) {
+        changedAny = updateSlice(pixelDocument, slice.id, {name: slicePropertiesDialog.name, color}) || changedAny;
+      }
+      changedAny = updateSliceKey(pixelDocument, slice.id, key.frameId, {x, y, width, height, center, pivot}) || changedAny;
+      return changedAny;
+    });
+    if (changed) setSlicePropertiesDialog(null);
+  };
+
+  const selectAllLayerCels = () => {
+    const addresses = existingCelsForLayers(pixelDocument, [activeLayer.id]);
+    if (addresses.length === 0) return;
+    activeTab.selectedCelKeys = addresses.map(({layerId, frameId}) => celSelectionKey(layerId, frameId));
+    activeTab.celSelectionAnchor = {...addresses[0]};
+    activeTab.selectedFrameIds = pixelDocument.frames.filter((frame) => addresses.some((address) => address.frameId === frame.id)).map((frame) => frame.id);
+    activeTab.frameSelectionAnchorId = addresses[0].frameId;
+    activeTab.activeTagId = undefined;
+    activeTab.commandScope = "cels";
+    setStatus("Selected All Cels");
+    invalidate();
+  };
+
+  const selectLinkedCels = () => {
+    const source = activeTab.commandScope === "cels" && selectedCels.length
+      ? selectedCels
+      : [{layerId: activeLayer.id, frameId: pixelDocument.activeFrameId}];
+    const addresses = linkedCelsForSelection(pixelDocument, source);
+    if (addresses.length === 0) return;
+    activeTab.selectedCelKeys = addresses.map(({layerId, frameId}) => celSelectionKey(layerId, frameId));
+    activeTab.celSelectionAnchor = {...addresses[0]};
+    activeTab.selectedFrameIds = pixelDocument.frames.filter((frame) => addresses.some((address) => address.frameId === frame.id)).map((frame) => frame.id);
+    activeTab.frameSelectionAnchorId = addresses[0].frameId;
+    activeTab.activeTagId = undefined;
+    activeTab.commandScope = "cels";
+    setStatus("Selected Linked Cels");
+    invalidate();
+  };
+
   const applySelectedCelTransform = () => {
     if (!transformTargetCelsEditable) {
       setStatus("Selected cels are locked");
@@ -3863,8 +4272,28 @@ function App() {
   };
 
   const selectOpaqueContent = () => {
-    if (!activeCel) return;
-    setSelection(combineSelections(selection, selectOpaquePixels(activeCel.pixels, activeCel.width, activeCel.height), selectionOperation));
+    const next = layerOpaqueContentSelection(pixelDocument, pixelDocument.activeLayerId, pixelDocument.activeFrameId);
+    setSelection(combineSelections(selection, next, selectionOperation));
+  };
+
+  const selectLayerOpaqueContent = (layerId: string) => {
+    const next = layerOpaqueContentSelection(pixelDocument, layerId, pixelDocument.activeFrameId);
+    if (!next) {
+      const layer = getLayerByID(pixelDocument, layerId);
+      setStatus(!layer
+        ? (language === "zh" ? "无法选择图层内容" : "Layer content cannot be selected")
+        : layer.role === "reference"
+          ? (language === "zh" ? "参考图层不能用于变换" : "Reference layers cannot be transformed")
+          : isLayerEffectivelyLocked(pixelDocument, layer)
+            ? (language === "zh" ? "图层已锁定" : "Layer is locked")
+            : isTilemapLayer(layer)
+              ? (language === "zh" ? "图块地图没有像素选区" : "Tilemap layers have no pixel selection")
+              : (language === "zh" ? "当前帧没有不透明内容" : "The current frame has no opaque content"));
+      return false;
+    }
+    setSelection(next);
+    setStatus(language === "zh" ? "已选择图层不透明内容" : "Selected layer opaque content");
+    return true;
   };
 
   const selectForegroundColor = () => {
@@ -3890,6 +4319,7 @@ function App() {
   };
 
   const createSliceFromBounds = (bounds: Selection) => {
+    const touched = touchedSliceIds(sliceOverlays, bounds);
     let createdId = "";
     if (mutateDocument("Add Slice", () => {
       const created = addSlice(pixelDocument, `Slice ${pixelDocument.slices.length + 1}`, {
@@ -3900,15 +4330,93 @@ function App() {
         height: bounds.height,
         pivot: {x: Math.floor(bounds.width / 2), y: Math.floor(bounds.height / 2)},
       });
-      if (created) created.color = `${preferences.guides.sliceColor}ff`;
+      if (created) created.color = reuseSliceColor(pixelDocument, `${preferences.guides.sliceColor}ff`);
       createdId = created?.id ?? "";
       return Boolean(created);
-    })) setActiveSliceId(createdId);
+    })) {
+      setActiveSliceId(createdId);
+      setSelectedSliceIds([...new Set([...touched, createdId])]);
+    }
+  };
+
+  const openSliceProperties = (sliceID: string, frameID = pixelDocument.activeFrameId) => {
+    const slice = pixelDocument.slices.find((candidate) => candidate.id === sliceID);
+    if (!slice) return;
+    const key = slice.keys.find((candidate) => candidate.frameId === frameID) ?? slice.keys[0];
+    if (!key) return;
+    setActiveSliceId(slice.id);
+    setSlicePropertiesDialog({
+      sliceId: slice.id,
+      frameId: key.frameId,
+      name: slice.name,
+      color: slice.color.slice(0, 7),
+      x: String(key.x),
+      y: String(key.y),
+      width: String(key.width),
+      height: String(key.height),
+      centerX: key.center ? String(key.center.x) : "",
+      centerY: key.center ? String(key.center.y) : "",
+      centerWidth: key.center ? String(key.center.width) : "",
+      centerHeight: key.center ? String(key.center.height) : "",
+      pivotX: key.pivot ? String(key.pivot.x) : "",
+      pivotY: key.pivot ? String(key.pivot.y) : "",
+    });
+  };
+
+  const selectedSliceBatchIDs = selectedSliceIds.filter((id) => pixelDocument.slices.some((slice) => slice.id === id));
+  const sliceBatchIDs = selectedSliceBatchIDs.length > 0 ? selectedSliceBatchIDs : activeSlice ? [activeSlice.id] : [];
+  const moveSelectedSlices = () => {
+    mutateDocument("Move Slices", () => moveSlices(pixelDocument, sliceBatchIDs, Math.round(sliceMoveX), Math.round(sliceMoveY)));
+  };
+  const scaleSelectedSlices = () => {
+    mutateDocument("Scale Slices", () => scaleSlices(pixelDocument, sliceBatchIDs, sliceScaleX / 100, sliceScaleY / 100));
+  };
+  const deleteSelectedSlices = () => {
+    if (!mutateDocument("Delete Slices", () => deleteSlices(pixelDocument, sliceBatchIDs))) return;
+    setSelectedSliceIds([]);
+    setActiveSliceId("");
+  };
+
+  const addCurrentSliceKey = () => {
+    if (!activeSlice) return;
+    mutateDocument("Add Slice Key", () => Boolean(addSliceKey(pixelDocument, activeSlice.id, pixelDocument.activeFrameId)));
+  };
+
+  const deleteCurrentSliceKey = () => {
+    if (!activeSlice || !activeSliceKey) return;
+    mutateDocument("Delete Slice Key", () => deleteSliceKey(pixelDocument, activeSlice.id, pixelDocument.activeFrameId));
+  };
+
+  const editCurrentSliceKey = (update: SliceKeyUpdate, label = "Edit Slice") => {
+    if (!activeSlice || !activeSliceKey) return;
+    mutateDocument(label, () => updateSliceKey(pixelDocument, activeSlice.id, pixelDocument.activeFrameId, update));
+  };
+
+  const editCurrentSliceGeometry = (update: SliceKeyUpdate) => {
+    if (!activeSliceKey) return;
+    const width = update.width ?? activeSliceKey.width;
+    const height = update.height ?? activeSliceKey.height;
+    const center = activeSliceKey.center;
+    const nextCenter = center
+      ? {
+        x: Math.max(0, Math.min(center.x, Math.max(0, width - 1))),
+        y: Math.max(0, Math.min(center.y, Math.max(0, height - 1))),
+        width: Math.max(1, Math.min(center.width, width)),
+        height: Math.max(1, Math.min(center.height, height)),
+      }
+      : undefined;
+    if (nextCenter) {
+      nextCenter.x = Math.min(nextCenter.x, width - nextCenter.width);
+      nextCenter.y = Math.min(nextCenter.y, height - nextCenter.height);
+    }
+    editCurrentSliceKey({...update, ...(center ? {center: nextCenter} : {})});
   };
 
   const selectFrame = (frameId: string, extend = false, toggle = false) => {
     const frameIndex = pixelDocument.frames.findIndex((frame) => frame.id === frameId);
     if (frameIndex < 0) return null;
+    const focusedTagId = activeTab.activeTagId;
+    const preserveTagFocus = Boolean(focusedTagId && tagContainsFrame(pixelDocument, focusedTagId, frameId));
     let nextActiveFrameId = frameId;
     if (extend) {
       const anchorIndex = Math.max(0, pixelDocument.frames.findIndex((frame) => frame.id === activeTab.frameSelectionAnchorId));
@@ -3930,12 +4438,35 @@ function App() {
       activeTab.selectedFrameIds = [frameId];
       activeTab.frameSelectionAnchorId = frameId;
     }
-    activeTab.activeTagId = undefined;
+    // A focused tag remains active while selection stays inside its range.
+    // Clicking or extending outside the range intentionally returns to the
+    // document-wide/manual-loop view.
+    activeTab.activeTagId = preserveTagFocus ? focusedTagId : undefined;
     setTabCommandScope(activeTab, "frame");
     pixelDocument.activeFrameId = nextActiveFrameId;
     activeTab.selection = null;
     invalidate();
     return nextActiveFrameId;
+  };
+
+  const navigateFrame = (direction: -1 | 1) => {
+    if (!hasOpenDocument) return false;
+    if (isPlaying) {
+      setStatus("Pause playback to edit");
+      return false;
+    }
+    const nextFrameId = activeTab.activeTagId
+      ? adjacentFocusedFrameId(
+        pixelDocument,
+        pixelDocument.activeFrameId,
+        direction,
+        {tagId: activeTab.activeTagId},
+        activeTab.loopStartFrameId,
+        activeTab.loopEndFrameId,
+      )
+      : adjacentFrameID(pixelDocument, pixelDocument.activeFrameId, direction);
+    if (!nextFrameId) return false;
+    return Boolean(selectFrame(nextFrameId));
   };
 
   const selectLayer = (layerId: string, extend = false, toggle = false) => {
@@ -4069,6 +4600,20 @@ function App() {
     return true;
   });
 
+  const tilemapBuffersForTileset = (tilesetID: string): TilemapData[] => {
+    const tilemapLayerIDs = new Set(pixelDocument.layers
+      .filter((layer) => layer.kind === "tilemap" && layer.tilesetId === tilesetID)
+      .map((layer) => layer.id));
+    const buffers: TilemapData[] = [];
+    const seen = new Set<TilemapData>();
+    for (const cel of Object.values(pixelDocument.cels)) {
+      if (!tilemapLayerIDs.has(cel.layerId) || !cel.tilemap || seen.has(cel.tilemap)) continue;
+      seen.add(cel.tilemap);
+      buffers.push(cel.tilemap);
+    }
+    return buffers;
+  };
+
   const addEmptyTile = () => {
     if (!activeTileset) return;
     let nextID = 0;
@@ -4136,6 +4681,7 @@ function App() {
           mode: tilePixelSyncMode,
           palette: pixelDocument.colorMode === "indexed" ? pixelDocument.palette.colors : undefined,
           transparentIndex: pixelDocument.palette.transparentIndex,
+          referenceTilemaps: tilePixelSyncMode === "auto" ? tilemapBuffersForTileset(activeTileset.id) : undefined,
         });
         changed = true;
       }
@@ -4157,6 +4703,15 @@ function App() {
       invalidatePixels({x: 0, y: 0, width: pixelDocument.width, height: pixelDocument.height});
     }
     if (phase === "end") {
+      if (tilemapDrawMode === "pixels" && tilePixelSyncMode === "auto" && tilemapEditChangedRef.current) {
+        const cleanup = cleanupTilesetInPlace(activeTileset, tilemapBuffersForTileset(activeTileset.id));
+        if (cleanup.changed) {
+          const remappedSelectedTile = cleanup.tileIDMap.get(selectedTileID);
+          if (remappedSelectedTile !== undefined && remappedSelectedTile !== selectedTileID) setSelectedTileID(remappedSelectedTile);
+          refreshTilemapCaches(pixelDocument);
+          invalidatePixels({x: 0, y: 0, width: pixelDocument.width, height: pixelDocument.height});
+        }
+      }
       const before = tilemapEditBeforeRef.current;
       if (before && tilemapEditChangedRef.current) {
         history.commit(new DocumentStateCommand(before, pixelDocument, tilemapDrawMode === "tiles" ? "Draw Tiles" : "Draw Tile Pixels"));
@@ -4179,6 +4734,86 @@ function App() {
       setTabCommandScope(activeTab, "frame");
       return true;
     });
+  };
+
+  const beginTimelineCelDrag = (event: ReactDragEvent<HTMLButtonElement>, layerId: string, frameId: string) => {
+    if (isPlaying) return;
+    const target = {layerId, frameId};
+    const targetKey = celSelectionKey(layerId, frameId);
+    let addresses = activeTab.commandScope === "cels" && activeTab.selectedCelKeys.includes(targetKey)
+      ? selectedCels.filter((address) => visibleTimelineImageLayerIDs.includes(address.layerId) && Boolean(getCel(pixelDocument, address.layerId, address.frameId)))
+      : [target].filter((address) => Boolean(getCel(pixelDocument, address.layerId, address.frameId)));
+    if (addresses.length === 0) return;
+    if (!activeTab.commandScope || !activeTab.selectedCelKeys.includes(targetKey)) {
+      const selected = selectCel(layerId, frameId);
+      if (selected && getCel(pixelDocument, selected.layerId, selected.frameId)) addresses = [selected];
+    }
+    const anchor = activeTab.celSelectionAnchor && addresses.some((address) => celSelectionKey(address.layerId, address.frameId) === celSelectionKey(activeTab.celSelectionAnchor!.layerId, activeTab.celSelectionAnchor!.frameId))
+      ? {...activeTab.celSelectionAnchor}
+      : {...target};
+    const copy = event.ctrlKey || event.metaKey;
+    timelineCelDragRef.current = {sourceAddresses: addresses.map((address) => ({...address})), sourceAnchor: anchor, copy};
+    event.dataTransfer.effectAllowed = "copyMove";
+    event.dataTransfer.setData("application/x-pixtorio-timeline-cel", JSON.stringify({source: addresses, anchor}));
+    event.dataTransfer.setData("text/plain", copy ? "copy-cel" : "move-cel");
+    setStatus(copy
+      ? (language === "zh" ? "拖动复制动画格" : "Drag to copy cels")
+      : (language === "zh" ? "拖动移动动画格" : "Drag to move cels"));
+  };
+
+  const handleTimelineCelDragOver = (event: ReactDragEvent<HTMLButtonElement>) => {
+    if (!timelineCelDragRef.current) return;
+    event.preventDefault();
+    event.dataTransfer.dropEffect = event.ctrlKey || event.metaKey || timelineCelDragRef.current.copy ? "copy" : "move";
+  };
+
+  const finishTimelineCelDrag = (event: ReactDragEvent<HTMLButtonElement>, layerId: string, frameId?: string, targetFrameIndex?: number) => {
+    const session = timelineCelDragRef.current;
+    if (!session) return;
+    event.preventDefault();
+    const copy = event.ctrlKey || event.metaKey || session.copy;
+    const target = frameId ? {layerId, frameId} : undefined;
+    const extendLoop = shouldExtendTimelineLoopAfterInsertion(activeTab);
+    let transferred = false;
+    const changed = mutateDocument(copy ? "Copy Timeline Cels" : "Move Timeline Cels", () => {
+      const result = transferTimelineCels(pixelDocument, {
+        sourceAddresses: session.sourceAddresses,
+        sourceAnchor: session.sourceAnchor,
+        targetAnchor: target,
+        targetLayerId: target ? undefined : layerId,
+        targetFrameIndex,
+        orderedLayerIds: visibleTimelineImageLayerIDs,
+        mode: copy ? "copy" : "move",
+        backgroundColor: backgroundClearColor,
+      });
+      if (!result) return false;
+      transferred = true;
+      extendTimelineLoopAfterInsertion(activeTab, extendLoop);
+      const destinationFrame = frameId
+        ? pixelDocument.frames.find((frame) => frame.id === frameId)
+        : targetFrameIndex === undefined ? undefined : pixelDocument.frames[targetFrameIndex];
+      if (!destinationFrame) return false;
+      activeTab.selectedCelKeys = result.targetAddresses.map((address) => celSelectionKey(address.layerId, address.frameId));
+      activeTab.celSelectionAnchor = {layerId, frameId: destinationFrame.id};
+      activeTab.commandScope = "cels";
+      activeTab.activeTagId = undefined;
+      activeTab.selection = null;
+      const selectedFrameIDs = new Set([
+        ...result.createdFrameIds,
+        ...result.targetAddresses.map((address) => address.frameId),
+      ]);
+      activeTab.selectedFrameIds = pixelDocument.frames.filter((frame) => selectedFrameIDs.has(frame.id)).map((frame) => frame.id);
+      activeTab.frameSelectionAnchorId = destinationFrame.id;
+      pixelDocument.activeLayerId = layerId;
+      pixelDocument.activeFrameId = destinationFrame.id;
+      return true;
+    });
+    timelineCelDragRef.current = null;
+    if (!changed || !transferred) setStatus(language === "zh" ? "动画格无法移动到此处" : "Cels cannot be moved here");
+  };
+
+  const cancelTimelineCelDrag = () => {
+    timelineCelDragRef.current = null;
   };
 
   const selectCel = (layerId: string, frameId: string, extend = false, toggle = false) => {
@@ -4311,6 +4946,31 @@ function App() {
     invalidate();
   };
 
+  const focusCurrentTag = () => {
+    const currentTagIsValid = Boolean(activeTab.activeTagId && pixelDocument.tags.some((tag) => tag.id === activeTab.activeTagId));
+    const candidateId = currentTagIsValid
+      ? activeTab.activeTagId
+      : focusTagIdForFrame(pixelDocument, pixelDocument.activeFrameId)
+        ?? focusTagIdForFrame(pixelDocument, selectedFrameIds[0]);
+    if (!candidateId) {
+      setStatus(language === "zh" ? "当前帧没有可聚焦的标签" : "The current frame is not covered by a tag");
+      return false;
+    }
+    activeTab.activeTagId = candidateId;
+    if (!syncTabToActiveTag(activeTab)) {
+      activeTab.activeTagId = undefined;
+      setStatus(language === "zh" ? "无法聚焦当前帧标签" : "Could not focus the selected tag");
+      return false;
+    }
+    const entry = focusedFrameIdAtEntry(pixelDocument, {tagId: candidateId});
+    if (entry) pixelDocument.activeFrameId = entry;
+    playbackDirectionRef.current = 1;
+    playbackLoopCountRef.current = 0;
+    setStatus(language === "zh" ? "已聚焦帧标签" : "Frame tag focused");
+    invalidate();
+    return true;
+  };
+
   const openNewTagDialog = () => {
     const ordered = pixelDocument.frames.filter((frame) => selectedFrameIds.includes(frame.id));
     setTagDialog({
@@ -4375,17 +5035,338 @@ function App() {
     setUIRevision((value) => value + 1);
   };
 
+  const toggleDetachedPreview = () => {
+    const current = detachedPreviewRef.current;
+    if (current && !current.closed) {
+      current.close();
+      detachedPreviewRef.current = null;
+      setPreviewOpen(false);
+      return;
+    }
+    const preview = window.open("", "pixtorio-animation-preview", "popup=yes,width=360,height=420,resizable=yes");
+    if (!preview) {
+      setPreviewOpen((value) => !value);
+      return;
+    }
+    preview.document.open();
+    preview.document.write(`<!doctype html><html data-theme="${lightTheme ? "light" : "dark"}"><head><meta charset="utf-8"><title>Pixtorio</title><style>html,body{width:100%;height:100%;margin:0;overflow:hidden;background:#1c1d20;color:#ddd;font:12px "Segoe UI",sans-serif}html[data-theme=light] body{background:#dde0e3;color:#333}main{display:grid;grid-template-rows:minmax(0,1fr) 34px;width:100%;height:100%}.stage{display:grid;place-items:center;padding:12px}.stage canvas{max-width:100%;max-height:100%;width:auto;height:auto;image-rendering:pixelated;box-shadow:0 0 0 1px rgb(127 127 127 / 45%)}footer{display:flex;align-items:center;justify-content:center;border-top:1px solid rgb(127 127 127 / 35%)}</style></head><body><main><div class="stage"><canvas></canvas></div><footer data-counter></footer></main></body></html>`);
+    preview.document.close();
+    detachedPreviewRef.current = preview;
+    setPreviewOpen(false);
+    invalidate();
+  };
+
+  const showAllPanels = () => {
+    setCanvasOnly(false);
+    setInspectorVisible(true);
+    setTimelineVisible(true);
+  };
+
+  const toggleFullscreen = () => {
+    if (hasWailsRuntimeBridge()) {
+      void WindowIsFullscreen().then((fullscreen) => {
+        if (fullscreen) WindowUnfullscreen();
+        else WindowFullscreen();
+        setIsFullscreen(!fullscreen);
+      }).catch(() => undefined);
+      return;
+    }
+    if (typeof document === "undefined") return;
+    if (document.fullscreenElement) {
+      void document.exitFullscreen().catch(() => undefined);
+      return;
+    }
+    const target = document.documentElement;
+    if (target.requestFullscreen) void target.requestFullscreen().catch(() => undefined);
+  };
+
+  const togglePlayback = () => {
+    playbackDirectionRef.current = 1;
+    playbackLoopCountRef.current = 0;
+    if (isPlaying && preferences.timeline.rewindOnStop) {
+      const startFrameId = activeTag?.direction === "reverse"
+        ? activeTag.toFrameId
+        : activeTag?.fromFrameId ?? activeTab.loopStartFrameId;
+      syncPlaybackFrameSelection(activeTab, startFrameId);
+      invalidate();
+    } else if (!isPlaying) {
+      syncPlaybackFrameSelection(activeTab);
+    }
+    setIsPlaying((value) => !value);
+  };
+
+  const dispatchCommandShortcut = (command: CommandShortcutID) => {
+    switch (command) {
+      case "new": newDocument(); return;
+      case "newFromSelection": newDocumentFromSelection(); return;
+      case "open": void openPixio(); return;
+      case "importPNG": void importPNG(); return;
+      case "importSpriteSheet": void importSpriteSheet(); return;
+      case "importPNGSequence": void importPNGSequence(); return;
+      case "save": void savePixio(); return;
+      case "saveAs": void savePixio(true); return;
+      case "exportPNG": setExportDialog("png"); return;
+      case "exportGIF": setExportDialog("gif"); return;
+      case "exportSpriteSheet": setExportDialog("sheet"); return;
+      case "exportPNGSequence": void exportPNGSequence(); return;
+      case "closeDocument": closeTab(activeTab); return;
+      case "undo": undo(); return;
+      case "redo": redo(); return;
+      case "selectAll":
+        setSelection({x: 0, y: 0, width: pixelDocument.width, height: pixelDocument.height});
+        setStatus("Selected All");
+        return;
+      case "deselect":
+        if (selection) {
+          setSelection(null);
+          setStatus("Selection cleared");
+        }
+        return;
+      case "reselect":
+        if (!selection && activeTab.lastSelection) setSelection(cloneSelection(activeTab.lastSelection));
+        return;
+      case "copy":
+        if (activeTab.commandScope === "cels") copyCurrentCels();
+        else if (activeTab.commandScope === "canvas" && selection) copyCurrentSelection();
+        return;
+      case "copyMerged": copyMergedSelection(); return;
+      case "cut":
+        if (activeTab.commandScope === "cels") cutCurrentCels();
+        else if (activeTab.commandScope === "canvas" && selection) cutCurrentSelection();
+        return;
+      case "paste":
+        if (activeTab.commandScope === "cels") pasteCurrentCels();
+        else if (activeTab.commandScope === "canvas") void pasteSystemSelection();
+        return;
+      case "pasteSpecialNewSprite": void pasteSpecialNewSprite(); return;
+      case "pasteSpecialNewLayer": void pasteSpecialToLayer(false); return;
+      case "pasteSpecialReferenceLayer": void pasteSpecialToLayer(true); return;
+      case "fillSelection": fillCurrentSelection(); return;
+      case "strokeSelection": strokeCurrentSelection(); return;
+      case "copySelectionToLayer": selectionToNewLayer(false); return;
+      case "cutSelectionToLayer": selectionToNewLayer(true); return;
+      case "copySelectedFramesToDocument": openCrossDocumentCopyDialog(); return;
+      case "copySelectedLayersToDocument": openCrossDocumentCopyDialog("layers"); return;
+      case "shiftPixelsLeft": shiftCurrentPixels(-1, 0); return;
+      case "shiftPixelsRight": shiftCurrentPixels(1, 0); return;
+      case "shiftPixelsUp": shiftCurrentPixels(0, -1); return;
+      case "shiftPixelsDown": shiftCurrentPixels(0, 1); return;
+      case "selectOpaque": selectOpaqueContent(); return;
+      case "selectColor": selectForegroundColor(); return;
+      case "selectAllLayerCels": selectAllLayerCels(); return;
+      case "selectLinkedCels": selectLinkedCels(); return;
+      case "invertSelection": adjustSelection("invert"); return;
+      case "growSelection": adjustSelection("grow"); return;
+      case "shrinkSelection": adjustSelection("shrink"); return;
+      case "borderSelection": adjustSelection("border"); return;
+      case "featherSelection":
+        if (selection) setSelection(featherSelection(selection, selectionFeatherAmount, pixelDocument.width, pixelDocument.height));
+        return;
+      case "scaleSelection": transformCurrentSelection("scale"); return;
+      case "rotateSelectionCCW": transformCurrentSelection("counterclockwise"); return;
+      case "rotateSelectionCW": transformCurrentSelection("clockwise"); return;
+      case "flipSelectionHorizontal": transformCurrentSelection("horizontal"); return;
+      case "flipSelectionVertical": transformCurrentSelection("vertical"); return;
+      case "applySelectionPosition": moveCurrentSelectionNumerically(); return;
+      case "applySelectionRotation": rotateCurrentSelectionArbitrary(); return;
+      case "createBrushFromSelection": createBrushFromSelection(); return;
+      case "createPatternFromSelection": createPatternFromSelection(); return;
+      case "createSliceFromSelection": createSliceFromSelection(); return;
+      case "duplicateSprite": duplicateCurrentSprite(); return;
+      case "spriteSize": openSpriteSizeDialog(); return;
+      case "canvasSize": openResizeDialog(); return;
+      case "trimCanvas": mutateDocument("Trim Canvas", () => trimDocument(pixelDocument)); return;
+      case "rotateSpriteCW": mutateDocument("Rotate Sprite Clockwise", () => rotateDocument(pixelDocument, "cw")); return;
+      case "rotateSpriteCCW": mutateDocument("Rotate Sprite Counterclockwise", () => rotateDocument(pixelDocument, "ccw")); return;
+      case "rotateSprite180": mutateDocument("Rotate Sprite 180", () => rotateDocument(pixelDocument, "180")); return;
+      case "flipSpriteHorizontal": mutateDocument("Flip Sprite Horizontally", () => flipDocument(pixelDocument, "horizontal")); return;
+      case "flipSpriteVertical": mutateDocument("Flip Sprite Vertically", () => flipDocument(pixelDocument, "vertical")); return;
+      case "colorConfiguration": openColorProfileDialog(); return;
+      case "adjustmentBrightnessContrast": openAdjustment("brightness-contrast"); return;
+      case "adjustmentHSL": openAdjustment("hsl"); return;
+      case "adjustmentInvert": openAdjustment("invert"); return;
+      case "adjustmentConvolution": openAdjustment("convolution"); return;
+      case "adjustmentMedian": openAdjustment("median"); return;
+      case "adjustmentDespeckle": openAdjustment("despeckle"); return;
+      case "adjustmentCurves": openAdjustment("curves"); return;
+      case "adjustmentHSVHSL": openAdjustment("hsv-hsl"); return;
+      case "adjustmentChannels": openAdjustment("channel-mask"); return;
+      case "effectOutline": openAdjustment("outline"); return;
+      case "effectShading": applyShadeEffect(); return;
+      case "addPaletteColor": addPaletteColor(); return;
+      case "updatePaletteColor": updatePaletteColor(); return;
+      case "removePaletteColor": removePaletteColor(); return;
+      case "extractPalette": extractDocumentPalette(); return;
+      case "sortPalette": sortDocumentPalette(); return;
+      case "saveDefaultPalette":
+        try { saveDefaultPalette(localStorage, pixelDocument.palette); setStatus(language === "zh" ? "默认调色板已保存，用于新建文件" : "Default palette saved for new documents"); }
+        catch { setStatus(language === "zh" ? "无法保存默认调色板" : "Could not save default palette"); }
+        return;
+      case "applyDefaultPalette": mutateDocument(language === "zh" ? "应用默认调色板" : "Apply Default Palette", () => applyDocumentPalette(pixelDocument, readDefaultPalette(localStorage))); return;
+      case "resetDefaultPalette":
+        try { resetDefaultPalette(localStorage); setStatus(language === "zh" ? "已恢复内置默认调色板，当前文件不变" : "Built-in default palette restored; current document unchanged"); }
+        catch { setStatus(language === "zh" ? "无法恢复默认调色板" : "Could not restore default palette"); }
+        return;
+      case "importPalette": void importPaletteFile(); return;
+      case "exportGPL": exportPaletteFile("gpl"); return;
+      case "exportJASCPAL": exportPaletteFile("jasc-pal"); return;
+      case "addLayer":
+        mutateDocument("Add Layer", () => { const layer = addLayer(pixelDocument, nextLayerName(pixelDocument, ui.layerBaseName)); if (!layer) return false; setTabCommandScope(activeTab, "layer"); return true; });
+        return;
+      case "addGroup":
+        mutateDocument("Add Layer Group", () => { const group = addLayerGroup(pixelDocument, nextGroupName(pixelDocument, ui.groupBaseName)); if (!group) return false; setTabCommandScope(activeTab, "layer"); return true; });
+        return;
+      case "addTilemapLayer": createTilemapLayer(); return;
+      case "convertLayerToTilemap": convertActiveLayerToTiles(); return;
+      case "duplicateLayer": duplicateSelectedLayers(); return;
+      case "layerProperties": openLayerProperties(); return;
+      case "moveLayerUp": moveSelectedLayers("up"); return;
+      case "moveLayerDown": moveSelectedLayers("down"); return;
+      case "mergeLayerDown":
+        if (selectedLayers.length > 1) mergeSelectedLayers();
+        else mutateDocument("Merge Layer Down", () => { const changed = mergeLayerDown(pixelDocument); if (changed) { activeTab.selectedLayerIds = [pixelDocument.activeLayerId]; setTabCommandScope(activeTab, "layer"); } return changed; });
+        return;
+      case "mergeSelectedLayers": mergeSelectedLayers(); return;
+      case "flattenVisibleLayers": flattenDocumentLayers(); return;
+      case "toggleLayerVisibility":
+        mutateDocument(activeLayer.visible ? "Hide Layer" : "Show Layer", () => { let changed = false; for (const target of layerTargetsFor()) changed = setLayerVisibility(pixelDocument, target.id, !activeLayer.visible) || changed; return changed; });
+        return;
+      case "toggleLayerLock":
+        mutateDocument(activeLayer.locked ? "Unlock Layer" : "Lock Layer", () => { let changed = false; for (const target of layerTargetsFor()) changed = setLayerLocked(pixelDocument, target.id, !activeLayer.locked) || changed; return changed; });
+        return;
+      case "toggleAlphaLock":
+        if (isImageLayer(activeLayer)) mutateSelectedLayers("Change Alpha Lock", (layerId) => setLayerAlphaLock(pixelDocument, layerId, !activeLayer.alphaLock));
+        return;
+      case "toggleContinuous":
+        if (isImageLayer(activeLayer)) mutateSelectedLayers("Change Continuous Layers", (layerId) => setLayerContinuous(pixelDocument, layerId, !activeLayer.continuous));
+        return;
+      case "addFrame":
+        mutateDocument("Add Frame", () => { const extendLoop = shouldExtendTimelineLoopAfterInsertion(activeTab); const frame = addFrame(pixelDocument); extendTimelineLoopAfterInsertion(activeTab, extendLoop); activeTab.selectedFrameIds = [frame.id]; activeTab.frameSelectionAnchorId = frame.id; setTabCommandScope(activeTab, "frame"); return true; });
+        return;
+      case "newEmptyFrame":
+        mutateDocument("New Empty Frame", () => { const extendLoop = shouldExtendTimelineLoopAfterInsertion(activeTab); const frame = addEmptyFrame(pixelDocument, 100, backgroundClearColor); extendTimelineLoopAfterInsertion(activeTab, extendLoop); activeTab.selectedFrameIds = [frame.id]; activeTab.frameSelectionAnchorId = frame.id; setTabCommandScope(activeTab, "frame"); return true; });
+        return;
+      case "duplicateFrame":
+        mutateDocument("Duplicate Frame", () => { const extendLoop = shouldExtendTimelineLoopAfterInsertion(activeTab); const frames = duplicateFrames(pixelDocument, selectedFrameIds); if (frames.length === 0) return false; extendTimelineLoopAfterInsertion(activeTab, extendLoop); activeTab.selectedFrameIds = frames.map((frame) => frame.id); activeTab.frameSelectionAnchorId = frames[0].id; setTabCommandScope(activeTab, "frame"); return true; });
+        return;
+      case "deleteFrame": deleteCurrentFrames(); return;
+      case "moveFrameBackward": mutateDocument("Move Frame", () => { const changed = moveFrames(pixelDocument, selectedFrameIds, "backward"); if (changed) setTabCommandScope(activeTab, "frame"); return changed; }); return;
+      case "moveFrameForward": mutateDocument("Move Frame", () => { const changed = moveFrames(pixelDocument, selectedFrameIds, "forward"); if (changed) setTabCommandScope(activeTab, "frame"); return changed; }); return;
+      case "previousFrame": navigateFrame(-1); return;
+      case "nextFrame": navigateFrame(1); return;
+      case "reverseFrames": mutateDocument("Reverse Frames", () => reverseFrames(pixelDocument, selectedFrameIds)); return;
+      case "createCels":
+        mutateDocument("Create Cels", () => { const addresses = activeTab.commandScope === "cels" && selectedCels.length ? selectedCels : [{layerId: activeLayer.id, frameId: pixelDocument.activeFrameId}]; let changed = false; for (const address of addresses) { if (getCel(pixelDocument, address.layerId, address.frameId)) continue; changed = Boolean(ensureCel(pixelDocument, address.layerId, address.frameId)) || changed; } return changed; });
+        return;
+      case "duplicateCels": duplicateCurrentCels(); return;
+      case "duplicateLinkedCels": duplicateCurrentCels(true); return;
+      case "deleteCels": clearCurrentCels(); return;
+      case "linkCels": linkCurrentCels(); return;
+      case "unlinkCels": unlinkCurrentCels(); return;
+      case "celProperties": openCelProperties(); return;
+      case "applyCelTransform": applySelectedCelTransform(); return;
+      case "rasterizeCels": rasterizeSelectedCels(); return;
+      case "togglePlayback": togglePlayback(); return;
+      case "addTag": openNewTagDialog(); return;
+      case "editTag": openEditTagDialog(); return;
+      case "deleteTag": removeActiveTag(); return;
+      case "focusTag": focusCurrentTag(); return;
+      case "toggleInspector": setInspectorVisible((value) => !value); return;
+      case "toggleTimeline": setTimelineVisible((value) => !value); return;
+      case "togglePixelGrid": setShowPixelGrid((value) => !value); return;
+      case "toggleOnionSkin": setOnionSkin((value) => !value); return;
+      case "toggleCanvasOnly": setCanvasOnly((value) => !value); return;
+      case "showAllPanels": showAllPanels(); return;
+      case "toggleFullscreen": toggleFullscreen(); return;
+      case "detachedPreview": toggleDetachedPreview(); return;
+      case "resetWorkspace":
+        setInspectorWidth(defaultWorkspaceDimensions.inspectorWidth);
+        setTimelineHeight(defaultWorkspaceDimensions.timelineHeight);
+        setInspectorVisible(defaultWorkspaceVisibility.inspectorVisible);
+        setTimelineVisible(defaultWorkspaceVisibility.timelineVisible);
+        setCanvasOnly(false);
+        setWorkspaceLayoutSelected("");
+        setWorkspaceLayoutNotice("reset");
+        return;
+      case "showHistory": setHistoryOpen(true); return;
+      case "openPreferences": setSettingsOpen(true); return;
+      case "toggleTheme": setLightTheme((value) => !value); return;
+      case "switchLanguage": setLanguage((value) => value === "en" ? "zh" : "en"); return;
+      case "toggleGridSnap": mutateDocument("Change Grid Snapping", () => { pixelDocument.settings.snapToGrid = !pixelDocument.settings.snapToGrid; return true; }); return;
+      case "toggleMirrorX": mutateDocument("Change Symmetry", () => { pixelDocument.settings.symmetryX = !pixelDocument.settings.symmetryX; return true; }); return;
+      case "toggleMirrorY": mutateDocument("Change Symmetry", () => { pixelDocument.settings.symmetryY = !pixelDocument.settings.symmetryY; return true; }); return;
+      case "toggleTileX": mutateDocument("Change Tiled Preview", () => { pixelDocument.settings.tiledX = !pixelDocument.settings.tiledX; return true; }); return;
+      case "toggleTileY": mutateDocument("Change Tiled Preview", () => { pixelDocument.settings.tiledY = !pixelDocument.settings.tiledY; return true; }); return;
+      case "addVerticalGuide": mutateDocument("Add Guide", () => { pixelDocument.guides.push({id: `guide-${Date.now()}-${pixelDocument.guides.length}`, axis: "vertical", position: pixelDocument.width / 2}); return true; }); return;
+      case "addHorizontalGuide": mutateDocument("Add Guide", () => { pixelDocument.guides.push({id: `guide-${Date.now()}-${pixelDocument.guides.length}`, axis: "horizontal", position: pixelDocument.height / 2}); return true; }); return;
+      case "setRGBA": changeColorMode("rgba"); return;
+      case "setGrayscale": changeColorMode("grayscale"); return;
+      case "setIndexed": changeColorMode("indexed"); return;
+      case "setBitmap": changeColorMode("bitmap"); return;
+      case "zoomIn": changeZoom(1); return;
+      case "zoomOut": changeZoom(-1); return;
+      case "delete":
+        if ((selectedTool === "slice" || (selectedTool === "transform" && !selection)) && sliceBatchIDs.length > 0) deleteSelectedSlices();
+        else if (activeTab.commandScope === "cels") clearCurrentCels();
+        else if (activeTab.commandScope === "frame") deleteCurrentFrames();
+        else if (activeTab.commandScope === "layer") {
+          if (preferences.alerts.deleteLayer && !window.confirm(language === "zh" ? "删除所选图层？" : "Delete the selected layers?")) return;
+          mutateDocument("Delete Layer", () => {
+            let changed = false;
+            for (const layerId of [...activeTab.selectedLayerIds].reverse()) {
+              if (!getLayerByID(pixelDocument, layerId)) continue;
+              changed = deleteLayer(pixelDocument, layerId) || changed;
+            }
+            activeTab.selectedLayerIds = [pixelDocument.activeLayerId];
+            activeTab.layerSelectionAnchorId = pixelDocument.activeLayerId;
+            return changed;
+          });
+        } else if (selection) {
+          if (activeCel && canEditPixels) {
+            commitPixelMutation("Delete Selection", () => clearSelection(activeCel.pixels, activeCel.width, selection, activeClearColor));
+            if (!preferences.selection.keepAfterDelete) setSelection(null);
+          } else if (isPlaying) setStatus("Pause playback to edit");
+          else setStatus(isImageLayer(activeLayer) ? `${activeLayer.name} is locked` : "Select an image layer");
+        }
+        return;
+      default: {
+        const unreachable: never = command;
+        throw new Error(`Unhandled command shortcut: ${unreachable}`);
+      }
+    }
+  };
+
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
       const key = event.key.toLowerCase();
+      if (key === "escape" && canvasOnly) {
+        event.preventDefault();
+        setCanvasOnly(false);
+        return;
+      }
       if (key === "escape" && canvasDialog) {
         event.preventDefault();
         setCanvasDialog(null);
         return;
       }
+      if (key === "escape" && layerPropertiesDialog) {
+        event.preventDefault();
+        setLayerPropertiesDialog(null);
+        return;
+      }
+      if (key === "escape" && slicePropertiesDialog) {
+        event.preventDefault();
+        setSlicePropertiesDialog(null);
+        return;
+      }
       if (key === "escape" && tagDialog) {
         event.preventDefault();
         setTagDialog(null);
+        return;
+      }
+      if (key === "escape" && crossDocumentCopyDialog) {
+        event.preventDefault();
+        setCrossDocumentCopyDialog(null);
         return;
       }
       if (key === "escape" && exportDialog) {
@@ -4446,65 +5427,34 @@ function App() {
         setIsFileMenuOpen(false);
         return;
       }
-      if (celPropertiesDialog || canvasDialog || tagDialog || exportDialog || adjustmentDialog || spriteImportDialog || settingsOpen || historyOpen || colorProfileDialog || isViewMenuOpen) return;
+      if (celPropertiesDialog || canvasDialog || layerPropertiesDialog || slicePropertiesDialog || tagDialog || crossDocumentCopyDialog || exportDialog || adjustmentDialog || spriteImportDialog || settingsOpen || historyOpen || colorProfileDialog || isViewMenuOpen) return;
       const command = commandForShortcutEvent(event, commandShortcutAssignments);
       if (command && isEditableTarget(event.target)) return;
-      if (!hasOpenDocument && command !== "new" && command !== "open") {
+      const targetElement = typeof Element !== "undefined" && event.target instanceof Element ? event.target : null;
+      const isTimelineNavigationKey = ["arrowleft", "arrowright", "arrowup", "arrowdown", "home", "end"].includes(key);
+      const isTimelineNavigationTarget = Boolean(targetElement?.closest(".timeline-frame-number, .timeline-cel, .document-tab"));
+      const preservesSelectionNavigation = Boolean(selection && (selectedTool === "selection" || selectedTool === "transform"));
+      // Timeline grid buttons and document tabs own their arrow navigation.
+      // Let their local selection handler run without a second global move.
+      if (isTimelineNavigationTarget && isTimelineNavigationKey && !event.ctrlKey && !event.metaKey && !event.altKey && !event.shiftKey) return;
+      // Selection and transform tools reserve unmodified navigation keys for
+      // moving or adjusting the current selection when that interaction is active.
+      if (preservesSelectionNavigation && isTimelineNavigationKey && !event.ctrlKey && !event.metaKey && !event.altKey && !event.shiftKey) return;
+      if (!hasOpenDocument && command && !documentOptionalCommandIDs.has(command)) {
         if (command) event.preventDefault();
         return;
       }
       if (command) {
         event.preventDefault();
-        if (command === "new") newDocument();
-        else if (command === "open") void openPixio();
-        else if (command === "save") void savePixio();
-        else if (command === "saveAs") void savePixio(true);
-        else if (command === "undo") undo();
-        else if (command === "redo") redo();
-        else if (command === "selectAll") {
-          setSelection({x: 0, y: 0, width: pixelDocument.width, height: pixelDocument.height});
-          setStatus("Selected All");
-        } else if (command === "deselect") {
-          if (selection) {
-            setSelection(null);
-            setStatus("Selection cleared");
-          }
-        } else if (command === "copy") {
-          if (activeTab.commandScope === "cels") copyCurrentCels();
-          else if (activeTab.commandScope === "canvas" && selection) copyCurrentSelection();
-        } else if (command === "cut") {
-          if (activeTab.commandScope === "cels") cutCurrentCels();
-          else if (activeTab.commandScope === "canvas" && selection) cutCurrentSelection();
-        } else if (command === "paste") {
-          if (activeTab.commandScope === "cels") pasteCurrentCels();
-          else if (activeTab.commandScope === "canvas") void pasteSystemSelection();
-        } else if (command === "delete") {
-          if (activeTab.commandScope === "cels") clearCurrentCels();
-          else if (activeTab.commandScope === "frame") deleteCurrentFrames();
-          else if (activeTab.commandScope === "layer") {
-            if (preferences.alerts.deleteLayer && !window.confirm(language === "zh" ? "删除所选图层？" : "Delete the selected layers?")) return;
-            mutateDocument("Delete Layer", () => {
-              let changed = false;
-              for (const layerId of [...activeTab.selectedLayerIds].reverse()) {
-                if (!getLayerByID(pixelDocument, layerId)) continue;
-                changed = deleteLayer(pixelDocument, layerId) || changed;
-              }
-              activeTab.selectedLayerIds = [pixelDocument.activeLayerId];
-              activeTab.layerSelectionAnchorId = pixelDocument.activeLayerId;
-              return changed;
-            });
-          } else if (selection) {
-            if (activeCel && canEditPixels) {
-              commitPixelMutation("Delete Selection", () => clearSelection(activeCel.pixels, activeCel.width, selection, activeClearColor));
-              if (!preferences.selection.keepAfterDelete) setSelection(null);
-            }
-            else if (isPlaying) setStatus("Pause playback to edit");
-            else setStatus(isImageLayer(activeLayer) ? `${activeLayer.name} is locked` : "Select an image layer");
-          }
-        }
+        dispatchCommandShortcut(command);
         return;
       }
       if (isEditableTarget(event.target)) return;
+      if (hasOpenDocument && !event.ctrlKey && !event.metaKey && !event.altKey && !event.shiftKey && (key === "arrowleft" || key === "arrowright")) {
+        event.preventDefault();
+        dispatchCommandShortcut(key === "arrowleft" ? "previousFrame" : "nextFrame");
+        return;
+      }
       if (key === "backspace" && selection) {
         event.preventDefault();
         if (activeCel && canEditPixels) {
@@ -4530,7 +5480,7 @@ function App() {
     };
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [activeCel, activeClearColor, activeLayer, activeTab, activateTool, adjustmentDialog, canEditPixels, canvasDialog, celPropertiesDialog, clearCurrentCels, colorProfileDialog, commandShortcutAssignments, commitPixelMutation, copyCurrentCels, copyCurrentSelection, cutCurrentCels, cutCurrentSelection, deleteCurrentFrames, exportDialog, hasOpenDocument, historyOpen, isEditMenuOpen, isFileMenuOpen, isPaletteMenuOpen, isPlaying, isSpriteMenuOpen, isViewMenuOpen, mutateDocument, newDocument, openPixio, pasteCurrentCels, pasteSystemSelection, pixelDocument, preferences.alerts.deleteLayer, preferences.selection.keepAfterDelete, redo, savePixio, selection, setSelection, setStatus, settingsOpen, shortcutToolByKey, spriteImportDialog, tagDialog, undo]);
+  }, [activeCel, activeClearColor, activeLayer, activeTab, activateTool, adjustmentDialog, canEditPixels, canvasDialog, canvasOnly, celPropertiesDialog, clearCurrentCels, colorProfileDialog, commandShortcutAssignments, commitPixelMutation, crossDocumentCopyDialog, dispatchCommandShortcut, exportDialog, hasOpenDocument, historyOpen, isEditMenuOpen, isFileMenuOpen, isPaletteMenuOpen, isPlaying, isSpriteMenuOpen, isViewMenuOpen, layerPropertiesDialog, preferences.selection.keepAfterDelete, selection, settingsOpen, shortcutToolByKey, slicePropertiesDialog, spriteImportDialog, tagDialog]);
 
   const siblingLayers = pixelDocument.layers.filter((layer) => layer.parentId === activeLayer.parentId);
   const activeSiblingIndex = siblingLayers.findIndex((layer) => layer.id === activeLayer.id);
@@ -4579,27 +5529,6 @@ function App() {
     container.scrollTo({left: Math.max(0, target), behavior: "smooth"});
   };
 
-  const toggleDetachedPreview = () => {
-    const current = detachedPreviewRef.current;
-    if (current && !current.closed) {
-      current.close();
-      detachedPreviewRef.current = null;
-      setPreviewOpen(false);
-      return;
-    }
-    const preview = window.open("", "pixtorio-animation-preview", "popup=yes,width=360,height=420,resizable=yes");
-    if (!preview) {
-      setPreviewOpen((value) => !value);
-      return;
-    }
-    preview.document.open();
-    preview.document.write(`<!doctype html><html data-theme="${lightTheme ? "light" : "dark"}"><head><meta charset="utf-8"><title>Pixtorio</title><style>html,body{width:100%;height:100%;margin:0;overflow:hidden;background:#1c1d20;color:#ddd;font:12px "Segoe UI",sans-serif}html[data-theme=light] body{background:#dde0e3;color:#333}main{display:grid;grid-template-rows:minmax(0,1fr) 34px;width:100%;height:100%}.stage{display:grid;place-items:center;padding:12px}.stage canvas{max-width:100%;max-height:100%;width:auto;height:auto;image-rendering:pixelated;box-shadow:0 0 0 1px rgb(127 127 127 / 45%)}footer{display:flex;align-items:center;justify-content:center;border-top:1px solid rgb(127 127 127 / 35%)}</style></head><body><main><div class="stage"><canvas></canvas></div><footer data-counter></footer></main></body></html>`);
-    preview.document.close();
-    detachedPreviewRef.current = preview;
-    setPreviewOpen(false);
-    invalidate();
-  };
-
   const applyPreferences = (next: AppPreferences) => {
     setPreferences(next);
     setLightTheme(next.general.theme === "light");
@@ -4615,24 +5544,9 @@ function App() {
   };
   const uiScale = preferences.general.uiScale / 100;
 
-  const togglePlayback = () => {
-    playbackDirectionRef.current = 1;
-    playbackLoopCountRef.current = 0;
-    if (isPlaying && preferences.timeline.rewindOnStop) {
-      const startFrameId = activeTag?.direction === "reverse"
-        ? activeTag.toFrameId
-        : activeTag?.fromFrameId ?? activeTab.loopStartFrameId;
-      syncPlaybackFrameSelection(activeTab, startFrameId);
-      invalidate();
-    } else if (!isPlaying) {
-      syncPlaybackFrameSelection(activeTab);
-    }
-    setIsPlaying((value) => !value);
-  };
-
   return (
     <div
-      className={`${lightTheme ? "app-shell is-light" : "app-shell"}${preferences.general.paletteSeparators ? " has-palette-separators" : ""}`}
+      className={`${lightTheme ? "app-shell is-light" : "app-shell"}${preferences.general.paletteSeparators ? " has-palette-separators" : ""}${canvasOnly ? " is-canvas-only" : ""}`}
       style={{
         "--inspector-width": inspectorVisible ? `${inspectorWidth}px` : "0px",
         "--timeline-height": timelineVisible ? `${timelineHeight}px` : "0px",
@@ -4643,6 +5557,13 @@ function App() {
       onDragOver={(event) => { if (event.dataTransfer.types.includes("Files")) { event.preventDefault(); event.dataTransfer.dropEffect = "copy"; } }}
       onDrop={(event) => { if (event.dataTransfer.files.length > 0) { event.preventDefault(); void importDroppedFiles(event.dataTransfer.files); } }}
     >
+      {canvasOnly && <button
+        className="canvas-only-exit icon-button"
+        type="button"
+        title={language === "zh" ? "退出画布独占模式" : "Exit canvas-only mode"}
+        aria-label={language === "zh" ? "退出画布独占模式" : "Exit canvas-only mode"}
+        onClick={() => setCanvasOnly(false)}
+      ><PanelTopOpen size={17} /></button>}
       <header className="topbar">
         <div className="file-menu" ref={fileMenuRef} onPointerEnter={() => {
           if (!preferences.general.expandMenusOnHover || (!isFileMenuOpen && !isEditMenuOpen && !isSpriteMenuOpen && !isViewMenuOpen)) return;
@@ -4658,20 +5579,20 @@ function App() {
             {ui.file} <ChevronDown size={14} aria-hidden="true" />
           </button>
           {isFileMenuOpen && <div className="file-menu-popover" role="menu" aria-label={ui.file}>
-            <button type="button" role="menuitem" onClick={() => { setIsFileMenuOpen(false); newDocument(); }}><FilePlus size={16} />{ui.newProject}<span>{commandShortcutAssignments.new}</span></button>
-            <button type="button" role="menuitem" disabled={!hasOpenDocument || !selection} onClick={() => { setIsFileMenuOpen(false); newDocumentFromSelection(); }}><BoxSelect size={16} />{language === "zh" ? "从选区新建" : "New from selection"}</button>
-            <button type="button" role="menuitem" onClick={() => { setIsFileMenuOpen(false); void openPixio(); }}><FolderOpen size={16} />{ui.openProject}<span>{commandShortcutAssignments.open}</span></button>
-            <button type="button" role="menuitem" onClick={() => { setIsFileMenuOpen(false); void importPNG(); }}><FileImage size={16} />{ui.importPNG}</button>
-            <button type="button" role="menuitem" onClick={() => { setIsFileMenuOpen(false); void importSpriteSheet(); }}><Grid2X2 size={16} />{language === "zh" ? "导入精灵表" : "Import sprite sheet"}</button>
-            <button type="button" role="menuitem" onClick={() => { setIsFileMenuOpen(false); void importPNGSequence(); }}><FolderPlus size={16} />{language === "zh" ? "导入 PNG 序列" : "Import PNG sequence"}</button>
+            <button type="button" role="menuitem" onClick={() => { setIsFileMenuOpen(false); dispatchCommandShortcut("new"); }}><FilePlus size={16} />{ui.newProject}<span>{formatShortcutForPlatform(commandShortcutAssignments.new)}</span></button>
+            <button type="button" role="menuitem" disabled={!hasOpenDocument || !selection} onClick={() => { setIsFileMenuOpen(false); dispatchCommandShortcut("newFromSelection"); }}><BoxSelect size={16} />{language === "zh" ? "从选区新建" : "New from selection"}<span>{formatShortcutForPlatform(commandShortcutAssignments.newFromSelection)}</span></button>
+            <button type="button" role="menuitem" onClick={() => { setIsFileMenuOpen(false); dispatchCommandShortcut("open"); }}><FolderOpen size={16} />{ui.openProject}<span>{formatShortcutForPlatform(commandShortcutAssignments.open)}</span></button>
+            <button type="button" role="menuitem" onClick={() => { setIsFileMenuOpen(false); dispatchCommandShortcut("importPNG"); }}><FileImage size={16} />{ui.importPNG}<span>{formatShortcutForPlatform(commandShortcutAssignments.importPNG)}</span></button>
+            <button type="button" role="menuitem" onClick={() => { setIsFileMenuOpen(false); dispatchCommandShortcut("importSpriteSheet"); }}><Grid2X2 size={16} />{language === "zh" ? "导入精灵表" : "Import sprite sheet"}<span>{formatShortcutForPlatform(commandShortcutAssignments.importSpriteSheet)}</span></button>
+            <button type="button" role="menuitem" onClick={() => { setIsFileMenuOpen(false); dispatchCommandShortcut("importPNGSequence"); }}><FolderPlus size={16} />{language === "zh" ? "导入 PNG 序列" : "Import PNG sequence"}<span>{formatShortcutForPlatform(commandShortcutAssignments.importPNGSequence)}</span></button>
             <div className="menu-divider" role="separator" />
-            <button type="button" role="menuitem" disabled={!hasOpenDocument} onClick={() => { setIsFileMenuOpen(false); void savePixio(); }}><Save size={16} />{ui.saveProject}<span>{commandShortcutAssignments.save}</span></button>
-            <button type="button" role="menuitem" disabled={!hasOpenDocument} onClick={() => { setIsFileMenuOpen(false); void savePixio(true); }}><SaveAll size={16} />{ui.saveAs}<span>{commandShortcutAssignments.saveAs}</span></button>
+            <button type="button" role="menuitem" disabled={!hasOpenDocument} onClick={() => { setIsFileMenuOpen(false); dispatchCommandShortcut("save"); }}><Save size={16} />{ui.saveProject}<span>{formatShortcutForPlatform(commandShortcutAssignments.save)}</span></button>
+            <button type="button" role="menuitem" disabled={!hasOpenDocument} onClick={() => { setIsFileMenuOpen(false); dispatchCommandShortcut("saveAs"); }}><SaveAll size={16} />{ui.saveAs}<span>{formatShortcutForPlatform(commandShortcutAssignments.saveAs)}</span></button>
             <div className="menu-divider" role="separator" />
-            <button type="button" role="menuitem" disabled={!hasOpenDocument} onClick={() => { setIsFileMenuOpen(false); void exportPNG(); }}><Download size={16} />{ui.exportPNG}</button>
-            <button type="button" role="menuitem" disabled={!hasOpenDocument} onClick={() => { setIsFileMenuOpen(false); setExportDialog("gif"); }}><FileImage size={16} />{ui.exportGIF}</button>
-            <button type="button" role="menuitem" disabled={!hasOpenDocument} onClick={() => { setIsFileMenuOpen(false); setExportDialog("sheet"); }}><Grid2X2 size={16} />{ui.exportSpriteSheet}</button>
-            <button type="button" role="menuitem" disabled={!hasOpenDocument} onClick={() => { setIsFileMenuOpen(false); void exportPNGSequence(); }}><Folder size={16} />{language === "zh" ? "导出 PNG 序列" : "Export PNG sequence"}</button>
+            <button type="button" role="menuitem" disabled={!hasOpenDocument} onClick={() => { setIsFileMenuOpen(false); dispatchCommandShortcut("exportPNG"); }}><Download size={16} />{ui.exportPNG}<span>{formatShortcutForPlatform(commandShortcutAssignments.exportPNG)}</span></button>
+            <button type="button" role="menuitem" disabled={!hasOpenDocument} onClick={() => { setIsFileMenuOpen(false); dispatchCommandShortcut("exportGIF"); }}><FileImage size={16} />{ui.exportGIF}<span>{formatShortcutForPlatform(commandShortcutAssignments.exportGIF)}</span></button>
+            <button type="button" role="menuitem" disabled={!hasOpenDocument} onClick={() => { setIsFileMenuOpen(false); dispatchCommandShortcut("exportSpriteSheet"); }}><Grid2X2 size={16} />{ui.exportSpriteSheet}<span>{formatShortcutForPlatform(commandShortcutAssignments.exportSpriteSheet)}</span></button>
+            <button type="button" role="menuitem" disabled={!hasOpenDocument} onClick={() => { setIsFileMenuOpen(false); dispatchCommandShortcut("exportPNGSequence"); }}><Folder size={16} />{language === "zh" ? "导出 PNG 序列" : "Export PNG sequence"}<span>{formatShortcutForPlatform(commandShortcutAssignments.exportPNGSequence)}</span></button>
             {recentProjects.length > 0 && <>
               <div className="menu-divider" role="separator" />
               <p className="menu-label">{ui.recentProjects}</p>
@@ -4701,33 +5622,38 @@ function App() {
             {language === "zh" ? "编辑" : "Edit"} <ChevronDown size={14} aria-hidden="true" />
           </button>
           {isEditMenuOpen && <div className="file-menu-popover edit-menu-popover" role="menu" aria-label={language === "zh" ? "编辑" : "Edit"}>
-            <button type="button" role="menuitem" disabled={!history.canUndo} onClick={() => { setIsEditMenuOpen(false); undo(); }}><Undo2 size={16} />{ui.undo}<span>{commandShortcutAssignments.undo}</span></button>
-            <button type="button" role="menuitem" disabled={!history.canRedo} onClick={() => { setIsEditMenuOpen(false); redo(); }}><Redo2 size={16} />{ui.redo}<span>{commandShortcutAssignments.redo}</span></button>
+            <button type="button" role="menuitem" disabled={!history.canUndo} onClick={() => { setIsEditMenuOpen(false); dispatchCommandShortcut("undo"); }}><Undo2 size={16} />{ui.undo}<span>{formatShortcutForPlatform(commandShortcutAssignments.undo)}</span></button>
+            <button type="button" role="menuitem" disabled={!history.canRedo} onClick={() => { setIsEditMenuOpen(false); dispatchCommandShortcut("redo"); }}><Redo2 size={16} />{ui.redo}<span>{formatShortcutForPlatform(commandShortcutAssignments.redo)}</span></button>
             <div className="menu-divider" role="separator" />
-            <button type="button" role="menuitem" disabled={!selection || !activeCel} onClick={() => { setIsEditMenuOpen(false); copyCurrentSelection(); }}><Copy size={16} />{language === "zh" ? "复制" : "Copy"}<span>{commandShortcutAssignments.copy}</span></button>
-            <button type="button" role="menuitem" disabled={!selection} onClick={() => { setIsEditMenuOpen(false); copyMergedSelection(); }}><Layers size={16} />{language === "zh" ? "复制合并结果" : "Copy Merged"}</button>
-            <button type="button" role="menuitem" disabled={!selection || !canEditPixels} onClick={() => { setIsEditMenuOpen(false); cutCurrentSelection(); }}><FileDown size={16} />{language === "zh" ? "剪切" : "Cut"}<span>{commandShortcutAssignments.cut}</span></button>
-            <button type="button" role="menuitem" disabled={!canEditPixels} onClick={() => { setIsEditMenuOpen(false); void pasteSystemSelection(); }}><FileUp size={16} />{language === "zh" ? "粘贴" : "Paste"}<span>{commandShortcutAssignments.paste}</span></button>
+            <button type="button" role="menuitem" disabled={!selection || !activeCel} onClick={() => { setIsEditMenuOpen(false); dispatchCommandShortcut("copy"); }}><Copy size={16} />{language === "zh" ? "复制" : "Copy"}<span>{formatShortcutForPlatform(commandShortcutAssignments.copy)}</span></button>
+            <button type="button" role="menuitem" disabled={!selection} onClick={() => { setIsEditMenuOpen(false); dispatchCommandShortcut("copyMerged"); }}><Layers size={16} />{language === "zh" ? "复制合并结果" : "Copy Merged"}<span>{formatShortcutForPlatform(commandShortcutAssignments.copyMerged)}</span></button>
+            <button type="button" role="menuitem" disabled={!selection || !canEditPixels} onClick={() => { setIsEditMenuOpen(false); dispatchCommandShortcut("cut"); }}><FileDown size={16} />{language === "zh" ? "剪切" : "Cut"}<span>{formatShortcutForPlatform(commandShortcutAssignments.cut)}</span></button>
+            <button type="button" role="menuitem" disabled={!canEditPixels} onClick={() => { setIsEditMenuOpen(false); dispatchCommandShortcut("paste"); }}><FileUp size={16} />{language === "zh" ? "粘贴" : "Paste"}<span>{formatShortcutForPlatform(commandShortcutAssignments.paste)}</span></button>
             <div className="file-menu-submenu">
               <button className={isPasteSpecialMenuOpen ? "submenu-trigger is-open" : "submenu-trigger"} type="button" role="menuitem" aria-haspopup="menu" aria-expanded={isPasteSpecialMenuOpen} onClick={() => { setIsPasteSpecialMenuOpen((value) => !value); setIsShiftPixelsMenuOpen(false); }}><FilePlus size={16} />{language === "zh" ? "选择性粘贴" : "Paste Special"}<ChevronRight size={14} /></button>
               {isPasteSpecialMenuOpen && <div className="file-menu-popover edit-submenu" role="menu" aria-label={language === "zh" ? "选择性粘贴" : "Paste Special"}>
-                <button type="button" role="menuitem" onClick={() => { setIsEditMenuOpen(false); void pasteSpecialNewSprite(); }}><FilePlus size={16} />{language === "zh" ? "粘贴为新项目" : "Paste as New Sprite"}</button>
-                <button type="button" role="menuitem" onClick={() => { setIsEditMenuOpen(false); void pasteSpecialToLayer(false); }}><Layers size={16} />{language === "zh" ? "粘贴为新图层" : "Paste as New Layer"}</button>
-                <button type="button" role="menuitem" onClick={() => { setIsEditMenuOpen(false); void pasteSpecialToLayer(true); }}><Eye size={16} />{language === "zh" ? "粘贴为参考图层" : "Paste as Reference Layer"}</button>
+                <button type="button" role="menuitem" onClick={() => { setIsEditMenuOpen(false); dispatchCommandShortcut("pasteSpecialNewSprite"); }}><FilePlus size={16} />{language === "zh" ? "粘贴为新项目" : "Paste as New Sprite"}<span>{formatShortcutForPlatform(commandShortcutAssignments.pasteSpecialNewSprite)}</span></button>
+                <button type="button" role="menuitem" onClick={() => { setIsEditMenuOpen(false); dispatchCommandShortcut("pasteSpecialNewLayer"); }}><Layers size={16} />{language === "zh" ? "粘贴为新图层" : "Paste as New Layer"}<span>{formatShortcutForPlatform(commandShortcutAssignments.pasteSpecialNewLayer)}</span></button>
+                <button type="button" role="menuitem" onClick={() => { setIsEditMenuOpen(false); dispatchCommandShortcut("pasteSpecialReferenceLayer"); }}><Eye size={16} />{language === "zh" ? "粘贴为参考图层" : "Paste as Reference Layer"}<span>{formatShortcutForPlatform(commandShortcutAssignments.pasteSpecialReferenceLayer)}</span></button>
               </div>}
             </div>
             <div className="menu-divider" role="separator" />
-            <button type="button" role="menuitem" disabled={!selection || !canEditPixels} onClick={() => { setIsEditMenuOpen(false); fillCurrentSelection(); }}><PaintBucket size={16} />{language === "zh" ? "填充选区" : "Fill Selection"}</button>
-            <button type="button" role="menuitem" disabled={!selection || !canEditPixels} onClick={() => { setIsEditMenuOpen(false); strokeCurrentSelection(); }}><Square size={16} />{language === "zh" ? "描边选区" : "Stroke Selection"}</button>
-            <button type="button" role="menuitem" disabled={!selection || !activeCel || !canEditPixels} onClick={() => { setIsEditMenuOpen(false); selectionToNewLayer(false); }}><Copy size={16} />{language === "zh" ? "复制选区到新图层" : "Copy Selection to New Layer"}</button>
-            <button type="button" role="menuitem" disabled={!selection || !activeCel || !canEditPixels} onClick={() => { setIsEditMenuOpen(false); selectionToNewLayer(true); }}><FileDown size={16} />{language === "zh" ? "剪切选区到新图层" : "Cut Selection to New Layer"}</button>
+            <button type="button" role="menuitem" disabled={!selection || !canEditPixels} onClick={() => { setIsEditMenuOpen(false); dispatchCommandShortcut("fillSelection"); }}><PaintBucket size={16} />{language === "zh" ? "填充选区" : "Fill Selection"}<span>{formatShortcutForPlatform(commandShortcutAssignments.fillSelection)}</span></button>
+            <button type="button" role="menuitem" disabled={!selection || !canEditPixels} onClick={() => { setIsEditMenuOpen(false); dispatchCommandShortcut("strokeSelection"); }}><Square size={16} />{language === "zh" ? "描边选区" : "Stroke Selection"}<span>{formatShortcutForPlatform(commandShortcutAssignments.strokeSelection)}</span></button>
+            <button type="button" role="menuitem" disabled={!selection || !activeCel || !canEditPixels} onClick={() => { setIsEditMenuOpen(false); dispatchCommandShortcut("copySelectionToLayer"); }}><Copy size={16} />{language === "zh" ? "复制选区到新图层" : "Copy Selection to New Layer"}<span>{formatShortcutForPlatform(commandShortcutAssignments.copySelectionToLayer)}</span></button>
+            <button type="button" role="menuitem" disabled={!selection || !activeCel || !canEditPixels} onClick={() => { setIsEditMenuOpen(false); dispatchCommandShortcut("cutSelectionToLayer"); }}><FileDown size={16} />{language === "zh" ? "剪切选区到新图层" : "Cut Selection to New Layer"}<span>{formatShortcutForPlatform(commandShortcutAssignments.cutSelectionToLayer)}</span></button>
+            <button type="button" role="menuitem" disabled={!activeCel} onClick={() => { setIsEditMenuOpen(false); dispatchCommandShortcut("selectAllLayerCels"); }}><Layers size={16} />{language === "zh" ? "选择当前图层全部动画格" : "Select All Cels in Layer"}<span>{formatShortcutForPlatform(commandShortcutAssignments.selectAllLayerCels)}</span></button>
+            <button type="button" role="menuitem" disabled={!activeCel} onClick={() => { setIsEditMenuOpen(false); dispatchCommandShortcut("selectLinkedCels"); }}><Link2 size={16} />{language === "zh" ? "选择链接动画格" : "Select Linked Cels"}<span>{formatShortcutForPlatform(commandShortcutAssignments.selectLinkedCels)}</span></button>
+            <button type="button" role="menuitem" disabled={isPlaying || tabs.length < 2 || selectedFrameIds.length === 0} onClick={() => { setIsEditMenuOpen(false); dispatchCommandShortcut("copySelectedFramesToDocument"); }}><Copy size={16} />{language === "zh" ? "复制所选帧到其他文件" : "Copy Selected Frames to Open Document"}<span>{formatShortcutForPlatform(commandShortcutAssignments.copySelectedFramesToDocument)}</span></button>
+            <button type="button" role="menuitem" disabled={isPlaying || tabs.length < 2 || activeTab.commandScope !== "layer" || selectedLayers.length === 0} onClick={() => { setIsEditMenuOpen(false); dispatchCommandShortcut("copySelectedLayersToDocument"); }}><Layers size={16} />{language === "zh" ? "复制所选图层到其他文件" : "Copy Selected Layers to Open Document"}<span>{formatShortcutForPlatform(commandShortcutAssignments.copySelectedLayersToDocument)}</span></button>
+            <button type="button" role="menuitem" disabled={!hasOpenDocument} onClick={() => { setIsEditMenuOpen(false); dispatchCommandShortcut("layerProperties"); }}><Settings size={16} />{language === "zh" ? "图层属性" : "Layer Properties"}<span>{formatShortcutForPlatform(commandShortcutAssignments.layerProperties)}</span></button>
             <div className="file-menu-submenu">
               <button className={isShiftPixelsMenuOpen ? "submenu-trigger is-open" : "submenu-trigger"} type="button" role="menuitem" disabled={!canEditPixels} aria-haspopup="menu" aria-expanded={isShiftPixelsMenuOpen} onClick={() => { setIsShiftPixelsMenuOpen((value) => !value); setIsPasteSpecialMenuOpen(false); }}><Move size={16} />{language === "zh" ? "环绕平移像素" : "Shift Pixels"}<ChevronRight size={14} /></button>
               {isShiftPixelsMenuOpen && <div className="file-menu-popover edit-submenu" role="menu" aria-label={language === "zh" ? "环绕平移像素" : "Shift Pixels"}>
-                <button type="button" role="menuitem" onClick={() => { setIsEditMenuOpen(false); shiftCurrentPixels(-1, 0); }}><ChevronLeft size={16} />{language === "zh" ? "向左 1 像素" : "Left 1 Pixel"}</button>
-                <button type="button" role="menuitem" onClick={() => { setIsEditMenuOpen(false); shiftCurrentPixels(1, 0); }}><ChevronRight size={16} />{language === "zh" ? "向右 1 像素" : "Right 1 Pixel"}</button>
-                <button type="button" role="menuitem" onClick={() => { setIsEditMenuOpen(false); shiftCurrentPixels(0, -1); }}><ChevronUp size={16} />{language === "zh" ? "向上 1 像素" : "Up 1 Pixel"}</button>
-                <button type="button" role="menuitem" onClick={() => { setIsEditMenuOpen(false); shiftCurrentPixels(0, 1); }}><ChevronDown size={16} />{language === "zh" ? "向下 1 像素" : "Down 1 Pixel"}</button>
+                <button type="button" role="menuitem" onClick={() => { setIsEditMenuOpen(false); dispatchCommandShortcut("shiftPixelsLeft"); }}><ChevronLeft size={16} />{language === "zh" ? "向左 1 像素" : "Left 1 Pixel"}<span>{formatShortcutForPlatform(commandShortcutAssignments.shiftPixelsLeft)}</span></button>
+                <button type="button" role="menuitem" onClick={() => { setIsEditMenuOpen(false); dispatchCommandShortcut("shiftPixelsRight"); }}><ChevronRight size={16} />{language === "zh" ? "向右 1 像素" : "Right 1 Pixel"}<span>{formatShortcutForPlatform(commandShortcutAssignments.shiftPixelsRight)}</span></button>
+                <button type="button" role="menuitem" onClick={() => { setIsEditMenuOpen(false); dispatchCommandShortcut("shiftPixelsUp"); }}><ChevronUp size={16} />{language === "zh" ? "向上 1 像素" : "Up 1 Pixel"}<span>{formatShortcutForPlatform(commandShortcutAssignments.shiftPixelsUp)}</span></button>
+                <button type="button" role="menuitem" onClick={() => { setIsEditMenuOpen(false); dispatchCommandShortcut("shiftPixelsDown"); }}><ChevronDown size={16} />{language === "zh" ? "向下 1 像素" : "Down 1 Pixel"}<span>{formatShortcutForPlatform(commandShortcutAssignments.shiftPixelsDown)}</span></button>
               </div>}
             </div>
           </div>}
@@ -4740,36 +5666,46 @@ function App() {
             {language === "zh" ? "图像" : "Sprite"} <ChevronDown size={14} aria-hidden="true" />
           </button>
           {isSpriteMenuOpen && <div className="file-menu-popover sprite-menu-popover" role="menu" aria-label={language === "zh" ? "图像" : "Sprite"}>
-            <button type="button" role="menuitem" onClick={() => { setIsSpriteMenuOpen(false); openSpriteSizeDialog(); }}><Scaling size={16} />{language === "zh" ? "缩放图像内容" : "Sprite size"}</button>
-            <button type="button" role="menuitem" onClick={() => { setIsSpriteMenuOpen(false); openResizeDialog(); }}><Crop size={16} />{language === "zh" ? "画布尺寸" : "Canvas size"}</button>
-            <button type="button" role="menuitem" onClick={() => { setIsSpriteMenuOpen(false); mutateDocument("Trim Canvas", () => trimDocument(pixelDocument)); }}><BoxSelect size={16} />{language === "zh" ? "裁去透明边缘" : "Trim transparent borders"}</button>
+            <button type="button" role="menuitem" disabled={isPlaying} onClick={() => { setIsSpriteMenuOpen(false); dispatchCommandShortcut("duplicateSprite"); }}><Copy size={16} />{language === "zh" ? "复制精灵" : "Duplicate Sprite"}<span>{formatShortcutForPlatform(commandShortcutAssignments.duplicateSprite)}</span></button>
+            <div className="menu-divider" role="separator" />
+            <p className="menu-label">{ui.animation}</p>
+            <button type="button" role="menuitem" disabled={isPlaying} onClick={() => { setIsSpriteMenuOpen(false); dispatchCommandShortcut("addFrame"); }}><Plus size={16} />{ui.addFrame}<span>{formatShortcutForPlatform(commandShortcutAssignments.addFrame)}</span></button>
+            <button type="button" role="menuitem" disabled={isPlaying} onClick={() => { setIsSpriteMenuOpen(false); dispatchCommandShortcut("newEmptyFrame"); }}><FilePlus size={16} />{ui.newEmptyFrame}<span>{formatShortcutForPlatform(commandShortcutAssignments.newEmptyFrame)}</span></button>
+            <button type="button" role="menuitem" disabled={isPlaying || (!activeCel && !selectedCels.some(({layerId, frameId}) => Boolean(getCel(pixelDocument, layerId, frameId))))} onClick={() => { setIsSpriteMenuOpen(false); dispatchCommandShortcut("duplicateCels"); }}><Copy size={16} />{ui.duplicateCels}<span>{formatShortcutForPlatform(commandShortcutAssignments.duplicateCels)}</span></button>
+            <button type="button" role="menuitem" disabled={isPlaying || (!activeCel && !selectedCels.some(({layerId, frameId}) => Boolean(getCel(pixelDocument, layerId, frameId))))} onClick={() => { setIsSpriteMenuOpen(false); dispatchCommandShortcut("duplicateLinkedCels"); }}><Link2 size={16} />{ui.duplicateLinkedCels}<span>{formatShortcutForPlatform(commandShortcutAssignments.duplicateLinkedCels)}</span></button>
+            <button type="button" role="menuitem" disabled={isPlaying || pixelDocument.frames.length < 2} onClick={() => { setIsSpriteMenuOpen(false); dispatchCommandShortcut("previousFrame"); }}><ChevronLeft size={16} />{ui.previousFrame}<span>{formatShortcutForPlatform(commandShortcutAssignments.previousFrame)}</span></button>
+            <button type="button" role="menuitem" disabled={isPlaying || pixelDocument.frames.length < 2} onClick={() => { setIsSpriteMenuOpen(false); dispatchCommandShortcut("nextFrame"); }}><ChevronRight size={16} />{ui.nextFrame}<span>{formatShortcutForPlatform(commandShortcutAssignments.nextFrame)}</span></button>
+            <div className="menu-divider" role="separator" />
+            <button type="button" role="menuitem" onClick={() => { setIsSpriteMenuOpen(false); dispatchCommandShortcut("spriteSize"); }}><Scaling size={16} />{language === "zh" ? "缩放图像内容" : "Sprite size"}<span>{formatShortcutForPlatform(commandShortcutAssignments.spriteSize)}</span></button>
+            <button type="button" role="menuitem" onClick={() => { setIsSpriteMenuOpen(false); dispatchCommandShortcut("canvasSize"); }}><Crop size={16} />{language === "zh" ? "画布尺寸" : "Canvas size"}<span>{formatShortcutForPlatform(commandShortcutAssignments.canvasSize)}</span></button>
+            <button type="button" role="menuitem" onClick={() => { setIsSpriteMenuOpen(false); dispatchCommandShortcut("trimCanvas"); }}><BoxSelect size={16} />{language === "zh" ? "裁去透明边缘" : "Trim transparent borders"}<span>{formatShortcutForPlatform(commandShortcutAssignments.trimCanvas)}</span></button>
             <div className="file-menu-submenu">
               <button className={isImageEffectsMenuOpen ? "submenu-trigger is-open" : "submenu-trigger"} type="button" role="menuitem" aria-haspopup="menu" aria-expanded={isImageEffectsMenuOpen} onClick={() => setIsImageEffectsMenuOpen((value) => !value)}><SlidersHorizontal size={16} />{language === "zh" ? "调整与效果" : "Adjustments and effects"}<ChevronRight size={14} /></button>
               {isImageEffectsMenuOpen && <div className="file-menu-popover image-effects-submenu" role="menu" aria-label={language === "zh" ? "调整与效果" : "Adjustments and effects"}>
                 <p className="menu-label">{language === "zh" ? "调整" : "Adjustments"}</p>
-                <button type="button" role="menuitem" disabled={!canOpenAdjustment} onClick={() => { setIsSpriteMenuOpen(false); setIsImageEffectsMenuOpen(false); openAdjustment("brightness-contrast"); }}><Sun size={16} />{language === "zh" ? "亮度 / 对比度" : "Brightness / Contrast"}</button>
-                <button type="button" role="menuitem" disabled={!canOpenAdjustment} onClick={() => { setIsSpriteMenuOpen(false); setIsImageEffectsMenuOpen(false); openAdjustment("hsl"); }}><Blend size={16} />{language === "zh" ? "色相 / 饱和度" : "Hue / Saturation"}</button>
-                <button type="button" role="menuitem" disabled={!canOpenAdjustment} onClick={() => { setIsSpriteMenuOpen(false); setIsImageEffectsMenuOpen(false); openAdjustment("invert"); }}><Replace size={16} />{language === "zh" ? "反相" : "Invert"}</button>
-                <button type="button" role="menuitem" disabled={!canOpenAdjustment} onClick={() => { setIsSpriteMenuOpen(false); setIsImageEffectsMenuOpen(false); openAdjustment("convolution"); }}><Grid2X2 size={16} />{language === "zh" ? "卷积" : "Convolution"}</button>
-                <button type="button" role="menuitem" disabled={!canOpenAdjustment} onClick={() => { setIsSpriteMenuOpen(false); setIsImageEffectsMenuOpen(false); openAdjustment("median"); }}><Grid2X2 size={16} />{language === "zh" ? "中值滤波" : "Median"}</button>
-                <button type="button" role="menuitem" disabled={!canOpenAdjustment} onClick={() => { setIsSpriteMenuOpen(false); setIsImageEffectsMenuOpen(false); openAdjustment("despeckle"); }}><SprayCan size={16} />{language === "zh" ? "去斑" : "Despeckle"}</button>
-                <button type="button" role="menuitem" disabled={!canOpenAdjustment} onClick={() => { setIsSpriteMenuOpen(false); setIsImageEffectsMenuOpen(false); openAdjustment("curves"); }}><Spline size={16} />{language === "zh" ? "曲线" : "Curves"}</button>
-                <button type="button" role="menuitem" disabled={!canOpenAdjustment} onClick={() => { setIsSpriteMenuOpen(false); setIsImageEffectsMenuOpen(false); openAdjustment("hsv-hsl"); }}><Blend size={16} />HSV / HSL</button>
-                <button type="button" role="menuitem" disabled={!canOpenAdjustment} onClick={() => { setIsSpriteMenuOpen(false); setIsImageEffectsMenuOpen(false); openAdjustment("channel-mask"); }}><Layers size={16} />{language === "zh" ? "通道" : "Channels"}</button>
+                <button type="button" role="menuitem" disabled={!canOpenAdjustment} onClick={() => { setIsSpriteMenuOpen(false); setIsImageEffectsMenuOpen(false); dispatchCommandShortcut("adjustmentBrightnessContrast"); }}><Sun size={16} />{language === "zh" ? "亮度 / 对比度" : "Brightness / Contrast"}<span>{formatShortcutForPlatform(commandShortcutAssignments.adjustmentBrightnessContrast)}</span></button>
+                <button type="button" role="menuitem" disabled={!canOpenAdjustment} onClick={() => { setIsSpriteMenuOpen(false); setIsImageEffectsMenuOpen(false); dispatchCommandShortcut("adjustmentHSL"); }}><Blend size={16} />{language === "zh" ? "色相 / 饱和度" : "Hue / Saturation"}<span>{formatShortcutForPlatform(commandShortcutAssignments.adjustmentHSL)}</span></button>
+                <button type="button" role="menuitem" disabled={!canOpenAdjustment} onClick={() => { setIsSpriteMenuOpen(false); setIsImageEffectsMenuOpen(false); dispatchCommandShortcut("adjustmentInvert"); }}><Replace size={16} />{language === "zh" ? "反相" : "Invert"}<span>{formatShortcutForPlatform(commandShortcutAssignments.adjustmentInvert)}</span></button>
+                <button type="button" role="menuitem" disabled={!canOpenAdjustment} onClick={() => { setIsSpriteMenuOpen(false); setIsImageEffectsMenuOpen(false); dispatchCommandShortcut("adjustmentConvolution"); }}><Grid2X2 size={16} />{language === "zh" ? "卷积" : "Convolution"}<span>{formatShortcutForPlatform(commandShortcutAssignments.adjustmentConvolution)}</span></button>
+                <button type="button" role="menuitem" disabled={!canOpenAdjustment} onClick={() => { setIsSpriteMenuOpen(false); setIsImageEffectsMenuOpen(false); dispatchCommandShortcut("adjustmentMedian"); }}><Grid2X2 size={16} />{language === "zh" ? "中值滤波" : "Median"}<span>{formatShortcutForPlatform(commandShortcutAssignments.adjustmentMedian)}</span></button>
+                <button type="button" role="menuitem" disabled={!canOpenAdjustment} onClick={() => { setIsSpriteMenuOpen(false); setIsImageEffectsMenuOpen(false); dispatchCommandShortcut("adjustmentDespeckle"); }}><SprayCan size={16} />{language === "zh" ? "去斑" : "Despeckle"}<span>{formatShortcutForPlatform(commandShortcutAssignments.adjustmentDespeckle)}</span></button>
+                <button type="button" role="menuitem" disabled={!canOpenAdjustment} onClick={() => { setIsSpriteMenuOpen(false); setIsImageEffectsMenuOpen(false); dispatchCommandShortcut("adjustmentCurves"); }}><Spline size={16} />{language === "zh" ? "曲线" : "Curves"}<span>{formatShortcutForPlatform(commandShortcutAssignments.adjustmentCurves)}</span></button>
+                <button type="button" role="menuitem" disabled={!canOpenAdjustment} onClick={() => { setIsSpriteMenuOpen(false); setIsImageEffectsMenuOpen(false); dispatchCommandShortcut("adjustmentHSVHSL"); }}><Blend size={16} />HSV / HSL<span>{formatShortcutForPlatform(commandShortcutAssignments.adjustmentHSVHSL)}</span></button>
+                <button type="button" role="menuitem" disabled={!canOpenAdjustment} onClick={() => { setIsSpriteMenuOpen(false); setIsImageEffectsMenuOpen(false); dispatchCommandShortcut("adjustmentChannels"); }}><Layers size={16} />{language === "zh" ? "通道" : "Channels"}<span>{formatShortcutForPlatform(commandShortcutAssignments.adjustmentChannels)}</span></button>
                 <div className="menu-divider" role="separator" />
                 <p className="menu-label">{language === "zh" ? "效果" : "Effects"}</p>
-                <button type="button" role="menuitem" disabled={!canOpenAdjustment} onClick={() => { setIsSpriteMenuOpen(false); setIsImageEffectsMenuOpen(false); openAdjustment("outline"); }}><SquaresUnite size={16} />{language === "zh" ? "轮廓" : "Outline"}</button>
-                <button type="button" role="menuitem" disabled={!canEditPixels} onClick={() => { setIsSpriteMenuOpen(false); setIsImageEffectsMenuOpen(false); applyShadeEffect(); }}><WandSparkles size={16} />{language === "zh" ? "着色" : "Shading"}</button>
+                <button type="button" role="menuitem" disabled={!canOpenAdjustment} onClick={() => { setIsSpriteMenuOpen(false); setIsImageEffectsMenuOpen(false); dispatchCommandShortcut("effectOutline"); }}><SquaresUnite size={16} />{language === "zh" ? "轮廓" : "Outline"}<span>{formatShortcutForPlatform(commandShortcutAssignments.effectOutline)}</span></button>
+                <button type="button" role="menuitem" disabled={!canEditPixels} onClick={() => { setIsSpriteMenuOpen(false); setIsImageEffectsMenuOpen(false); dispatchCommandShortcut("effectShading"); }}><WandSparkles size={16} />{language === "zh" ? "着色" : "Shading"}<span>{formatShortcutForPlatform(commandShortcutAssignments.effectShading)}</span></button>
               </div>}
             </div>
             <div className="menu-divider" role="separator" />
-            <button type="button" role="menuitem" onClick={() => { setIsSpriteMenuOpen(false); mutateDocument("Rotate Sprite Clockwise", () => rotateDocument(pixelDocument, "cw")); }}><RotateCw size={16} />{language === "zh" ? "顺时针旋转 90°" : "Rotate 90° clockwise"}</button>
-            <button type="button" role="menuitem" onClick={() => { setIsSpriteMenuOpen(false); mutateDocument("Rotate Sprite Counterclockwise", () => rotateDocument(pixelDocument, "ccw")); }}><RotateCcw size={16} />{language === "zh" ? "逆时针旋转 90°" : "Rotate 90° counterclockwise"}</button>
-            <button type="button" role="menuitem" onClick={() => { setIsSpriteMenuOpen(false); mutateDocument("Rotate Sprite 180", () => rotateDocument(pixelDocument, "180")); }}><RotateCw size={16} />{language === "zh" ? "旋转 180°" : "Rotate 180°"}</button>
-            <button type="button" role="menuitem" onClick={() => { setIsSpriteMenuOpen(false); mutateDocument("Flip Sprite Horizontally", () => flipDocument(pixelDocument, "horizontal")); }}><FlipHorizontal2 size={16} />{ui.flipHorizontal}</button>
-            <button type="button" role="menuitem" onClick={() => { setIsSpriteMenuOpen(false); mutateDocument("Flip Sprite Vertically", () => flipDocument(pixelDocument, "vertical")); }}><FlipVertical2 size={16} />{ui.flipVertical}</button>
+            <button type="button" role="menuitem" onClick={() => { setIsSpriteMenuOpen(false); dispatchCommandShortcut("rotateSpriteCW"); }}><RotateCw size={16} />{language === "zh" ? "顺时针旋转 90°" : "Rotate 90° clockwise"}<span>{formatShortcutForPlatform(commandShortcutAssignments.rotateSpriteCW)}</span></button>
+            <button type="button" role="menuitem" onClick={() => { setIsSpriteMenuOpen(false); dispatchCommandShortcut("rotateSpriteCCW"); }}><RotateCcw size={16} />{language === "zh" ? "逆时针旋转 90°" : "Rotate 90° counterclockwise"}<span>{formatShortcutForPlatform(commandShortcutAssignments.rotateSpriteCCW)}</span></button>
+            <button type="button" role="menuitem" onClick={() => { setIsSpriteMenuOpen(false); dispatchCommandShortcut("rotateSprite180"); }}><RotateCw size={16} />{language === "zh" ? "旋转 180°" : "Rotate 180°"}<span>{formatShortcutForPlatform(commandShortcutAssignments.rotateSprite180)}</span></button>
+            <button type="button" role="menuitem" onClick={() => { setIsSpriteMenuOpen(false); dispatchCommandShortcut("flipSpriteHorizontal"); }}><FlipHorizontal2 size={16} />{ui.flipHorizontal}<span>{formatShortcutForPlatform(commandShortcutAssignments.flipSpriteHorizontal)}</span></button>
+            <button type="button" role="menuitem" onClick={() => { setIsSpriteMenuOpen(false); dispatchCommandShortcut("flipSpriteVertical"); }}><FlipVertical2 size={16} />{ui.flipVertical}<span>{formatShortcutForPlatform(commandShortcutAssignments.flipSpriteVertical)}</span></button>
             <div className="menu-divider" role="separator" />
-            <button type="button" role="menuitem" onClick={() => { setIsSpriteMenuOpen(false); openColorProfileDialog(); }}><Sun size={16} />{language === "zh" ? "颜色配置" : "Color configuration"}</button>
+            <button type="button" role="menuitem" onClick={() => { setIsSpriteMenuOpen(false); dispatchCommandShortcut("colorConfiguration"); }}><Sun size={16} />{language === "zh" ? "颜色配置" : "Color configuration"}<span>{formatShortcutForPlatform(commandShortcutAssignments.colorConfiguration)}</span></button>
           </div>}
         </div>
         <div className="file-menu" ref={viewMenuRef} onPointerEnter={() => {
@@ -4780,28 +5716,27 @@ function App() {
             {language === "zh" ? "视图" : "View"} <ChevronDown size={14} aria-hidden="true" />
           </button>
           {isViewMenuOpen && <div className="file-menu-popover view-menu-popover" role="menu" aria-label={language === "zh" ? "视图" : "View"}>
-            <button type="button" role="menuitemcheckbox" aria-checked={inspectorVisible} onClick={() => { setInspectorVisible((value) => !value); setIsViewMenuOpen(false); }}>
+            <button type="button" role="menuitemcheckbox" aria-checked={inspectorVisible} onClick={() => { setIsViewMenuOpen(false); dispatchCommandShortcut("toggleInspector"); }}>
               {inspectorVisible ? <Eye size={16} /> : <EyeOff size={16} />}
-              {inspectorVisible ? (language === "zh" ? "隐藏侧栏" : "Hide Inspector") : (language === "zh" ? "显示侧栏" : "Show Inspector")}
+              {inspectorVisible ? (language === "zh" ? "隐藏侧栏" : "Hide Inspector") : (language === "zh" ? "显示侧栏" : "Show Inspector")}<span>{formatShortcutForPlatform(commandShortcutAssignments.toggleInspector)}</span>
             </button>
-            <button type="button" role="menuitemcheckbox" aria-checked={timelineVisible} onClick={() => { setTimelineVisible((value) => !value); setIsViewMenuOpen(false); }}>
+            <button type="button" role="menuitemcheckbox" aria-checked={timelineVisible} onClick={() => { setIsViewMenuOpen(false); dispatchCommandShortcut("toggleTimeline"); }}>
               {timelineVisible ? <Eye size={16} /> : <EyeOff size={16} />}
-              {timelineVisible ? (language === "zh" ? "隐藏时间轴" : "Hide Timeline") : (language === "zh" ? "显示时间轴" : "Show Timeline")}
+              {timelineVisible ? (language === "zh" ? "隐藏时间轴" : "Hide Timeline") : (language === "zh" ? "显示时间轴" : "Show Timeline")}<span>{formatShortcutForPlatform(commandShortcutAssignments.toggleTimeline)}</span>
             </button>
             <div className="menu-divider" role="separator" />
-            <button type="button" role="menuitemcheckbox" aria-checked={showPixelGrid} onClick={() => { setShowPixelGrid((value) => !value); setIsViewMenuOpen(false); }}><Grid2X2 size={16} />{language === "zh" ? "像素网格" : "Pixel Grid"}</button>
-            <button type="button" role="menuitemcheckbox" disabled={!hasOpenDocument} aria-checked={onionSkin} onClick={() => { setOnionSkin((value) => !value); setIsViewMenuOpen(false); }}><Eye size={16} />{language === "zh" ? "洋葱皮" : "Onion Skin"}</button>
-            <button type="button" role="menuitem" disabled={!hasOpenDocument} onClick={() => { setIsViewMenuOpen(false); toggleDetachedPreview(); }}><Eye size={16} />{language === "zh" ? "独立动画预览" : "Detached Preview"}</button>
+            <button type="button" role="menuitemcheckbox" aria-checked={showPixelGrid} onClick={() => { setIsViewMenuOpen(false); dispatchCommandShortcut("togglePixelGrid"); }}><Grid2X2 size={16} />{language === "zh" ? "像素网格" : "Pixel Grid"}<span>{formatShortcutForPlatform(commandShortcutAssignments.togglePixelGrid)}</span></button>
+            <button type="button" role="menuitemcheckbox" disabled={!hasOpenDocument} aria-checked={onionSkin} onClick={() => { setIsViewMenuOpen(false); dispatchCommandShortcut("toggleOnionSkin"); }}><Eye size={16} />{language === "zh" ? "洋葱皮" : "Onion Skin"}<span>{formatShortcutForPlatform(commandShortcutAssignments.toggleOnionSkin)}</span></button>
+            <button type="button" role="menuitem" disabled={!hasOpenDocument} onClick={() => { setIsViewMenuOpen(false); dispatchCommandShortcut("detachedPreview"); }}><Eye size={16} />{language === "zh" ? "独立动画预览" : "Detached Preview"}<span>{formatShortcutForPlatform(commandShortcutAssignments.detachedPreview)}</span></button>
             <div className="menu-divider" role="separator" />
-            <button type="button" role="menuitem" onClick={() => {
-              setInspectorWidth(defaultWorkspaceDimensions.inspectorWidth);
-              setTimelineHeight(defaultWorkspaceDimensions.timelineHeight);
-              setInspectorVisible(defaultWorkspaceVisibility.inspectorVisible);
-              setTimelineVisible(defaultWorkspaceVisibility.timelineVisible);
-              setWorkspaceLayoutSelected("");
-              setWorkspaceLayoutNotice("reset");
-              setIsViewMenuOpen(false);
-            }}><RotateCcw size={16} />{language === "zh" ? "重置工作区布局" : "Reset Workspace Layout"}</button>
+            <button type="button" role="menuitemcheckbox" aria-checked={canvasOnly} onClick={() => { setIsViewMenuOpen(false); dispatchCommandShortcut("toggleCanvasOnly"); }}>
+              {canvasOnly ? <EyeOff size={16} /> : <Eye size={16} />}
+              {language === "zh" ? "画布独占模式" : "Canvas-only mode"}<span>{formatShortcutForPlatform(commandShortcutAssignments.toggleCanvasOnly)}</span>
+            </button>
+            <button type="button" role="menuitem" onClick={() => { setIsViewMenuOpen(false); dispatchCommandShortcut("showAllPanels"); }}><PanelTopOpen size={16} />{language === "zh" ? "显示所有面板" : "Show all panels"}<span>{formatShortcutForPlatform(commandShortcutAssignments.showAllPanels)}</span></button>
+            <button type="button" role="menuitem" onClick={() => { setIsViewMenuOpen(false); dispatchCommandShortcut("toggleFullscreen"); }}><Fullscreen size={16} />{isFullscreen ? (language === "zh" ? "退出全屏" : "Exit full screen") : (language === "zh" ? "进入全屏" : "Enter full screen")}<span>{formatShortcutForPlatform(commandShortcutAssignments.toggleFullscreen)}</span></button>
+            <div className="menu-divider" role="separator" />
+            <button type="button" role="menuitem" onClick={() => { setIsViewMenuOpen(false); dispatchCommandShortcut("resetWorkspace"); }}><RotateCcw size={16} />{language === "zh" ? "重置工作区布局" : "Reset Workspace Layout"}<span>{formatShortcutForPlatform(commandShortcutAssignments.resetWorkspace)}</span></button>
           </div>}
         </div>
         <div className="document-tab-strip">
@@ -4982,6 +5917,7 @@ function App() {
           guides={pixelDocument.guides}
           sliceOverlays={sliceOverlays}
           activeSliceId={activeSlice?.id ?? ""}
+          selectedSliceIds={selectedSliceIds}
           selectionAntialias={selectionAntialias}
           tool={selectedTool}
           editable={canEditPixels}
@@ -5021,6 +5957,9 @@ function App() {
           transformMode={transformMode}
           transformPivot={activeTab.transformPivot}
           onTransformPivotChange={updateTransformPivot}
+          onTransformSelectionFromContent={() => canEditPixels
+            ? layerOpaqueContentSelection(pixelDocument, pixelDocument.activeLayerId, pixelDocument.activeFrameId)
+            : null}
           onGuideChange={(id, position) => mutateDocument("Move Guide", () => {
             const guide = pixelDocument.guides.find((candidate) => candidate.id === id);
             if (!guide || guide.position === position) return false;
@@ -5034,14 +5973,15 @@ function App() {
             return true;
           })}
           onSliceBoundsChange={(id, bounds) => mutateDocument("Edit Slice", () => {
-            const slice = pixelDocument.slices.find((candidate) => candidate.id === id);
-            const key = slice?.keys.find((candidate) => candidate.frameId === pixelDocument.activeFrameId) ?? slice?.keys[0];
-            if (!key || (key.x === bounds.x && key.y === bounds.y && key.width === bounds.width && key.height === bounds.height)) return false;
-            Object.assign(key, bounds);
-            return true;
+            return updateSliceKey(pixelDocument, id, pixelDocument.activeFrameId, bounds);
           })}
+          onSliceBatchBoundsChange={(changes) => mutateDocument("Edit Slices", () => (
+            resizeSliceKeys(pixelDocument, pixelDocument.activeFrameId, changes)
+          ))}
           onSliceCreate={createSliceFromBounds}
           onActiveSliceChange={setActiveSliceId}
+          onSliceSelectionChange={setSelectedSliceIds}
+          onSliceDoubleClick={openSliceProperties}
           onSelectionChange={setSelection}
           onCelMovePointer={handleCelMovePointer}
           onCrop={cropCanvas}
@@ -5204,13 +6144,38 @@ function App() {
           <h2>{ui.toolsByID.slice}</h2>
           {selection && <button type="button" className="panel-command" onClick={createSliceFromSelection}>{language === "zh" ? "从选区创建切片" : "Create slice from selection"}</button>}
           {pixelDocument.slices.length > 0 && <>
+            <div className="slice-list" role="listbox" aria-label={language === "zh" ? "切片选择" : "Slice selection"}>
+              {pixelDocument.slices.map((slice) => <label className="slice-list-item" key={slice.id}>
+                <input type="checkbox" checked={selectedSliceIds.includes(slice.id)} onChange={() => setSelectedSliceIds((current) => current.includes(slice.id) ? current.filter((id) => id !== slice.id) : [...current, slice.id])} />
+                <button type="button" className={slice.id === activeSlice?.id ? "slice-list-name is-active" : "slice-list-name"} onClick={() => setActiveSliceId(slice.id)} onDoubleClick={() => openSliceProperties(slice.id)}>{slice.name}</button>
+              </label>)}
+            </div>
+            <div className="slice-tool-actions">
+              <button type="button" className="panel-command" disabled={!activeSlice} onClick={() => activeSlice && openSliceProperties(activeSlice.id)}>{language === "zh" ? "切片属性" : "Slice properties"}</button>
+              <span className="panel-hint">{language === "zh" ? `${sliceBatchIDs.length} 个切片` : `${sliceBatchIDs.length} slice(s)`}</span>
+            </div>
+            <div className="panel-subheading"><span>{language === "zh" ? "批量变换" : "Batch transform"}</span></div>
+            <div className="cel-transform-fields"><label><span>ΔX</span><input type="number" step="1" value={sliceMoveX} onChange={(event) => setSliceMoveX(Number(event.target.value) || 0)} /></label><label><span>ΔY</span><input type="number" step="1" value={sliceMoveY} onChange={(event) => setSliceMoveY(Number(event.target.value) || 0)} /></label></div>
+            <div className="slice-tool-actions"><button type="button" className="panel-command" disabled={sliceBatchIDs.length === 0} onClick={moveSelectedSlices}>{language === "zh" ? "移动所选切片" : "Move selected slices"}</button></div>
+            <div className="cel-transform-fields"><label><span>{language === "zh" ? "宽度 %" : "Width %"}</span><input type="number" min="1" step="1" value={sliceScaleX} onChange={(event) => setSliceScaleX(Math.max(1, Number(event.target.value) || 1))} /></label><label><span>{language === "zh" ? "高度 %" : "Height %"}</span><input type="number" min="1" step="1" value={sliceScaleY} onChange={(event) => setSliceScaleY(Math.max(1, Number(event.target.value) || 1))} /></label></div>
+            <div className="slice-tool-actions"><button type="button" className="panel-command" disabled={sliceBatchIDs.length === 0} onClick={scaleSelectedSlices}>{language === "zh" ? "缩放所选切片" : "Scale selected slices"}</button><button type="button" className="panel-command is-danger" disabled={sliceBatchIDs.length === 0} onClick={deleteSelectedSlices}>{language === "zh" ? "删除所选切片" : "Delete selected slices"}</button></div>
             <label className="compact-field"><span>{language === "zh" ? "切片" : "Slice"}</span><select value={activeSlice?.id ?? ""} onChange={(event) => setActiveSliceId(event.target.value)}>{pixelDocument.slices.map((slice) => <option key={slice.id} value={slice.id}>{slice.name}</option>)}</select></label>
-            {activeSlice && activeSliceKey && <>
+            {activeSlice && <>
               <label className="compact-field"><span>{language === "zh" ? "名称" : "Name"}</span><input type="text" value={activeSlice.name} onChange={(event) => mutateDocument("Rename Slice", () => updateSlice(pixelDocument, activeSlice.id, {name: event.target.value}))} /></label>
-              <div className="cel-transform-fields"><label><span>X</span><input type="number" value={activeSliceKey.x} onChange={(event) => mutateDocument("Edit Slice", () => { activeSliceKey.x = Math.max(0, Math.round(Number(event.target.value) || 0)); return true; })} /></label><label><span>Y</span><input type="number" value={activeSliceKey.y} onChange={(event) => mutateDocument("Edit Slice", () => { activeSliceKey.y = Math.max(0, Math.round(Number(event.target.value) || 0)); return true; })} /></label></div>
-              <div className="cel-transform-fields"><label><span>{ui.width}</span><input type="number" min="1" value={activeSliceKey.width} onChange={(event) => mutateDocument("Edit Slice", () => { activeSliceKey.width = Math.max(1, Math.round(Number(event.target.value) || 1)); return true; })} /></label><label><span>{ui.height}</span><input type="number" min="1" value={activeSliceKey.height} onChange={(event) => mutateDocument("Edit Slice", () => { activeSliceKey.height = Math.max(1, Math.round(Number(event.target.value) || 1)); return true; })} /></label></div>
-              <div className="cel-transform-fields"><label><span>{language === "zh" ? "中心 X" : "Pivot X"}</span><input type="number" value={activeSliceKey.pivot?.x ?? 0} onChange={(event) => mutateDocument("Edit Slice Pivot", () => { activeSliceKey.pivot = {...(activeSliceKey.pivot ?? {x: 0, y: 0}), x: Math.round(Number(event.target.value) || 0)}; return true; })} /></label><label><span>{language === "zh" ? "中心 Y" : "Pivot Y"}</span><input type="number" value={activeSliceKey.pivot?.y ?? 0} onChange={(event) => mutateDocument("Edit Slice Pivot", () => { activeSliceKey.pivot = {...(activeSliceKey.pivot ?? {x: 0, y: 0}), y: Math.round(Number(event.target.value) || 0)}; return true; })} /></label></div>
-              <div className="slice-tool-actions"><button className="panel-command" type="button" onClick={() => mutateDocument("Toggle Nine-patch", () => { activeSliceKey.center = activeSliceKey.center ? undefined : {x: Math.floor(activeSliceKey.width / 4), y: Math.floor(activeSliceKey.height / 4), width: Math.max(1, Math.floor(activeSliceKey.width / 2)), height: Math.max(1, Math.floor(activeSliceKey.height / 2))}; return true; })}>{activeSliceKey.center ? (language === "zh" ? "移除九宫格中心" : "Remove nine-patch center") : (language === "zh" ? "添加九宫格中心" : "Add nine-patch center")}</button><button className="panel-command is-danger" type="button" onClick={() => mutateDocument("Delete Slice", () => deleteSlice(pixelDocument, activeSlice.id))}>{language === "zh" ? "删除切片" : "Delete slice"}</button></div>
+              <label className="compact-field"><span>{language === "zh" ? "颜色" : "Color"}</span><input type="color" value={/^#[0-9a-f]{8}$/i.test(activeSlice.color) ? activeSlice.color.slice(0, 7) : "#ef476f"} onChange={(event) => mutateDocument("Edit Slice Color", () => updateSlice(pixelDocument, activeSlice.id, {color: `${event.target.value}${activeSlice.color.slice(7, 9) || "ff"}`}))} /></label>
+              {!activeSliceKey && <div className="slice-tool-actions"><span className="panel-hint">{language === "zh" ? "当前帧没有切片关键帧" : "No slice key on the current frame"}</span><button className="panel-command" type="button" onClick={addCurrentSliceKey}>{language === "zh" ? "新建当前帧关键帧" : "Add key on current frame"}</button></div>}
+              {activeSliceKey && <>
+                <div className="cel-transform-fields"><label><span>X</span><input type="number" value={activeSliceKey.x} onChange={(event) => editCurrentSliceGeometry({x: Math.max(0, Math.round(Number(event.target.value) || 0))})} /></label><label><span>Y</span><input type="number" value={activeSliceKey.y} onChange={(event) => editCurrentSliceGeometry({y: Math.max(0, Math.round(Number(event.target.value) || 0))})} /></label></div>
+                <div className="cel-transform-fields"><label><span>{ui.width}</span><input type="number" min="1" value={activeSliceKey.width} onChange={(event) => editCurrentSliceGeometry({width: Math.max(1, Math.round(Number(event.target.value) || 1))})} /></label><label><span>{ui.height}</span><input type="number" min="1" value={activeSliceKey.height} onChange={(event) => editCurrentSliceGeometry({height: Math.max(1, Math.round(Number(event.target.value) || 1))})} /></label></div>
+                <div className="cel-transform-fields"><label><span>{language === "zh" ? "枢轴 X" : "Pivot X"}</span><input type="number" value={activeSliceKey.pivot?.x ?? 0} onChange={(event) => editCurrentSliceKey({pivot: {...(activeSliceKey.pivot ?? {x: 0, y: 0}), x: Math.round(Number(event.target.value) || 0)}}, "Edit Slice Pivot")} /></label><label><span>{language === "zh" ? "枢轴 Y" : "Pivot Y"}</span><input type="number" value={activeSliceKey.pivot?.y ?? 0} onChange={(event) => editCurrentSliceKey({pivot: {...(activeSliceKey.pivot ?? {x: 0, y: 0}), y: Math.round(Number(event.target.value) || 0)}}, "Edit Slice Pivot")} /></label></div>
+                <div className="slice-tool-actions"><button className="panel-command" type="button" onClick={() => editCurrentSliceKey({center: activeSliceKey.center ? undefined : {x: Math.floor(activeSliceKey.width / 4), y: Math.floor(activeSliceKey.height / 4), width: Math.max(1, Math.floor(activeSliceKey.width / 2)), height: Math.max(1, Math.floor(activeSliceKey.height / 2))}}, "Toggle Nine-patch")}>{activeSliceKey.center ? (language === "zh" ? "移除九宫格中心" : "Remove nine-patch center") : (language === "zh" ? "添加九宫格中心" : "Add nine-patch center")}</button><button className="panel-command is-danger" type="button" onClick={deleteCurrentSliceKey} disabled={activeSlice.keys.length <= 1} title={activeSlice.keys.length <= 1 ? (language === "zh" ? "切片至少需要一个关键帧" : "A slice must keep one key") : undefined}>{language === "zh" ? "删除当前帧关键帧" : "Delete current-frame key"}</button></div>
+                {activeSliceKey.center && <>
+                  <div className="panel-subheading"><span>{language === "zh" ? "九宫格中心" : "Nine-patch center"}</span></div>
+                  <div className="cel-transform-fields"><label><span>X</span><input type="number" value={activeSliceKey.center.x} onChange={(event) => editCurrentSliceKey({center: {...activeSliceKey.center!, x: Math.max(0, Math.round(Number(event.target.value) || 0))}}, "Edit Nine-patch")} /></label><label><span>Y</span><input type="number" value={activeSliceKey.center.y} onChange={(event) => editCurrentSliceKey({center: {...activeSliceKey.center!, y: Math.max(0, Math.round(Number(event.target.value) || 0))}}, "Edit Nine-patch")} /></label></div>
+                  <div className="cel-transform-fields"><label><span>{ui.width}</span><input type="number" min="1" value={activeSliceKey.center.width} onChange={(event) => editCurrentSliceKey({center: {...activeSliceKey.center!, width: Math.max(1, Math.round(Number(event.target.value) || 1))}}, "Edit Nine-patch")} /></label><label><span>{ui.height}</span><input type="number" min="1" value={activeSliceKey.center.height} onChange={(event) => editCurrentSliceKey({center: {...activeSliceKey.center!, height: Math.max(1, Math.round(Number(event.target.value) || 1))}}, "Edit Nine-patch")} /></label></div>
+                </>}
+              </>}
+              <div className="slice-tool-actions"><button className="panel-command is-danger" type="button" onClick={() => mutateDocument("Delete Slice", () => deleteSlice(pixelDocument, activeSlice.id))}>{language === "zh" ? "删除切片" : "Delete slice"}</button></div>
             </>}
           </>}
         </section>}
@@ -5421,13 +6386,16 @@ function App() {
           </div>
           <div className="timeline-toolbar-row timeline-animation-row">
             <div className="panel-actions">
-              <button title={ui.addFrame} disabled={isPlaying} onClick={() => mutateDocument("Add Frame", () => { const extendLoop = shouldExtendTimelineLoopAfterInsertion(activeTab); const frame = addFrame(pixelDocument); extendTimelineLoopAfterInsertion(activeTab, extendLoop); activeTab.selectedFrameIds = [frame.id]; activeTab.frameSelectionAnchorId = frame.id; setTabCommandScope(activeTab, "frame"); return true; })}><Plus size={14} /></button>
+              <button title={ui.addFrame} disabled={isPlaying} onClick={() => dispatchCommandShortcut("addFrame")}><Plus size={14} /></button>
+              <button title={ui.newEmptyFrame} disabled={isPlaying} onClick={() => dispatchCommandShortcut("newEmptyFrame")}><FilePlus size={14} /></button>
               <button title={ui.duplicateFrame} disabled={isPlaying} onClick={() => mutateDocument("Duplicate Frame", () => { const extendLoop = shouldExtendTimelineLoopAfterInsertion(activeTab); const frames = duplicateFrames(pixelDocument, selectedFrameIds); if (frames.length === 0) return false; extendTimelineLoopAfterInsertion(activeTab, extendLoop); activeTab.selectedFrameIds = frames.map((frame) => frame.id); activeTab.frameSelectionAnchorId = frames[0].id; setTabCommandScope(activeTab, "frame"); return true; })}><Copy size={14} /></button>
               <button title={ui.deleteFrame} disabled={isPlaying || selectedFrameIds.length >= pixelDocument.frames.length} onClick={deleteCurrentFrames}><Trash2 size={14} /></button>
               <button title={ui.moveFrameBackward} disabled={isPlaying || !canMoveFramesBackward} onClick={() => mutateDocument("Move Frame", () => { const changed = moveFrames(pixelDocument, selectedFrameIds, "backward"); if (changed) setTabCommandScope(activeTab, "frame"); return changed; })}><ChevronLeft size={14} /></button>
               <button title={ui.moveFrameForward} disabled={isPlaying || !canMoveFramesForward} onClick={() => mutateDocument("Move Frame", () => { const changed = moveFrames(pixelDocument, selectedFrameIds, "forward"); if (changed) setTabCommandScope(activeTab, "frame"); return changed; })}><ChevronRight size={14} /></button>
               <button title={language === "zh" ? "反转所选帧" : "Reverse selected frames"} disabled={isPlaying || selectedFrameIds.length < 2} onClick={() => mutateDocument("Reverse Frames", () => reverseFrames(pixelDocument, selectedFrameIds))}><RotateCcw size={14} /></button>
               <button title={language === "zh" ? "创建空动画格" : "Create cel"} disabled={isPlaying || !isCelLayer(activeLayer)} onClick={() => mutateDocument("Create Cels", () => { const addresses = activeTab.commandScope === "cels" && selectedCels.length ? selectedCels : [{layerId: activeLayer.id, frameId: pixelDocument.activeFrameId}]; let changed = false; for (const address of addresses) { if (getCel(pixelDocument, address.layerId, address.frameId)) continue; changed = Boolean(ensureCel(pixelDocument, address.layerId, address.frameId)) || changed; } return changed; })}><FilePlus size={14} /></button>
+              <button title={ui.duplicateCels} disabled={isPlaying || (!activeCel && !selectedCels.some(({layerId, frameId}) => Boolean(getCel(pixelDocument, layerId, frameId))))} onClick={() => dispatchCommandShortcut("duplicateCels")}><Copy size={14} /></button>
+              <button title={ui.duplicateLinkedCels} disabled={isPlaying || (!activeCel && !selectedCels.some(({layerId, frameId}) => Boolean(getCel(pixelDocument, layerId, frameId))))} onClick={() => dispatchCommandShortcut("duplicateLinkedCels")}><Link2 size={14} /></button>
               <button title={language === "zh" ? "删除动画格" : "Delete cel"} disabled={isPlaying || !selectedCels.some(({layerId, frameId}) => Boolean(getCel(pixelDocument, layerId, frameId)))} onClick={() => {
                 if (preferences.alerts.deleteCel && !window.confirm(language === "zh" ? "删除所选动画格？" : "Delete the selected cels?")) return;
                 mutateDocument("Delete Cels", () => { let changed = false; for (const address of selectedCels) changed = deleteCel(pixelDocument, address.layerId, address.frameId) || changed; return changed; });
@@ -5450,6 +6418,7 @@ function App() {
             <span className="timeline-toolbar-separator" />
             <label className="timeline-select timeline-tags"><span>{ui.tags}</span><select value={activeTag?.id ?? ""} onChange={(event) => selectTag(event.target.value)}><option value="">{ui.noTag}</option>{pixelDocument.tags.map((tag) => <option key={tag.id} value={tag.id}>{tag.name}</option>)}</select></label>
             <div className="panel-actions">
+              <button className={activeTag ? "is-active" : ""} title={ui.focusTag} aria-label={ui.focusTag} aria-pressed={Boolean(activeTag)} disabled={isPlaying || !focusableTagId} onClick={() => dispatchCommandShortcut("focusTag")}><Target size={14} /></button>
               <button title={ui.addTag} disabled={isPlaying} onClick={openNewTagDialog}><Plus size={14} /></button>
               <button title={ui.editTag} disabled={isPlaying || !activeTag} onClick={openEditTagDialog}><Pencil size={13} /></button>
               <button title={ui.deleteTag} disabled={isPlaying || !activeTag} onClick={removeActiveTag}><Trash2 size={13} /></button>
@@ -5464,7 +6433,14 @@ function App() {
               const cel = getCel(pixelDocument, layer.id, pixelDocument.activeFrameId);
               const selected = selectedLayerIdSet.has(layer.id);
               const collapsed = activeTab.collapsedGroupIds.has(layer.id);
-              return <div className={`timeline-layer-row${selected ? " is-selected" : ""}${layer.id === activeLayer.id ? " is-active" : ""}${layer.kind === "group" ? " is-group" : ""}`} style={{paddingLeft: 4 + depth * 12}} data-layer-id={layer.id} key={layer.id} role="option" aria-selected={selected} tabIndex={layer.id === activeLayer.id ? 0 : -1} onClick={(event) => selectLayer(layer.id, event.shiftKey, event.ctrlKey || event.metaKey)} onKeyDown={(event) => {
+              return <div className={`timeline-layer-row${selected ? " is-selected" : ""}${layer.id === activeLayer.id ? " is-active" : ""}${layer.kind === "group" ? " is-group" : ""}`} style={{paddingLeft: 4 + depth * 12}} data-layer-id={layer.id} key={layer.id} role="option" aria-selected={selected} tabIndex={layer.id === activeLayer.id ? 0 : -1} onClick={(event) => {
+                if (event.ctrlKey || event.metaKey) {
+                  selectLayer(layer.id, event.shiftKey);
+                  selectLayerOpaqueContent(layer.id);
+                  return;
+                }
+                selectLayer(layer.id, event.shiftKey, false);
+              }} onKeyDown={(event) => {
                 if (event.target !== event.currentTarget) return;
                 if (isActivationKey(event.key)) {
                   event.preventDefault();
@@ -5492,8 +6468,8 @@ function App() {
               </div>;
             })}
           </div>
-          <div className="timeline-frames" role="grid" aria-label={ui.frames} aria-multiselectable="true" aria-colcount={pixelDocument.frames.length} aria-rowcount={timelineEntries.length + 1}>
-            <div className="timeline-frame-header" role="row" style={{gridTemplateColumns: `repeat(${pixelDocument.frames.length}, 42px)`}}>{pixelDocument.frames.map((frame, index) => {
+          <div className="timeline-frames" role="grid" aria-label={ui.frames} aria-multiselectable="true" aria-colcount={pixelDocument.frames.length + 1} aria-rowcount={timelineEntries.length + 1}>
+            <div className="timeline-frame-header" role="row" style={{gridTemplateColumns: `repeat(${pixelDocument.frames.length + 1}, 42px)`}}>{pixelDocument.frames.map((frame, index) => {
               const tag = pixelDocument.tags.find((candidate) => frameIDsInRange(pixelDocument, candidate.fromFrameId, candidate.toFrameId).includes(frame.id));
               const active = frame.id === pixelDocument.activeFrameId;
               const rangeSelected = selectedFrameIds.includes(frame.id);
@@ -5515,8 +6491,8 @@ function App() {
                 }}
                 onKeyDown={(event) => navigateTimelineFrame(event, frame.id)}
               >{tag && <span className="timeline-tag-mark" style={{backgroundColor: tag.color}} />}{index + preferences.timeline.firstFrame}</button>;
-            })}</div>
-            {timelineEntries.map(({layer}, rowIndex) => <div className={`timeline-cel-row${layer.kind === "group" ? " is-group" : ""}`} key={layer.id} role="row" aria-rowindex={rowIndex + 2} style={{gridTemplateColumns: `repeat(${pixelDocument.frames.length}, 42px)`}}>{pixelDocument.frames.map((frame, index) => {
+            })}<div className="timeline-frame-append-header" role="columnheader" aria-colindex={pixelDocument.frames.length + 1} aria-label={language === "zh" ? "时间轴末尾" : "Timeline end"}><Plus size={12} /></div></div>
+            {timelineEntries.map(({layer}, rowIndex) => <div className={`timeline-cel-row${layer.kind === "group" ? " is-group" : ""}`} key={layer.id} role="row" aria-rowindex={rowIndex + 2} style={{gridTemplateColumns: `repeat(${pixelDocument.frames.length + 1}, 42px)`}}>{pixelDocument.frames.map((frame, index) => {
               const cel = getCel(pixelDocument, layer.id, frame.id);
               if (layer.kind === "group") return <div key={frame.id} className="timeline-cel is-group-cell" role="gridcell" aria-colindex={index + 1} />;
               const active = layer.id === activeLayer.id && frame.id === pixelDocument.activeFrameId;
@@ -5531,9 +6507,15 @@ function App() {
                 aria-colindex={index + 1}
                 aria-selected={celSelected}
                 aria-current={active ? "true" : undefined}
-                aria-label={`${layer.name}, ${ui.frame} ${index + 1}`}
+                aria-label={`${layer.name}, ${ui.frame} ${index + 1}${cel ? (language === "zh" ? "，可拖动移动或复制" : ", draggable") : ""}`}
+                title={cel ? (language === "zh" ? "拖动移动；按 Ctrl/Cmd 拖动复制" : "Drag to move; hold Ctrl/Cmd to copy") : undefined}
                 data-cel-key={key}
+                draggable={Boolean(cel) && !isPlaying}
                 tabIndex={celGridOwnsTabStop && active ? 0 : -1}
+                onDragStart={(event) => beginTimelineCelDrag(event, layer.id, frame.id)}
+                onDragOver={handleTimelineCelDragOver}
+                onDrop={(event) => finishTimelineCelDrag(event, layer.id, frame.id)}
+                onDragEnd={cancelTimelineCelDrag}
                 onClick={(event) => {
                   const grid = event.currentTarget.closest<HTMLElement>("[role=grid]");
                   const nextActive = selectCel(layer.id, frame.id, event.shiftKey, event.ctrlKey || event.metaKey);
@@ -5541,7 +6523,20 @@ function App() {
                 }}
                 onKeyDown={(event) => navigateTimelineCel(event, layer.id, frame.id)}
               >{linked ? <Link2 size={11} /> : <span />}</button>;
-            })}</div>)}
+            })}{layer.kind === "group"
+              ? <div key="append" className="timeline-cel is-group-cell" role="gridcell" aria-colindex={pixelDocument.frames.length + 1} />
+              : <button
+                key="append"
+                className="timeline-cel timeline-cel-append"
+                type="button"
+                role="gridcell"
+                aria-colindex={pixelDocument.frames.length + 1}
+                aria-label={language === "zh" ? `${layer.name}，拖放到末尾以追加帧` : `${layer.name}, drop here to append frames`}
+                title={language === "zh" ? "拖放到此处以在末尾追加帧" : "Drop here to append frames"}
+                onDragOver={handleTimelineCelDragOver}
+                onDrop={(event) => finishTimelineCelDrag(event, layer.id, undefined, pixelDocument.frames.length)}
+              ><Plus size={12} /></button>}
+            </div>)}
           </div>
         </div>
       </section>}
@@ -5582,7 +6577,7 @@ function App() {
         <form className="canvas-dialog editor-dialog preferences-dialog" role="dialog" aria-modal="true" aria-label={language === "zh" ? "偏好设置" : "Preferences"} onSubmit={(event) => { event.preventDefault(); setSettingsOpen(false); }}>
           <h2>{language === "zh" ? "偏好设置" : "Preferences"}</h2>
           <PreferencesPanel preferences={preferences} onChange={applyPreferences} zh={language === "zh"} />
-          <div className="preferences-heading"><span>{language === "zh" ? "工作区布局" : "Workspace layouts"}</span><button type="button" onClick={() => { setInspectorWidth(defaultWorkspaceDimensions.inspectorWidth); setTimelineHeight(defaultWorkspaceDimensions.timelineHeight); setInspectorVisible(defaultWorkspaceVisibility.inspectorVisible); setTimelineVisible(defaultWorkspaceVisibility.timelineVisible); setWorkspaceLayoutNotice("reset"); }}>{language === "zh" ? "重置布局" : "Reset layout"}</button></div>
+          <div className="preferences-heading"><span>{language === "zh" ? "工作区布局" : "Workspace layouts"}</span><button type="button" onClick={() => { setInspectorWidth(defaultWorkspaceDimensions.inspectorWidth); setTimelineHeight(defaultWorkspaceDimensions.timelineHeight); setInspectorVisible(defaultWorkspaceVisibility.inspectorVisible); setTimelineVisible(defaultWorkspaceVisibility.timelineVisible); setCanvasOnly(false); setWorkspaceLayoutNotice("reset"); }}>{language === "zh" ? "重置布局" : "Reset layout"}</button></div>
           <div className="preferences-general">
             <label className="dialog-field"><span>{language === "zh" ? "侧栏宽度" : "Inspector width"}</span><input type="number" min="190" max="420" value={inspectorWidth} onChange={(event) => setInspectorWidth(Math.max(190, Math.min(420, Math.round(Number(event.target.value) || 190))))} /></label>
             <label className="dialog-field"><span>{language === "zh" ? "时间轴高度" : "Timeline height"}</span><input type="number" min="150" max="520" value={timelineHeight} onChange={(event) => setTimelineHeight(Math.max(150, Math.min(520, Math.round(Number(event.target.value) || 150))))} /></label>
@@ -5601,6 +6596,7 @@ function App() {
               if (!layout) return;
               setInspectorWidth(layout.inspectorWidth);
               setTimelineHeight(layout.timelineHeight);
+              setCanvasOnly(false);
               setWorkspaceLayoutNotice("loaded");
             }}>{language === "zh" ? "应用布局" : "Apply layout"}</button>
             <button className="panel-command" type="button" disabled={!workspaceLayoutSelected} onClick={() => {
@@ -5620,13 +6616,64 @@ function App() {
           })[workspaceLayoutNotice]}</p>}
           <div className="preferences-heading"><span>{language === "zh" ? "命令快捷键" : "Command shortcuts"}</span><button type="button" onClick={() => setCommandShortcutAssignments({...defaultCommandShortcuts})}>{language === "zh" ? "恢复默认" : "Reset"}</button></div>
           <div className="command-shortcut-grid">
-            {(Object.keys(defaultCommandShortcuts) as CommandShortcutID[]).map((command) => <label key={command}><span>{commandShortcutLabels[language][command]}</span><input type="text" readOnly value={commandShortcutAssignments[command]} placeholder={language === "zh" ? "未设置" : "Unassigned"} aria-label={`${commandShortcutLabels[language][command]} ${language === "zh" ? "快捷键" : "shortcut"}`} onKeyDown={(event) => captureCommandShortcut(command, event)} onFocus={(event) => event.currentTarget.select()} /></label>)}
+            {(Object.keys(defaultCommandShortcuts) as CommandShortcutID[]).map((command) => <label key={command}><span>{commandShortcutLabels[language][command]}</span><input type="text" readOnly value={formatShortcutForPlatform(commandShortcutAssignments[command])} placeholder={language === "zh" ? "未设置" : "Unassigned"} aria-label={`${commandShortcutLabels[language][command]} ${language === "zh" ? "快捷键" : "shortcut"}`} onKeyDown={(event) => captureCommandShortcut(command, event)} onFocus={(event) => event.currentTarget.select()} /></label>)}
           </div>
           <div className="preferences-heading"><span>{language === "zh" ? "工具快捷键" : "Tool shortcuts"}</span><button type="button" onClick={resetToolShortcuts}>{language === "zh" ? "恢复默认" : "Reset"}</button></div>
           <div className="shortcut-grid">
             {tools.map(({id, icon: Icon}) => <label key={id}><span><Icon size={14} />{ui.toolsByID[id]}</span><input type="text" value={shortcutAssignments[id].toUpperCase()} maxLength={1} aria-label={`${ui.toolsByID[id]} ${language === "zh" ? "快捷键" : "shortcut"}`} onChange={(event) => updateToolShortcut(id, event.target.value)} onFocus={(event) => event.currentTarget.select()} /></label>)}
           </div>
           <div className="dialog-actions"><button type="submit">{language === "zh" ? "完成" : "Done"}</button></div>
+        </form>
+      </div>}
+
+      {slicePropertiesDialog && <div className="dialog-backdrop" role="presentation">
+        <form className="canvas-dialog editor-dialog" role="dialog" aria-modal="true" aria-labelledby="slice-properties-title" onKeyDown={(event) => { if (event.key === "Escape") { event.stopPropagation(); setSlicePropertiesDialog(null); } }} onSubmit={(event) => { event.preventDefault(); applySlicePropertiesDialog(); }}>
+          <h2 id="slice-properties-title">{language === "zh" ? "切片属性" : "Slice Properties"}</h2>
+          <div className="dialog-field-grid">
+            <label className="dialog-field dialog-field-wide"><span>{language === "zh" ? "名称" : "Name"}</span><input type="text" autoFocus value={slicePropertiesDialog.name} onChange={(event) => setSlicePropertiesDialog({...slicePropertiesDialog, name: event.target.value})} /></label>
+            <label className="dialog-color-field"><span>{language === "zh" ? "颜色" : "Color"}</span><input type="color" value={slicePropertiesDialog.color} onChange={(event) => setSlicePropertiesDialog({...slicePropertiesDialog, color: event.target.value})} /></label>
+            <label className="dialog-field"><span>{language === "zh" ? "关键帧" : "Key frame"}</span><select value={slicePropertiesDialog.frameId} onChange={(event) => openSliceProperties(slicePropertiesDialog.sliceId, event.target.value)}>{pixelDocument.frames.map((frame, index) => slicePropertiesDialog.sliceId && pixelDocument.slices.find((slice) => slice.id === slicePropertiesDialog.sliceId)?.keys.some((key) => key.frameId === frame.id) ? <option value={frame.id} key={frame.id}>{index + preferences.timeline.firstFrame}</option> : null)}</select></label>
+            <label className="dialog-field"><span>X</span><input type="number" value={slicePropertiesDialog.x} onChange={(event) => setSlicePropertiesDialog({...slicePropertiesDialog, x: event.target.value})} /></label>
+            <label className="dialog-field"><span>Y</span><input type="number" value={slicePropertiesDialog.y} onChange={(event) => setSlicePropertiesDialog({...slicePropertiesDialog, y: event.target.value})} /></label>
+            <label className="dialog-field"><span>{ui.width}</span><input type="number" min="1" value={slicePropertiesDialog.width} onChange={(event) => setSlicePropertiesDialog({...slicePropertiesDialog, width: event.target.value})} /></label>
+            <label className="dialog-field"><span>{ui.height}</span><input type="number" min="1" value={slicePropertiesDialog.height} onChange={(event) => setSlicePropertiesDialog({...slicePropertiesDialog, height: event.target.value})} /></label>
+          </div>
+          <div className="panel-subheading"><span>{language === "zh" ? "九宫格中心（留空移除）" : "Nine-patch center (blank to remove)"}</span></div>
+          <div className="dialog-field-grid">
+            <label className="dialog-field"><span>X</span><input type="number" value={slicePropertiesDialog.centerX} onChange={(event) => setSlicePropertiesDialog({...slicePropertiesDialog, centerX: event.target.value})} /></label>
+            <label className="dialog-field"><span>Y</span><input type="number" value={slicePropertiesDialog.centerY} onChange={(event) => setSlicePropertiesDialog({...slicePropertiesDialog, centerY: event.target.value})} /></label>
+            <label className="dialog-field"><span>{ui.width}</span><input type="number" min="1" value={slicePropertiesDialog.centerWidth} onChange={(event) => setSlicePropertiesDialog({...slicePropertiesDialog, centerWidth: event.target.value})} /></label>
+            <label className="dialog-field"><span>{ui.height}</span><input type="number" min="1" value={slicePropertiesDialog.centerHeight} onChange={(event) => setSlicePropertiesDialog({...slicePropertiesDialog, centerHeight: event.target.value})} /></label>
+          </div>
+          <div className="panel-subheading"><span>{language === "zh" ? "枢轴（留空移除）" : "Pivot (blank to remove)"}</span></div>
+          <div className="dialog-field-grid">
+            <label className="dialog-field"><span>X</span><input type="number" value={slicePropertiesDialog.pivotX} onChange={(event) => setSlicePropertiesDialog({...slicePropertiesDialog, pivotX: event.target.value})} /></label>
+            <label className="dialog-field"><span>Y</span><input type="number" value={slicePropertiesDialog.pivotY} onChange={(event) => setSlicePropertiesDialog({...slicePropertiesDialog, pivotY: event.target.value})} /></label>
+          </div>
+          <div className="dialog-actions"><button type="button" onClick={() => setSlicePropertiesDialog(null)}>{ui.cancel}</button><button type="submit">{ui.apply}</button></div>
+        </form>
+      </div>}
+
+      {layerPropertiesDialog && <div className="dialog-backdrop" role="presentation">
+        <form className="canvas-dialog editor-dialog" role="dialog" aria-modal="true" aria-labelledby="layer-properties-title" onKeyDown={(event) => { if (event.key === "Escape") { event.stopPropagation(); setLayerPropertiesDialog(null); } }} onSubmit={(event) => { event.preventDefault(); applyLayerPropertiesDialog(); }}>
+          <h2 id="layer-properties-title">{language === "zh" ? "图层属性" : "Layer properties"}</h2>
+          <p className="dialog-hint">{language === "zh" ? `编辑 ${layerPropertiesDialog.layerIds.length} 个图层。空值或“保持”表示保留原值。` : `Editing ${layerPropertiesDialog.layerIds.length} layers. Empty fields or “Keep” preserve each value.`}</p>
+          <div className="dialog-field-grid">
+            <label className="dialog-field dialog-field-wide"><span>{language === "zh" ? "名称（仅单个图层）" : "Name (single layer only)"}</span><input type="text" autoFocus value={layerPropertiesDialog.name} disabled={layerPropertiesDialog.layerIds.length !== 1} placeholder={language === "zh" ? "保持原名称" : "Keep current name"} onChange={(event) => setLayerPropertiesDialog({...layerPropertiesDialog, name: event.target.value})} /></label>
+            <label className="dialog-field"><span>{language === "zh" ? "不透明度 (%)" : "Opacity (%)"}</span><input type="number" min="0" max="100" step="any" value={layerPropertiesDialog.opacity} placeholder="Keep" onChange={(event) => setLayerPropertiesDialog({...layerPropertiesDialog, opacity: event.target.value})} /></label>
+            <label className="dialog-field"><span>{language === "zh" ? "混合模式" : "Blend mode"}</span><select value={layerPropertiesDialog.blendMode} onChange={(event) => setLayerPropertiesDialog({...layerPropertiesDialog, blendMode: event.target.value as LayerPropertiesDialogState["blendMode"]})}><option value="keep">{language === "zh" ? "保持" : "Keep"}</option>{allBlendModes.map((mode) => <option value={mode} key={mode}>{blendModeText[language][mode]}</option>)}</select></label>
+            <label className="dialog-field"><span>{language === "zh" ? "角色" : "Role"}</span><select value={layerPropertiesDialog.role} onChange={(event) => setLayerPropertiesDialog({...layerPropertiesDialog, role: event.target.value as LayerRoleProperty})}><option value="keep">{language === "zh" ? "保持" : "Keep"}</option>{(["standard", "background", "reference"] as LayerRole[]).map((role) => <option value={role} key={role}>{layerRoleText[language][role]}</option>)}</select></label>
+            {(["visible", "locked", "alphaLock", "continuous"] as const).map((property) => {
+              const labelsByProperty = {
+                visible: language === "zh" ? "可见" : "Visible",
+                locked: language === "zh" ? "锁定" : "Locked",
+                alphaLock: language === "zh" ? "锁定透明度" : "Alpha lock",
+                continuous: language === "zh" ? "连续动画格" : "Continuous",
+              };
+              return <label className="dialog-field" key={property}><span>{labelsByProperty[property]}</span><select value={layerPropertiesDialog[property]} onChange={(event) => setLayerPropertiesDialog({...layerPropertiesDialog, [property]: event.target.value as TriStateProperty})}><option value="keep">{language === "zh" ? "保持" : "Keep"}</option><option value="on">{language === "zh" ? "开启" : "On"}</option><option value="off">{language === "zh" ? "关闭" : "Off"}</option></select></label>;
+            })}
+          </div>
+          <div className="dialog-actions"><button type="button" onClick={() => setLayerPropertiesDialog(null)}>{ui.cancel}</button><button type="submit">{ui.apply}</button></div>
         </form>
       </div>}
 
@@ -5756,6 +6803,7 @@ function App() {
         <form className="canvas-dialog editor-dialog" role="dialog" aria-modal="true" aria-label={language === "zh" ? "导入精灵表" : "Import sprite sheet"} onSubmit={(event) => { event.preventDefault(); applySpriteSheetImport(); }}>
           <h2>{language === "zh" ? "导入精灵表" : "Import sprite sheet"}</h2>
           <div className="dialog-field-grid">
+            <label className="dialog-field dialog-field-wide"><span>{language === "zh" ? "排列方式" : "Layout"}</span><select value={spriteImportDialog.layout} onChange={(event) => setSpriteImportDialog({...spriteImportDialog, layout: event.target.value as SpriteSheetImportLayout})}><option value="horizontal">{language === "zh" ? "横向" : "Horizontal"}</option><option value="vertical">{language === "zh" ? "纵向" : "Vertical"}</option><option value="matrix">{language === "zh" ? "矩阵" : "Matrix"}</option></select></label>
             <label className="dialog-field"><span>{language === "zh" ? "帧宽" : "Frame width"}</span><input type="number" min="1" max={spriteImportDialog.image.width} value={spriteImportDialog.frameWidth} onChange={(event) => setSpriteImportDialog({...spriteImportDialog, frameWidth: Number(event.target.value) || 1})} /></label>
             <label className="dialog-field"><span>{language === "zh" ? "帧高" : "Frame height"}</span><input type="number" min="1" max={spriteImportDialog.image.height} value={spriteImportDialog.frameHeight} onChange={(event) => setSpriteImportDialog({...spriteImportDialog, frameHeight: Number(event.target.value) || 1})} /></label>
             <label className="dialog-field"><span>{language === "zh" ? "水平偏移" : "Offset X"}</span><input type="number" min="0" max={spriteImportDialog.image.width - 1} value={spriteImportDialog.offsetX} onChange={(event) => setSpriteImportDialog({...spriteImportDialog, offsetX: Number(event.target.value) || 0})} /></label>
@@ -5769,15 +6817,18 @@ function App() {
 
       {exportDialog && <div className="dialog-backdrop" role="presentation">
         <form className="canvas-dialog editor-dialog export-dialog" role="dialog" aria-modal="true" aria-label={ui.exportOptions} onSubmit={(event) => { event.preventDefault(); void exportAnimation(exportDialog); }}>
-          <h2>{exportDialog === "gif" ? ui.exportGIF : ui.exportSpriteSheet}</h2>
+          <h2>{exportDialog === "png" ? ui.exportPNG : exportDialog === "gif" ? ui.exportGIF : ui.exportSpriteSheet}</h2>
           <div className="dialog-field-grid">
-            <label className="dialog-field"><span>{ui.frameRange}</span><select value={exportFrameRange} onChange={(event) => setExportFrameRange(event.target.value as "all" | "selected" | "loop")}><option value="all">{ui.allFrames}</option><option value="selected">{ui.selectedFrames}</option><option value="loop">{ui.loopRange}</option></select></label>
-            <label className="dialog-field"><span>{ui.direction}</span><select value={exportDirection} onChange={(event) => setExportDirection(event.target.value as TagDirection)}><option value="forward">{ui.forward}</option><option value="reverse">{ui.reverse}</option><option value="pingpong">{ui.pingpong}</option></select></label>
-            <label className="dialog-field"><span>{ui.scale}</span><select value={exportScale} onChange={(event) => setExportScale(Number(event.target.value))}>{[1, 2, 3, 4, 5, 6, 7, 8].map((scale) => <option value={scale} key={scale}>{scale}×</option>)}</select></label>
+            {exportDialog !== "png" && <>
+              <label className="dialog-field"><span>{ui.frameRange}</span><select value={exportFrameRange} onChange={(event) => setExportFrameRange(event.target.value as "all" | "selected" | "loop")}><option value="all">{ui.allFrames}</option><option value="selected">{ui.selectedFrames}</option><option value="loop">{ui.loopRange}</option></select></label>
+              <label className="dialog-field"><span>{ui.direction}</span><select value={exportDirection} onChange={(event) => setExportDirection(event.target.value as TagDirection)}><option value="forward">{ui.forward}</option><option value="reverse">{ui.reverse}</option><option value="pingpong">{ui.pingpong}</option></select></label>
+              <label className="dialog-field"><span>{ui.scale}</span><select value={exportScale} onChange={(event) => setExportScale(Number(event.target.value))}>{[1, 2, 3, 4, 5, 6, 7, 8].map((scale) => <option value={scale} key={scale}>{scale}×</option>)}</select></label>
+            </>}
+            <label className="dialog-checkbox dialog-field-wide"><input type="checkbox" checked={exportApplyPixelRatio} onChange={(event) => setExportApplyPixelRatio(event.target.checked)} /><span>{ui.applyPixelRatio} ({pixelDocument.pixelAspectRatio.width}:{pixelDocument.pixelAspectRatio.height})</span></label>
             {exportDialog === "gif" ? <>
               <label className="dialog-field"><span>{ui.playback}</span><select value={gifLoopMode} onChange={(event) => setGifLoopMode(event.target.value as "once" | "forever" | "count")}><option value="once">{ui.once}</option><option value="forever">{ui.forever}</option><option value="count">{ui.repeatCount}</option></select></label>
               {gifLoopMode === "count" && <label className="dialog-field"><span>{ui.repeatCount}</span><input type="number" min="1" max="65535" value={gifLoopCount} onChange={(event) => setGifLoopCount(Number(event.target.value))} /></label>}
-            </> : <>
+            </> : exportDialog === "sheet" ? <>
               <label className="dialog-field"><span>{ui.layout}</span><select value={sheetLayout} onChange={(event) => setSheetLayout(event.target.value as SpriteSheetLayout)}><option value="horizontal">{ui.sheetHorizontal}</option><option value="vertical">{ui.sheetVertical}</option><option value="grid">{ui.sheetGrid}</option></select></label>
               {sheetLayout === "grid" && <label className="dialog-field"><span>{ui.columns}</span><input type="number" min="1" max="65535" value={sheetColumns} onChange={(event) => setSheetColumns(Math.max(1, Math.round(Number(event.target.value) || 1)))} /></label>}
               <label className="dialog-field"><span>{ui.borderPadding}</span><input type="number" min="0" max="2048" value={sheetBorderPadding} onChange={(event) => setSheetBorderPadding(Math.max(0, Math.round(Number(event.target.value) || 0)))} /></label>
@@ -5785,9 +6836,41 @@ function App() {
               <label className="dialog-field"><span>{language === "zh" ? "拆分" : "Split by"}</span><select value={sheetSplitBy} disabled={sheetPacked} onChange={(event) => setSheetSplitBy(event.target.value as "none" | "tag" | "layer")}><option value="none">{language === "zh" ? "不拆分" : "None"}</option><option value="tag">{language === "zh" ? "帧标签" : "Frame tag"}</option><option value="layer">{language === "zh" ? "图层" : "Layer"}</option></select></label>
               <label className="dialog-checkbox dialog-field-wide"><input type="checkbox" checked={sheetPacked} onChange={(event) => { setSheetPacked(event.target.checked); if (event.target.checked) setSheetSplitBy("none"); }} /><span>{language === "zh" ? "裁切透明边缘并紧凑打包" : "Trim transparency and pack atlas"}</span></label>
               <label className="dialog-checkbox dialog-field-wide"><input type="checkbox" checked={sheetAtlasJSON} onChange={(event) => setSheetAtlasJSON(event.target.checked)} /><span>{ui.atlasJSON}</span></label>
-            </>}
+            </> : null}
           </div>
           <div className="dialog-actions"><button type="button" onClick={() => setExportDialog(null)}>{ui.cancel}</button><button type="submit">{ui.export}</button></div>
+        </form>
+      </div>}
+
+      {crossDocumentCopyDialog && <div className="dialog-backdrop" role="presentation">
+        <form className="canvas-dialog editor-dialog" role="dialog" aria-modal="true" aria-label={crossDocumentCopyDialog.mode === "layers" ? (language === "zh" ? "复制图层到其他文件" : "Copy layers to another document") : (language === "zh" ? "复制帧到其他文件" : "Copy frames to another document")} onSubmit={(event) => { event.preventDefault(); applyCrossDocumentCopy(); }}>
+          <h2>{crossDocumentCopyDialog.mode === "layers" ? (language === "zh" ? "复制所选图层到其他文件" : "Copy selected layers to another document") : (language === "zh" ? "复制所选帧到其他文件" : "Copy selected frames to another document")}</h2>
+          <p className="dialog-note">{crossDocumentCopyDialog.mode === "layers"
+            ? (language === "zh"
+              ? `将复制 ${crossDocumentCopyDialog.layerIds.length} 个图层及其动画格、链接、索引和图块资源。目标文件必须使用相同画布尺寸、颜色模式和帧数量。`
+              : `Copies ${crossDocumentCopyDialog.layerIds.length} layer(s) with their cels, links, indexes and tilemap resources. The target must use the same canvas size, color mode and frame count.`)
+            : (language === "zh"
+              ? `将复制 ${crossDocumentCopyDialog.frameIds.length} 个帧及其图层、动画格、标签和切片。目标文件必须使用相同画布尺寸与颜色模式。`
+              : `Copies ${crossDocumentCopyDialog.frameIds.length} frame(s) with their layers, cels, tags and slices. The target must use the same canvas size and color mode.`)}</p>
+          <label className="dialog-field dialog-field-wide"><span>{language === "zh" ? "目标文件" : "Target document"}</span><select value={crossDocumentCopyDialog.targetTabId} onChange={(event) => setCrossDocumentCopyDialog({...crossDocumentCopyDialog, targetTabId: event.target.value})}>
+            {tabs.filter((tab) => tab.id !== crossDocumentCopyDialog.sourceTabId).map((tab) => {
+              const sourceTab = tabs.find((candidate) => candidate.id === crossDocumentCopyDialog.sourceTabId);
+              const compatible = Boolean(sourceTab && (crossDocumentCopyDialog.mode === "layers"
+                ? canCopyLayersToDocument(sourceTab.document, tab.document)
+                : canCopyFramesToDocument(sourceTab.document, tab.document)));
+              const incompatibility = crossDocumentCopyDialog.mode === "layers"
+                ? (language === "zh" ? "（尺寸/模式/帧数不兼容）" : " (incompatible size/mode/frame count)")
+                : (language === "zh" ? "（尺寸/模式不兼容）" : " (incompatible)");
+              return <option key={tab.id} value={tab.id} disabled={!compatible}>{displayProjectName(tab.document.name)} · {tab.document.width}×{tab.document.height} · {tab.document.colorMode}{compatible ? "" : incompatibility}</option>;
+            })}
+          </select></label>
+          <div className="dialog-actions"><button type="button" onClick={() => setCrossDocumentCopyDialog(null)}>{ui.cancel}</button><button type="submit" disabled={!tabs.some((tab) => {
+            if (tab.id !== crossDocumentCopyDialog.targetTabId || tab.id === crossDocumentCopyDialog.sourceTabId) return false;
+            const sourceTab = tabs.find((candidate) => candidate.id === crossDocumentCopyDialog.sourceTabId);
+            return Boolean(sourceTab && (crossDocumentCopyDialog.mode === "layers"
+              ? canCopyLayersToDocument(sourceTab.document, tab.document)
+              : canCopyFramesToDocument(sourceTab.document, tab.document)));
+          })}>{ui.apply}</button></div>
         </form>
       </div>}
 

@@ -59,6 +59,11 @@ export interface TilePixelEditOptions {
   mode?: TilePixelSyncMode;
   palette?: readonly string[];
   transparentIndex?: number;
+  /**
+   * All distinct tilemap buffers that share the edited tileset. Auto mode
+   * uses these buffers to avoid editing a tile that is shared elsewhere.
+   */
+  referenceTilemaps?: readonly TilemapData[];
 }
 
 export interface TilePixelEditResult {
@@ -70,6 +75,16 @@ export interface TilePixelEditResult {
   localX: number;
   localY: number;
   created: boolean;
+}
+
+export interface TilesetCleanupResult {
+  tileset: Tileset;
+  tilemaps: TilemapData[];
+  changed: boolean;
+  /** Maps every original tile id to its retained id, or 0 when removed. */
+  tileIDMap: ReadonlyMap<number, number>;
+  removedTileIDs: number[];
+  deduplicatedTileIDs: number[];
 }
 
 let generatedID = 0;
@@ -487,6 +502,128 @@ export function tileReferenceCount(tilemap: TilemapData, tileId: number): number
   return [...tilemap.tiles].filter((value) => (value & tileIndexMask) === id).length;
 }
 
+/** Returns references across distinct tilemap buffers, ignoring flip flags. */
+export function tileReferenceCountInTilemaps(tilemaps: readonly TilemapData[], tileId: number): number {
+  const id = tileId & tileIndexMask;
+  if (id === 0) return 0;
+  const seen = new Set<TilemapData>();
+  let count = 0;
+  for (const tilemap of tilemaps) {
+    if (seen.has(tilemap)) continue;
+    seen.add(tilemap);
+    validateTilemapData(tilemap);
+    for (const value of tilemap.tiles) if ((value & tileIndexMask) === id) count += 1;
+  }
+  return count;
+}
+
+/**
+ * Compacts a tileset against all of its tilemap buffers.
+ *
+ * Auto pixel editing can transiently append tiles. This operation keeps the
+ * first referenced copy of each exact RGBA/index payload, remaps cells while
+ * preserving flip flags, and drops tiles that are no longer referenced.
+ * Tilemap dimensions and object identities are preserved by the in-place
+ * wrapper below, which is important for linked Cels.
+ */
+export function cleanupTileset(
+  tileset: Tileset,
+  tilemaps: readonly TilemapData[],
+): TilesetCleanupResult {
+  validateTileset(tileset);
+  const uniqueTilemaps: TilemapData[] = [];
+  const seenTilemaps = new Set<TilemapData>();
+  for (const tilemap of tilemaps) {
+    if (seenTilemaps.has(tilemap)) continue;
+    validateTilemapData(tilemap);
+    seenTilemaps.add(tilemap);
+    uniqueTilemaps.push(tilemap);
+  }
+
+  const tileByID = new Map(tileset.tiles.map((tile) => [tile.id, tile]));
+  const references = new Map<number, number>();
+  for (const tilemap of uniqueTilemaps) {
+    for (const value of tilemap.tiles) {
+      const id = tileValueIndex(value);
+      if (id === 0) continue;
+      if (!tileByID.has(id)) throw new Error(`Tilemap references unknown tile ${id}`);
+      references.set(id, (references.get(id) ?? 0) + 1);
+    }
+  }
+
+  const canonicalByPayload: Tile[] = [];
+  const tileIDMap = new Map<number, number>();
+  const removedTileIDs: number[] = [];
+  const deduplicatedTileIDs: number[] = [];
+  const retainedTiles: Tile[] = [];
+  for (const tile of tileset.tiles) {
+    if (!references.has(tile.id)) {
+      tileIDMap.set(tile.id, 0);
+      removedTileIDs.push(tile.id);
+      continue;
+    }
+    let canonical: Tile | undefined;
+    for (const candidate of canonicalByPayload) {
+      if (tilesEqual(candidate, tile)) {
+        canonical = candidate;
+        break;
+      }
+    }
+    if (canonical) {
+      tileIDMap.set(tile.id, canonical.id);
+      deduplicatedTileIDs.push(tile.id);
+      continue;
+    }
+    canonicalByPayload.push(tile);
+    tileIDMap.set(tile.id, tile.id);
+    retainedTiles.push(cloneTile(tile));
+  }
+
+  const remappedTilemaps = uniqueTilemaps.map((tilemap) => {
+    const cells = tilemap.tiles.slice();
+    for (let index = 0; index < cells.length; index += 1) {
+      const value = cells[index];
+      const id = tileValueIndex(value);
+      if (id === 0) continue;
+      const mapped = tileIDMap.get(id);
+      if (mapped === undefined) throw new Error(`Tilemap references unknown tile ${id}`);
+      cells[index] = mapped === 0 ? 0 : (mapped | tileValueFlags(value)) >>> 0;
+    }
+    return {...tilemap, tiles: cells};
+  });
+  const nextTileset: Tileset = {...tileset, tiles: retainedTiles};
+  const changed = removedTileIDs.length > 0 || deduplicatedTileIDs.length > 0
+    || remappedTilemaps.some((next, index) => !bytesEqual(next.tiles, uniqueTilemaps[index].tiles));
+  return {
+    tileset: nextTileset,
+    tilemaps: tilemaps.map((tilemap) => {
+      const index = uniqueTilemaps.indexOf(tilemap);
+      return index < 0 ? {...tilemap, tiles: tilemap.tiles.slice()} : remappedTilemaps[index];
+    }),
+    changed,
+    tileIDMap,
+    removedTileIDs,
+    deduplicatedTileIDs,
+  };
+}
+
+/** Applies cleanup while preserving the supplied tileset/tilemap identities. */
+export function cleanupTilesetInPlace(
+  tileset: Tileset,
+  tilemaps: readonly TilemapData[],
+): TilesetCleanupResult {
+  const result = cleanupTileset(tileset, tilemaps);
+  tileset.tiles = result.tileset.tiles;
+  const seen = new Set<TilemapData>();
+  for (let index = 0; index < tilemaps.length; index += 1) {
+    const tilemap = tilemaps[index];
+    if (seen.has(tilemap)) continue;
+    seen.add(tilemap);
+    tilemap.tiles.set(result.tilemaps[index].tiles);
+  }
+  return result;
+}
+
 /** Draws one canvas pixel and returns cloned tilemap/Cel/Tileset state. */
 export function drawTilemapPixel(
   cel: Cel,
@@ -523,7 +660,8 @@ export function drawTilemapPixelInPlace(
   const oldValue = cel.tilemap.tiles[cellOffset];
   const oldId = tileValueIndex(oldValue);
   const mode = options.mode ?? "manual";
-  const references = tileReferenceCount(cel.tilemap, oldId);
+  const referenceTilemaps = options.referenceTilemaps ?? [cel.tilemap];
+  const references = tileReferenceCountInTilemaps(referenceTilemaps, oldId);
   let tile = findTile(tileset, oldValue);
   let created = false;
   if (!tile || mode === "stack" || (mode === "auto" && references > 1)) {
@@ -549,7 +687,7 @@ export function drawTilemapPixelInPlace(
   tile.pixels.set(normalizedColor, sourcePixel * 4);
   if (options.palette) {
     if (!tile.indexes) tile.indexes = new Uint8Array(tileset.tileWidth * tileset.tileHeight);
-    tile.indexes[sourcePixel] = nearestPaletteIndex(normalizedColor, options.palette);
+    tile.indexes[sourcePixel] = nearestPaletteIndex(normalizedColor, options.palette, options.transparentIndex ?? 0);
     writePalettePixel(tile.pixels, sourcePixel * 4, tile.indexes[sourcePixel], options.palette, options.transparentIndex ?? 0);
   }
   const actual = tileset.tiles.find((candidate) => candidate.id === tile!.id);
@@ -637,6 +775,12 @@ function bytesEqual(left: ArrayLike<number>, right: ArrayLike<number>) {
   return true;
 }
 
+function tilesEqual(left: Tile, right: Tile) {
+  if (!bytesEqual(left.pixels, right.pixels)) return false;
+  if (Boolean(left.indexes) !== Boolean(right.indexes)) return false;
+  return !left.indexes || bytesEqual(left.indexes, right.indexes!);
+}
+
 function createGeneratedID(prefix: string) {
   generatedID += 1;
   return `${prefix}-${generatedID}`;
@@ -666,8 +810,8 @@ function writePalettePixel(pixels: Uint8ClampedArray, offset: number, index: num
   pixels[offset + 3] = index === transparentIndex ? 0 : color[3];
 }
 
-function nearestPaletteIndex(color: ArrayLike<number>, palette: readonly string[]) {
-  if (color[3] === 0) return 0;
+function nearestPaletteIndex(color: ArrayLike<number>, palette: readonly string[], transparentIndex = 0) {
+  if (color[3] === 0) return transparentIndex;
   let best = 0;
   let distance = Number.POSITIVE_INFINITY;
   for (let index = 0; index < palette.length; index += 1) {

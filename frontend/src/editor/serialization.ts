@@ -352,12 +352,15 @@ function decodeSlices(value: unknown, frames: readonly Frame[], width: number, h
       || typeof candidate.name !== "string" || !candidate.name.trim() || typeof candidate.color !== "string" || !validColor(candidate.color)
       || !Array.isArray(candidate.keys) || candidate.keys.length === 0) throw new Error("Project slices are invalid");
     ids.add(candidate.id);
+    const keyFrameIDs = new Set<string>();
     const keys = candidate.keys.map((raw) => {
       if (!isRecord(raw) || typeof raw.frameId !== "string" || !frameIDs.has(raw.frameId) || !validRect(raw, width, height)
+        || keyFrameIDs.has(raw.frameId)
         || (raw.center !== undefined && (!isRecord(raw.center) || !validRect(raw.center, raw.width as number, raw.height as number)))
         || (raw.pivot !== undefined && (!isRecord(raw.pivot) || !Number.isInteger(raw.pivot.x) || !Number.isInteger(raw.pivot.y)))) {
         throw new Error("Project slices are invalid");
       }
+      keyFrameIDs.add(raw.frameId);
       return raw as unknown as Slice["keys"][number];
     });
     return {id: candidate.id, name: candidate.name.trim(), color: candidate.color, keys};

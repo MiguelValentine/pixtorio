@@ -113,6 +113,8 @@ export interface SliceKey {
   pivot?: {x: number; y: number};
 }
 
+export type SliceKeyUpdate = Partial<Omit<SliceKey, "frameId">>;
+
 export interface Slice {
   id: string;
   name: string;
@@ -648,19 +650,121 @@ export function addFrame(document: PixelDocument, durationMs = 100) {
   const activeIndex = document.frames.findIndex((frame) => frame.id === document.activeFrameId);
   const frame: Frame = {id: createID("frame"), durationMs: Math.max(1, Math.round(durationMs))};
   document.frames.splice(activeIndex < 0 ? document.frames.length : activeIndex + 1, 0, frame);
-  const activeLayer = getActiveLayer(document);
-  if (isCelLayer(activeLayer)) {
-    const source = getCel(document, activeLayer.id, document.activeFrameId);
-    if (activeLayer.continuous && source) {
-      document.cels[celKey(activeLayer.id, frame.id)] = {
-        ...source,
-        id: createID("cel"),
-        frameId: frame.id,
-      };
+  copyFrameCels(document, document.activeFrameId, frame.id);
+  document.activeFrameId = frame.id;
+  return frame;
+}
+
+/**
+ * Inserts a frame after the active frame without inheriting ordinary Cels.
+ * Background layers are the exception: an opaque Cel is materialized so an
+ * empty frame still has a valid background surface.
+ */
+export function addEmptyFrame(
+  document: PixelDocument,
+  durationMs = 100,
+  backgroundColor?: readonly [number, number, number, number],
+) {
+  const activeIndex = document.frames.findIndex((frame) => frame.id === document.activeFrameId);
+  const frame: Frame = {id: createID("frame"), durationMs: Math.max(1, Math.round(durationMs))};
+  document.frames.splice(activeIndex < 0 ? document.frames.length : activeIndex + 1, 0, frame);
+  for (const layer of document.layers) {
+    if (layer.role !== "background" || !isCelLayer(layer)) continue;
+    const cel = ensureCel(document, layer.id, frame.id);
+    if (!cel || !backgroundColor) continue;
+    const [red, green, blue] = backgroundColor;
+    for (let offset = 0; offset < cel.pixels.length; offset += 4) {
+      cel.pixels[offset] = red;
+      cel.pixels[offset + 1] = green;
+      cel.pixels[offset + 2] = blue;
+      cel.pixels[offset + 3] = 255;
+    }
+    if (document.colorMode === "indexed") {
+      cel.indexes = indexesForPixels(cel.pixels, document.palette.colors, document.palette.transparentIndex);
+      for (let pixel = 0; pixel < cel.indexes.length; pixel += 1) {
+        const color = parseHexRGBA(document.palette.colors[cel.indexes[pixel]] ?? "#000000ff", [0, 0, 0, 255]);
+        const offset = pixel * 4;
+        cel.pixels[offset] = color[0];
+        cel.pixels[offset + 1] = color[1];
+        cel.pixels[offset + 2] = color[2];
+        cel.pixels[offset + 3] = 255;
+      }
     }
   }
   document.activeFrameId = frame.id;
   return frame;
+}
+
+interface SharedCelBuffers {
+  linkId: string;
+  pixels: Uint8ClampedArray;
+  indexes?: Uint8Array;
+  tilemap?: TilemapData;
+}
+
+/**
+ * Copies every existing Cel from one frame into another frame. The copied
+ * frame is independent from its source, while Cels that shared a buffer in
+ * the source frame continue to share one cloned buffer in the destination.
+ * Missing Cels remain missing.
+ */
+function copyFrameCels(document: PixelDocument, sourceFrameId: string, targetFrameId: string) {
+  const copiedBuffers = new Map<string, SharedCelBuffers>();
+  for (const layer of document.layers) {
+    if (!isCelLayer(layer)) continue;
+    const source = getCel(document, layer.id, sourceFrameId);
+    if (!source) continue;
+
+    if (layer.continuous) {
+      // A regular New Frame on a continuous layer is an alias of the source
+      // Cel. Per-instance appearance still belongs to the new Cel, so keep
+      // the background invariants local to this frame.
+      const linked: Cel = {
+        ...source,
+        id: createID("cel"),
+        frameId: targetFrameId,
+        linkId: source.linkId,
+        pixels: source.pixels,
+        indexes: source.indexes,
+        tilemap: source.tilemap,
+      };
+      if (layer.role === "background") {
+        linked.opacity = 1;
+        linked.zIndex = 0;
+      }
+      document.cels[celKey(layer.id, targetFrameId)] = linked;
+      continue;
+    }
+
+    let buffers = copiedBuffers.get(source.linkId);
+    if (!buffers) {
+      buffers = {
+        linkId: createID("link"),
+        pixels: source.pixels.slice(),
+        indexes: source.indexes?.slice(),
+        tilemap: source.tilemap
+          ? {...source.tilemap, tiles: source.tilemap.tiles.slice()}
+          : undefined,
+      };
+      copiedBuffers.set(source.linkId, buffers);
+    }
+
+    document.cels[celKey(layer.id, targetFrameId)] = {
+      ...source,
+      id: createID("cel"),
+      linkId: buffers.linkId,
+      frameId: targetFrameId,
+      pixels: buffers.pixels,
+      indexes: buffers.indexes,
+      tilemap: buffers.tilemap,
+    };
+  }
+}
+
+/** Returns the neighboring frame without wrapping at either end. */
+export function adjacentFrameID(document: PixelDocument, frameId = document.activeFrameId, direction: -1 | 1) {
+  const index = document.frames.findIndex((frame) => frame.id === frameId);
+  return index < 0 ? null : document.frames[index + direction]?.id ?? null;
 }
 
 export function duplicateFrame(document: PixelDocument, frameId = document.activeFrameId) {
@@ -681,8 +785,9 @@ export function setFrameDuration(document: PixelDocument, frameId: string, durat
 
 /**
  * Duplicates the requested frames as one block immediately after the last
- * selected frame. Cel links are rebuilt inside the copied block so linked
- * source frames remain linked to each other without sharing source buffers.
+ * selected frame. Continuous layers link the new Cels to their source Cels;
+ * ordinary layers receive detached buffers while preserving links inside the
+ * copied block.
  */
 export function duplicateFrames(document: PixelDocument, frameIds: readonly string[]) {
   const selectedIDs = orderedFrameIDs(document, frameIds);
@@ -702,8 +807,22 @@ export function duplicateFrames(document: PixelDocument, frameIds: readonly stri
     for (const layer of document.layers) {
       if (!isCelLayer(layer)) continue;
       const sourceCel = getCel(document, layer.id, sourceFrame.id);
+      if (!sourceCel) continue;
+
       let cel: Cel;
-      if (sourceCel) {
+      if (layer.continuous) {
+        // Continuous layers intentionally share the source buffer. This also
+        // preserves links to source frames outside the duplicated selection.
+        cel = {
+          ...sourceCel,
+          id: createID("cel"),
+          frameId: duplicateFrame.id,
+          linkId: sourceCel.linkId,
+          pixels: sourceCel.pixels,
+          indexes: sourceCel.indexes,
+          tilemap: sourceCel.tilemap,
+        };
+      } else {
         let linkId = linkIDs.get(sourceCel.linkId);
         let pixels = linkedBuffers.get(sourceCel.linkId);
         if (!linkId || !pixels) {
@@ -736,12 +855,27 @@ export function duplicateFrames(document: PixelDocument, frameIds: readonly stri
             }
             : undefined,
         };
-      } else continue;
+      }
+      if (layer.role === "background") {
+        cel.opacity = 1;
+        cel.zIndex = 0;
+      }
       document.cels[celKey(layer.id, duplicateFrame.id)] = cel;
     }
   }
 
   document.frames.splice(insertionIndex, 0, ...copies);
+  // Slice keys are frame-local metadata. Duplicate the selected key for each
+  // copied frame without sharing nested center/pivot objects.
+  for (let selectedIndex = 0; selectedIndex < selectedIDs.length; selectedIndex += 1) {
+    const sourceFrameId = selectedIDs[selectedIndex];
+    const duplicateFrameId = copies[selectedIndex].id;
+    for (const slice of document.slices) {
+      const sourceKey = slice.keys.find((key) => key.frameId === sourceFrameId);
+      if (!sourceKey) continue;
+      slice.keys.push(cloneSliceKey({...sourceKey, frameId: duplicateFrameId}));
+    }
+  }
   document.activeFrameId = copies.at(-1)!.id;
   return copies;
 }
@@ -771,6 +905,10 @@ export function deleteFrames(document: PixelDocument, frameIds: readonly string[
   for (const key of Object.keys(document.cels)) {
     if (selectedSet.has(document.cels[key].frameId)) delete document.cels[key];
   }
+  for (const slice of document.slices) {
+    slice.keys = slice.keys.filter((key) => !selectedSet.has(key.frameId));
+  }
+  document.slices = document.slices.filter((slice) => slice.keys.length > 0);
   document.tags = tagUpdates;
   if (selectedSet.has(document.activeFrameId)) {
     document.activeFrameId = document.frames[Math.min(Math.max(0, activeIndex), document.frames.length - 1)].id;
@@ -1064,12 +1202,15 @@ export function reverseFrames(document: PixelDocument, frameIds: readonly string
 }
 
 export function addSlice(document: PixelDocument, name: string, key: Omit<SliceKey, "frameId"> & {frameId?: string}) {
-  if (!validRect(key, document.width, document.height)) return null;
+  const frameId = key.frameId ?? document.activeFrameId;
+  if (!document.frames.some((frame) => frame.id === frameId)) return null;
+  const nextKey = {...key, frameId};
+  if (!validSliceKey(document, nextKey)) return null;
   const slice: Slice = {
     id: createID("slice"),
     name: name.trim() || `Slice ${document.slices.length + 1}`,
     color: "#ef476fff",
-    keys: [{...key, frameId: key.frameId ?? document.activeFrameId}],
+    keys: [cloneSliceKey(nextKey)],
   };
   document.slices.push(slice);
   return slice;
@@ -1079,8 +1220,59 @@ export function updateSlice(document: PixelDocument, sliceId: string, update: Pa
   const slice = document.slices.find((candidate) => candidate.id === sliceId);
   if (!slice) return false;
   const next = {...slice, ...update};
-  if (!next.name.trim() || !/^#[0-9a-f]{8}$/i.test(next.color) || next.keys.some((key) => !validRect(key, document.width, document.height))) return false;
+  if (!next.name.trim() || !/^#[0-9a-f]{8}$/i.test(next.color) || next.keys.length === 0 || next.keys.some((key) => !validSliceKey(document, key))) return false;
+  if (next.keys.some((key, index) => next.keys.some((other, otherIndex) => otherIndex !== index && other.frameId === key.frameId))) return false;
   Object.assign(slice, next, {name: next.name.trim()});
+  return true;
+}
+
+/** Returns only the key authored for the requested frame; there is no fallback. */
+export function getSliceKey(document: PixelDocument, sliceId: string, frameId: string): SliceKey | null {
+  return document.slices.find((slice) => slice.id === sliceId)?.keys.find((key) => key.frameId === frameId) ?? null;
+}
+
+/** Adds a frame-local key, inheriting the nearest preceding key when available. */
+export function addSliceKey(document: PixelDocument, sliceId: string, frameId = document.activeFrameId, key?: SliceKeyUpdate): SliceKey | null {
+  const slice = document.slices.find((candidate) => candidate.id === sliceId);
+  const frameIndex = document.frames.findIndex((frame) => frame.id === frameId);
+  if (!slice || frameIndex < 0 || slice.keys.some((candidate) => candidate.frameId === frameId)) return null;
+  const source = [...slice.keys]
+    .map((candidate) => ({candidate, index: document.frames.findIndex((frame) => frame.id === candidate.frameId)}))
+    .filter(({index}) => index >= 0)
+    .sort((left, right) => {
+      const leftBefore = left.index <= frameIndex;
+      const rightBefore = right.index <= frameIndex;
+      if (leftBefore !== rightBefore) return leftBefore ? -1 : 1;
+      if (leftBefore) return right.index - left.index;
+      return left.index - right.index;
+    })[0]?.candidate;
+  const next = {
+    ...(source ? cloneSliceKey(source) : {x: 0, y: 0, width: document.width, height: document.height}),
+    ...key,
+    frameId,
+  };
+  if (!validSliceKey(document, next)) return null;
+  slice.keys.push(cloneSliceKey(next));
+  return slice.keys.at(-1)!;
+}
+
+/** Updates only the key authored for the requested frame; missing keys are not mutated. */
+export function updateSliceKey(document: PixelDocument, sliceId: string, frameId: string, update: SliceKeyUpdate) {
+  const key = getSliceKey(document, sliceId, frameId);
+  if (!key) return false;
+  const next = {...key, ...update, frameId};
+  if (!validSliceKey(document, next) || sliceKeyEqual(key, next)) return false;
+  Object.assign(key, cloneSliceKey(next));
+  return true;
+}
+
+/** Removes a frame-local key while preserving the strict non-empty key invariant. */
+export function deleteSliceKey(document: PixelDocument, sliceId: string, frameId: string) {
+  const slice = document.slices.find((candidate) => candidate.id === sliceId);
+  if (!slice || slice.keys.length <= 1) return false;
+  const index = slice.keys.findIndex((key) => key.frameId === frameId);
+  if (index < 0) return false;
+  slice.keys.splice(index, 1);
   return true;
 }
 
@@ -1203,6 +1395,7 @@ export function cropDocument(document: PixelDocument, x: number, y: number, widt
     cel.pixels = pixels;
     cel.indexes = indexes;
   }
+  translateSlices(document, -x, -y, width, height);
   document.width = width;
   document.height = height;
   rebuildTilemapData(document);
@@ -1246,10 +1439,56 @@ export function resizeDocument(
     cel.pixels = pixels;
     cel.indexes = indexes;
   }
+  translateSlices(document, offsetX, offsetY, width, height);
   document.width = width;
   document.height = height;
   rebuildTilemapData(document);
   return true;
+}
+
+function translateSlices(document: PixelDocument, offsetX: number, offsetY: number, width: number, height: number) {
+  document.slices = document.slices.map((slice) => ({
+    ...slice,
+    keys: slice.keys
+      .map((key) => translateSliceKey(key, offsetX, offsetY, width, height))
+      .filter((key): key is SliceKey => Boolean(key)),
+  })).filter((slice) => slice.keys.length > 0);
+}
+
+function translateSliceKey(key: SliceKey, offsetX: number, offsetY: number, width: number, height: number): SliceKey | null {
+  const outer = {x: key.x + offsetX, y: key.y + offsetY, width: key.width, height: key.height};
+  const clipped = intersectRect(outer, {x: 0, y: 0, width, height});
+  if (!clipped) return null;
+  const center = key.center
+    ? intersectRect(
+      {x: outer.x + key.center.x, y: outer.y + key.center.y, width: key.center.width, height: key.center.height},
+      clipped,
+    )
+    : null;
+  const pivot = key.pivot
+    ? {x: outer.x + key.pivot.x - clipped.x, y: outer.y + key.pivot.y - clipped.y}
+    : undefined;
+  return {
+    ...key,
+    x: clipped.x,
+    y: clipped.y,
+    width: clipped.width,
+    height: clipped.height,
+    center: center
+      ? {x: center.x - clipped.x, y: center.y - clipped.y, width: center.width, height: center.height}
+      : undefined,
+    pivot,
+  };
+}
+
+function intersectRect(left: PixelBounds, right: PixelBounds): PixelBounds | null {
+  const x = Math.max(left.x, right.x);
+  const y = Math.max(left.y, right.y);
+  const rightEdge = Math.min(left.x + left.width, right.x + right.width);
+  const bottomEdge = Math.min(left.y + left.height, right.y + right.height);
+  return rightEdge > x && bottomEdge > y
+    ? {x, y, width: rightEdge - x, height: bottomEdge - y}
+    : null;
 }
 
 export function cloneDocument(document: PixelDocument): PixelDocument {
@@ -1311,6 +1550,72 @@ export function cloneDocument(document: PixelDocument): PixelDocument {
       return [key, {...cel, pixels, indexes, tilemap}];
     })),
   };
+}
+
+/**
+ * Creates an editable duplicate of a document for a separate sprite tab.
+ *
+ * Unlike cloneDocument, which intentionally preserves IDs for history
+ * snapshots, a duplicated sprite receives fresh IDs for every document
+ * entity. Shared Cel buffers remain shared inside the duplicate, but never
+ * alias the source document.
+ */
+export function duplicateDocument(document: PixelDocument, name = document.name): PixelDocument {
+  const duplicate = cloneDocument(document);
+  const paletteID = createID("palette");
+  const tilesetIDs = new Map(duplicate.tilesets.map((tileset) => [tileset.id, createID("tileset")]));
+  const layerIDs = new Map(duplicate.layers.map((layer) => [layer.id, createID("layer")]));
+  const frameIDs = new Map(duplicate.frames.map((frame) => [frame.id, createID("frame")]));
+  const tagIDs = new Map(duplicate.tags.map((tag) => [tag.id, createID("tag")]));
+  const sliceIDs = new Map(duplicate.slices.map((slice) => [slice.id, createID("slice")]));
+  const guideIDs = new Map(duplicate.guides.map((guide) => [guide.id, createID("guide")]));
+  const linkIDs = new Map<string, string>();
+
+  duplicate.name = name.trim() || document.name;
+  duplicate.palette = {...duplicate.palette, id: paletteID};
+  duplicate.tilesets = duplicate.tilesets.map((tileset) => ({
+    ...tileset,
+    id: tilesetIDs.get(tileset.id)!,
+  }));
+  duplicate.layers = duplicate.layers.map((layer) => ({
+    ...layer,
+    id: layerIDs.get(layer.id)!,
+    parentId: layer.parentId ? layerIDs.get(layer.parentId) : undefined,
+    tilesetId: layer.tilesetId ? tilesetIDs.get(layer.tilesetId) : undefined,
+  }));
+  duplicate.frames = duplicate.frames.map((frame) => ({...frame, id: frameIDs.get(frame.id)!}));
+  duplicate.tags = duplicate.tags.map((tag) => ({
+    ...tag,
+    id: tagIDs.get(tag.id)!,
+    fromFrameId: frameIDs.get(tag.fromFrameId)!,
+    toFrameId: frameIDs.get(tag.toFrameId)!,
+  }));
+  duplicate.slices = duplicate.slices.map((slice) => ({
+    ...slice,
+    id: sliceIDs.get(slice.id)!,
+    keys: slice.keys.map((key) => ({...key, frameId: frameIDs.get(key.frameId)!})),
+  }));
+  duplicate.guides = duplicate.guides.map((guide) => ({...guide, id: guideIDs.get(guide.id)!}));
+
+  const cels = Object.values(duplicate.cels).map((cel) => {
+    let linkId = linkIDs.get(cel.linkId);
+    if (!linkId) {
+      linkId = createID("link");
+      linkIDs.set(cel.linkId, linkId);
+    }
+    return {
+      ...cel,
+      id: createID("cel"),
+      linkId,
+      layerId: layerIDs.get(cel.layerId)!,
+      frameId: frameIDs.get(cel.frameId)!,
+      tilemap: cel.tilemap ? {...cel.tilemap, tiles: cel.tilemap.tiles} : undefined,
+    };
+  });
+  duplicate.cels = Object.fromEntries(cels.map((cel) => [celKey(cel.layerId, cel.frameId), cel]));
+  duplicate.activeLayerId = layerIDs.get(document.activeLayerId)!;
+  duplicate.activeFrameId = frameIDs.get(document.activeFrameId)!;
+  return duplicate;
 }
 
 export function replaceDocument(target: PixelDocument, source: PixelDocument) {
@@ -1906,6 +2211,29 @@ function isLayerRole(value: string): value is LayerRole {
 function validRect(value: {x: number; y: number; width: number; height: number}, width: number, height: number) {
   return Number.isInteger(value.x) && Number.isInteger(value.y) && Number.isInteger(value.width) && Number.isInteger(value.height)
     && value.width > 0 && value.height > 0 && value.x >= 0 && value.y >= 0 && value.x + value.width <= width && value.y + value.height <= height;
+}
+
+function validSliceKey(document: PixelDocument, key: SliceKey) {
+  return document.frames.some((frame) => frame.id === key.frameId)
+    && validRect(key, document.width, document.height)
+    && (!key.center || validRect(key.center, key.width, key.height))
+    && (!key.pivot || (Number.isInteger(key.pivot.x) && Number.isInteger(key.pivot.y)));
+}
+
+function cloneSliceKey(key: SliceKey): SliceKey {
+  return {
+    ...key,
+    center: key.center ? {...key.center} : undefined,
+    pivot: key.pivot ? {...key.pivot} : undefined,
+  };
+}
+
+function sliceKeyEqual(left: SliceKey, right: SliceKey) {
+  return left.frameId === right.frameId
+    && left.x === right.x && left.y === right.y && left.width === right.width && left.height === right.height
+    && left.center?.x === right.center?.x && left.center?.y === right.center?.y
+    && left.center?.width === right.center?.width && left.center?.height === right.center?.height
+    && left.pivot?.x === right.pivot?.x && left.pivot?.y === right.pivot?.y;
 }
 
 function isTagDirection(value: string): value is TagDirection {

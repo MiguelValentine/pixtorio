@@ -329,6 +329,93 @@ func TestWriteGIFWithOptionsScalesAndSetsLoopCount(t *testing.T) {
 	}
 }
 
+func TestApplyPixelAspectRatioExpandsNearestNeighbor(t *testing.T) {
+	pixels := []uint8{
+		255, 0, 0, 255,
+		0, 255, 0, 128,
+	}
+	width, height, expanded, err := ApplyPixelAspectRatio(2, 1, pixels, PixelAspectRatio{Width: 2, Height: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if width != 4 || height != 1 {
+		t.Fatalf("expanded dimensions = %dx%d, want 4x1", width, height)
+	}
+	want := []uint8{
+		255, 0, 0, 255, 255, 0, 0, 255,
+		0, 255, 0, 128, 0, 255, 0, 128,
+	}
+	if string(expanded) != string(want) {
+		t.Fatalf("expanded pixels = %v, want %v", expanded, want)
+	}
+}
+
+func TestWriteFileWithOptionsAppliesPixelAspectRatio(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "ratio.png")
+	pixels := []uint8{255, 0, 0, 255, 0, 0, 255, 255}
+	if err := WriteFileWithOptions(path, 2, 1, pixels, PNGOptions{
+		ApplyPixelRatio:   true,
+		PixelAspectWidth:  2,
+		PixelAspectHeight: 1,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	file, err := os.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer file.Close()
+	output, err := png.Decode(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if output.Bounds().Dx() != 4 || output.Bounds().Dy() != 1 {
+		t.Fatalf("PNG bounds = %v, want 4x1", output.Bounds())
+	}
+}
+
+func TestWriteGIFWithOptionsAppliesPixelAspectRatio(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "ratio.gif")
+	pixels := []uint8{255, 0, 0, 255}
+	if err := WriteGIFWithOptions(path, 1, 1, [][]uint8{pixels}, []int{100}, GIFOptions{
+		ApplyPixelRatio:   true,
+		PixelAspectWidth:  1,
+		PixelAspectHeight: 2,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	file, err := os.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer file.Close()
+	animation, err := gif.DecodeAll(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if animation.Image[0].Bounds().Dx() != 1 || animation.Image[0].Bounds().Dy() != 2 {
+		t.Fatalf("GIF bounds = %v, want 1x2", animation.Image[0].Bounds())
+	}
+}
+
+func TestCalculateSpriteSheetLayoutAppliesPixelAspectRatio(t *testing.T) {
+	layout, err := CalculateSpriteSheetLayout(2, 3, 2, SpriteSheetOptions{
+		Layout:            SpriteSheetLayoutHorizontal,
+		ApplyPixelRatio:   true,
+		PixelAspectWidth:  2,
+		PixelAspectHeight: 1,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if layout.Width != 8 || layout.Height != 3 {
+		t.Fatalf("layout dimensions = %dx%d, want 8x3", layout.Width, layout.Height)
+	}
+	if layout.FrameRects[0].Width != 4 || layout.FrameRects[0].Height != 3 {
+		t.Fatalf("frame rect = %#v, want 4x3", layout.FrameRects[0])
+	}
+}
+
 func TestWriteGIFWithOptionsRejectsInvalidScaleLoopAndOutputSize(t *testing.T) {
 	valid := []uint8{1, 2, 3, 255}
 	for _, test := range []struct {

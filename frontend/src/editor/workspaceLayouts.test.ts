@@ -1,5 +1,5 @@
 import {describe, expect, it} from "vitest";
-import {defaultWorkspaceVisibility, deleteWorkspaceLayout, readWorkspaceLayouts, readWorkspaceVisibility, resetWorkspaceVisibility, saveWorkspaceLayout, saveWorkspaceVisibility, type WorkspaceLayout} from "./workspaceLayouts";
+import {defaultWorkspaceVisibility, deleteWorkspaceLayout, readWorkspaceCanvasOnly, readWorkspaceLayouts, readWorkspaceVisibility, resetWorkspaceCanvasOnly, resetWorkspaceVisibility, saveWorkspaceCanvasOnly, saveWorkspaceLayout, saveWorkspaceVisibility, type WorkspaceLayout} from "./workspaceLayouts";
 
 function createStorage(initial: string | null = null) {
   let value = initial;
@@ -114,5 +114,29 @@ describe("workspace visibility", () => {
     expect(resetWorkspaceVisibility(target)).toEqual(defaultWorkspaceVisibility);
     expect(readWorkspaceVisibility(target)).toEqual(defaultWorkspaceVisibility);
     expect(() => saveWorkspaceVisibility(target, {inspectorVisible: true, timelineVisible: "yes"} as never)).toThrow("Invalid workspace visibility");
+  });
+});
+
+describe("canvas-only workspace mode", () => {
+  it("defaults to off and round-trips explicit values", () => {
+    const storage = createStorage();
+    expect(readWorkspaceCanvasOnly(storage)).toBe(false);
+
+    saveWorkspaceCanvasOnly(storage, true);
+    expect(readWorkspaceCanvasOnly(storage)).toBe(true);
+
+    saveWorkspaceCanvasOnly(storage, false);
+    expect(readWorkspaceCanvasOnly(storage)).toBe(false);
+  });
+
+  it("treats malformed or unknown values as off and supports reset", () => {
+    expect(readWorkspaceCanvasOnly(createStorage("not json"))).toBe(false);
+    expect(readWorkspaceCanvasOnly(createStorage("1"))).toBe(false);
+
+    const storage = createStorage();
+    saveWorkspaceCanvasOnly(storage, true);
+    expect(resetWorkspaceCanvasOnly(storage)).toBe(false);
+    expect(readWorkspaceCanvasOnly(storage)).toBe(false);
+    expect(() => saveWorkspaceCanvasOnly(storage, "yes" as never)).toThrow("Invalid canvas-only mode");
   });
 });

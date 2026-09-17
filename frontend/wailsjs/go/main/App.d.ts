@@ -25,9 +25,15 @@ export function OpenStartupProject():Promise<string>;
 
 export function SaveGIF(arg1:number,arg2:number,arg3:Array<string>,arg4:Array<number>,arg5:number,arg6:number,arg7:string):Promise<string>;
 
+export function SaveGIFWithOptions(arg1:number,arg2:number,arg3:Array<string>,arg4:Array<number>,arg5:number,arg6:number,arg7:boolean,arg8:number,arg9:number,arg10:string):Promise<string>;
+
 export function SavePNG(arg1:number,arg2:number,arg3:string,arg4:string):Promise<string>;
 
 export function SavePNGSequence(arg1:number,arg2:number,arg3:Array<string>,arg4:string,arg5:string):Promise<string>;
+
+export function SavePNGWithOptions(arg1:number,arg2:number,arg3:string,arg4:boolean,arg5:number,arg6:number,arg7:string):Promise<string>;
+
+export function SavePackedAtlas(arg1:number,arg2:number,arg3:string,arg4:string,arg5:boolean,arg6:string):Promise<string>;
 
 export function SavePixio(arg1:string,arg2:string,arg3:Array<string>):Promise<string>;
 
@@ -36,6 +42,8 @@ export function SavePixioPath(arg1:string,arg2:string):Promise<string>;
 export function SaveRecovery(arg1:string):Promise<void>;
 
 export function SaveSpriteSheet(arg1:number,arg2:number,arg3:Array<string>,arg4:string,arg5:number,arg6:number,arg7:number,arg8:number,arg9:boolean,arg10:string):Promise<string>;
+
+export function SaveSpriteSheetWithOptions(arg1:number,arg2:number,arg3:Array<string>,arg4:string,arg5:number,arg6:number,arg7:number,arg8:number,arg9:boolean,arg10:boolean,arg11:number,arg12:number,arg13:string):Promise<string>;
 
 export function SetMCPReady(arg1:boolean):Promise<void>;
 

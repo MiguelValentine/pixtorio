@@ -1,10 +1,11 @@
-import type {ColorMode, ColorProfileType} from "./document";
+import type {ColorMode, ColorProfileType, PixelDocument} from "./document";
 
 export const preferencesStorageKey = "pixtorio-preferences";
 export const preferencesVersion = 1 as const;
 
 export type ThemePreference = "dark" | "light";
 export type LanguagePreference = "zh" | "en";
+export type AlphaRangePreference = "percent" | "byte";
 export type CursorPreview = "brush" | "crosshair" | "both";
 export type SelectionTransformScope = "selected-cels" | "selected-rows-columns";
 
@@ -23,7 +24,7 @@ export interface AppPreferences {
     recentItems: number;
   };
   color: {
-    alphaRange: "percent";
+    alphaRange: AlphaRangePreference;
     defaultColorMode: Exclude<ColorMode, "bitmap">;
     defaultProfile: Exclude<ColorProfileType, "embedded">;
   };
@@ -121,6 +122,24 @@ export function defaultPreferences(): AppPreferences {
   };
 }
 
+/** Apply the document-scoped defaults shared by every new-document workflow. */
+export function applyNewDocumentPreferenceDefaults(document: PixelDocument, preferences: AppPreferences): void {
+  document.colorProfile = preferences.color.defaultProfile === "display-p3"
+    ? {type: "display-p3", name: "Display P3"}
+    : preferences.color.defaultProfile === "none"
+      ? {type: "none", name: "Unassigned"}
+      : {type: "srgb", name: "sRGB"};
+  document.settings.gridWidth = preferences.grid.width;
+  document.settings.gridHeight = preferences.grid.height;
+  document.settings.gridOffsetX = preferences.grid.offsetX;
+  document.settings.gridOffsetY = preferences.grid.offsetY;
+  document.settings.onionPreviousFrames = preferences.timeline.onionPreviousFrames;
+  document.settings.onionNextFrames = preferences.timeline.onionNextFrames;
+  document.settings.onionOpacity = preferences.timeline.onionOpacity / 100;
+  document.settings.onionPreviousColor = `${preferences.timeline.onionPreviousColor}ff`;
+  document.settings.onionNextColor = `${preferences.timeline.onionNextColor}ff`;
+}
+
 export function readPreferences(storage: PreferenceStorageReader): AppPreferences {
   let raw: string | null;
   try {
@@ -157,7 +176,7 @@ function isPreferences(value: unknown): value is AppPreferences {
   if (!recordWithKeys(value.general, ["theme", "language", "uiScale", "expandMenusOnHover", "paletteSeparators"])) return false;
   if (!oneOf(value.general.theme, ["dark", "light"]) || !oneOf(value.general.language, ["zh", "en"]) || !integer(value.general.uiScale, 75, 200) || !booleans(value.general, ["expandMenusOnHover", "paletteSeparators"])) return false;
   if (!recordWithKeys(value.files, ["autosaveEnabled", "autosaveSeconds", "recentItems"]) || !booleans(value.files, ["autosaveEnabled"]) || !integer(value.files.autosaveSeconds, 5, 600) || !integer(value.files.recentItems, 0, 50)) return false;
-  if (!recordWithKeys(value.color, ["alphaRange", "defaultColorMode", "defaultProfile"]) || value.color.alphaRange !== "percent" || !oneOf(value.color.defaultColorMode, ["rgba", "grayscale", "indexed"]) || !oneOf(value.color.defaultProfile, ["none", "srgb", "display-p3"])) return false;
+  if (!recordWithKeys(value.color, ["alphaRange", "defaultColorMode", "defaultProfile"]) || !oneOf(value.color.alphaRange, ["percent", "byte"]) || !oneOf(value.color.defaultColorMode, ["rgba", "grayscale", "indexed"]) || !oneOf(value.color.defaultProfile, ["none", "srgb", "display-p3"])) return false;
   if (!recordWithKeys(value.alerts, ["closeUnsaved", "deleteLayer", "deleteFrame", "deleteCel", "convertColorMode"]) || !booleans(value.alerts, ["closeUnsaved", "deleteLayer", "deleteFrame", "deleteCel", "convertColorMode"])) return false;
   if (!recordWithKeys(value.editor, ["wheelZoom", "zoomFromCenter", "autoFitOnOpen", "previewShiftLine", "discardCustomBrushOnEyedropper"]) || !booleans(value.editor, ["wheelZoom", "zoomFromCenter", "autoFitOnOpen", "previewShiftLine", "discardCustomBrushOnEyedropper"])) return false;
   if (!recordWithKeys(value.selection, ["keepAfterDelete", "showEdges", "transformScope"]) || !booleans(value.selection, ["keepAfterDelete", "showEdges"]) || !oneOf(value.selection.transformScope, ["selected-cels", "selected-rows-columns"])) return false;

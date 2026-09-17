@@ -206,14 +206,31 @@ function transformMetadata(document: PixelDocument, operation: RasterOperation, 
 }
 
 function transformSliceKey(key: SliceKey, operation: RasterOperation): SliceKey {
+  const nextOuter = operation.mapRect({x: key.x, y: key.y, width: key.width, height: key.height});
+  const mapRelativeRect = (rect: {x: number; y: number; width: number; height: number}) => {
+    const mapped = operation.mapRect({
+      x: key.x + rect.x,
+      y: key.y + rect.y,
+      width: rect.width,
+      height: rect.height,
+    });
+    return {
+      ...mapped,
+      x: mapped.x - nextOuter.x,
+      y: mapped.y - nextOuter.y,
+    };
+  };
   return {
     ...key,
-    ...operation.mapRect({x: key.x, y: key.y, width: key.width, height: key.height}),
+    ...nextOuter,
     center: key.center
-      ? operation.mapRect(key.center)
+      ? mapRelativeRect(key.center)
       : undefined,
     pivot: key.pivot
-      ? operation.mapPoint(key.pivot.x, key.pivot.y)
+      ? (() => {
+        const mapped = operation.mapPoint(key.x + key.pivot.x, key.y + key.pivot.y);
+        return {x: mapped.x - nextOuter.x, y: mapped.y - nextOuter.y};
+      })()
       : undefined,
   };
 }

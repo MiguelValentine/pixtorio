@@ -38,6 +38,7 @@ export function PreferencesPanel({preferences, onChange, zh}: {
     <details>
       <summary>{zh ? "颜色" : "Color"}</summary>
       <div className="preferences-section-body preferences-general">
+        <label className="dialog-field"><span>{zh ? "Alpha / 不透明度范围" : "Alpha / opacity range"}</span><select value={preferences.color.alphaRange} onChange={(event) => patch("color", {alphaRange: event.target.value as AppPreferences["color"]["alphaRange"]})}><option value="percent">0–100%</option><option value="byte">0–255</option></select></label>
         <label className="dialog-field"><span>{zh ? "新建项目颜色模式" : "New document color mode"}</span><select value={preferences.color.defaultColorMode} onChange={(event) => patch("color", {defaultColorMode: event.target.value as AppPreferences["color"]["defaultColorMode"]})}><option value="rgba">RGBA</option><option value="grayscale">{zh ? "灰度" : "Grayscale"}</option><option value="indexed">{zh ? "索引色" : "Indexed"}</option></select></label>
         <label className="dialog-field"><span>{zh ? "默认颜色配置" : "Default color profile"}</span><select value={preferences.color.defaultProfile} onChange={(event) => patch("color", {defaultProfile: event.target.value as AppPreferences["color"]["defaultProfile"]})}><option value="srgb">sRGB</option><option value="display-p3">Display P3</option><option value="none">{zh ? "不分配" : "Unassigned"}</option></select></label>
       </div>

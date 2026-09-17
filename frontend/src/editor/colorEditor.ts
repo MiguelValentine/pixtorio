@@ -23,6 +23,8 @@ export interface HSLAColor {
   a: number;
 }
 
+export type AlphaDisplayRange = "percent" | "byte";
+
 export type RGBAInput = Partial<Record<keyof RGBAColor, unknown>> | readonly unknown[] | null | undefined;
 export type HSLAInput = Partial<Record<keyof HSLAColor, unknown>> | null | undefined;
 
@@ -37,6 +39,22 @@ export function clampByte(value: unknown, fallback = 0) {
 /** Clamps a value to an alpha/percentage range without discarding decimals. */
 export function clampPercent(value: unknown, fallback = 0) {
   return clamp(numberOr(value, fallback), 0, 100);
+}
+
+/** Converts the internal percentage alpha to the configured UI range. */
+export function alphaToDisplay(value: unknown, range: AlphaDisplayRange): number {
+  const percent = clampPercent(value);
+  return range === "byte" ? Math.round(percent * 255 / 100) : percent;
+}
+
+/** Converts a UI alpha/opacity value back to the internal percentage form. */
+export function alphaFromDisplay(value: unknown, range: AlphaDisplayRange, fallback = 0): number {
+  const numeric = numberOr(value, fallback);
+  return range === "byte" ? clampPercent(Math.round(clamp(numeric, 0, 255)) * 100 / 255) : clampPercent(numeric, fallback);
+}
+
+export function alphaDisplayMaximum(range: AlphaDisplayRange): 100 | 255 {
+  return range === "byte" ? 255 : 100;
 }
 
 /** Normalizes a hue to the canonical [0, 360) range. */
