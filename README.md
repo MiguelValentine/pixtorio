@@ -7,6 +7,7 @@
 <p align="center">A local pixel-art and frame-animation editor.</p>
 
 <p align="center">
+  <a href="https://github.com/MiguelValentine/pixtorio/releases">Download</a> ·
   <a href="#quick-start">Quick start</a> ·
   <a href="#features">Features</a> ·
   <a href="#build">Build</a> ·
@@ -93,7 +94,7 @@ v4 intentionally rejects older projects: v1-v3 files are not migrated, downgrade
 
 ## Project Status
 
-Pixtorio has a broad baseline across pixel editing, animation, compositing, import/export, history, and MCP, but it does not claim complete Aseprite parity. Confirmed remaining differences and verification work are tracked in [PARITY_WORK.md](PARITY_WORK.md).
+Pixtorio has a broad baseline across pixel editing, animation, compositing, import/export, history, and MCP, but it does not claim complete Aseprite parity. The feature inventory and verification checkpoint are tracked in [AGENTS.md](AGENTS.md).
 
 Automation/CLI interfaces, scripting and plugin APIs, cloud synchronization, installer maintenance, and `.aseprite` compatibility are explicitly out of scope.
 

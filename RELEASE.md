@@ -39,7 +39,7 @@ Start the executable normally before running the smoke test. MCP client setup an
 
 ## Parity Release Gate
 
-The project is currently at a parity review checkpoint, not a parity-complete release. Do not publish a release as Aseprite-parity-complete until every pending item in `PARITY_WORK.md` has implementation and verification evidence across its document model, history, compositing, serialization, export, UI and MCP surfaces as applicable.
+The project is currently at a parity review checkpoint, not a parity-complete release. Do not publish a release as Aseprite-parity-complete until the feature inventory and verification requirements in `AGENTS.md` have implementation and verification evidence across their document model, history, compositing, serialization, export, UI and MCP surfaces as applicable.
 
 ## Format And Scope
 

@@ -1,4 +1,6 @@
-import {useEffect, useRef} from "react";
+import {useLayoutEffect, useRef} from "react";
+
+import {normalizePixelAspectRatio, type PixelAspectRatio} from "./pixelAspectRatio";
 
 const THUMBNAIL_SIZE = 28;
 const CHECKER_SIZE = 4;
@@ -21,15 +23,38 @@ export interface LayerThumbnailProps {
   visible: boolean;
   ariaLabel: string;
   size?: number;
+  pixelAspectRatio?: PixelAspectRatio;
+}
+
+/** Copy enough RGBA data to fill the target so a reused ImageData cannot retain old tail pixels. */
+export function copyThumbnailPixels(target: Uint8ClampedArray, pixels: Uint8ClampedArray) {
+  if (pixels.length < target.length) return false;
+  target.set(pixels.subarray(0, target.length));
+  return true;
+}
+
+export function getThumbnailDestinationRect(width: number, height: number, size: number, pixelAspectRatio?: PixelAspectRatio) {
+  const ratio = normalizePixelAspectRatio(pixelAspectRatio ?? {width: 1, height: 1});
+  const displayWidth = width * ratio.width;
+  const displayHeight = height * ratio.height;
+  const scale = Math.min(size / displayWidth, size / displayHeight);
+  const destinationWidth = Math.max(1, Math.round(displayWidth * scale));
+  const destinationHeight = Math.max(1, Math.round(displayHeight * scale));
+  return {
+    x: Math.floor((size - destinationWidth) / 2),
+    y: Math.floor((size - destinationHeight) / 2),
+    width: destinationWidth,
+    height: destinationHeight,
+  };
 }
 
 /** Renders a layer's pixels independently from the editor's main canvas. */
-export function LayerThumbnail({pixels, width, height, revision, visible, ariaLabel, size = THUMBNAIL_SIZE}: LayerThumbnailProps) {
+export function LayerThumbnail({pixels, width, height, revision, visible, ariaLabel, size = THUMBNAIL_SIZE, pixelAspectRatio}: LayerThumbnailProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const sourceCanvasRef = useRef<SourceCanvas | null>(null);
   const sourceImageRef = useRef<{width: number; height: number; imageData: ImageData} | null>(null);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
 
@@ -58,17 +83,13 @@ export function LayerThumbnail({pixels, width, height, revision, visible, ariaLa
     const imageData = cached?.width === width && cached.height === height
       ? cached.imageData
       : sourceContext.createImageData(width, height);
-    imageData.data.set(pixels.subarray(0, expectedLength));
+    if (!copyThumbnailPixels(imageData.data, pixels)) return;
     sourceContext.putImageData(imageData, 0, 0);
     sourceImageRef.current = {width, height, imageData};
 
-    const scale = Math.min(size / width, size / height);
-    const destinationWidth = Math.max(1, Math.round(width * scale));
-    const destinationHeight = Math.max(1, Math.round(height * scale));
-    const destinationX = Math.floor((size - destinationWidth) / 2);
-    const destinationY = Math.floor((size - destinationHeight) / 2);
-    context.drawImage(source, destinationX, destinationY, destinationWidth, destinationHeight);
-  }, [height, pixels, revision, size, width]);
+    const destination = getThumbnailDestinationRect(width, height, size, pixelAspectRatio);
+    context.drawImage(source, destination.x, destination.y, destination.width, destination.height);
+  }, [height, pixelAspectRatio?.height, pixelAspectRatio?.width, pixels, revision, size, width]);
 
   return (
     <canvas

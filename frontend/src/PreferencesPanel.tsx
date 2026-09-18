@@ -1,17 +1,19 @@
+import type {ReactNode} from "react";
 import type {AppPreferences} from "./editor/preferences";
 
 type PreferenceSection = Exclude<keyof AppPreferences, "version">;
 
-export function PreferencesPanel({preferences, onChange, zh}: {
+export function PreferencesPanel({preferences, onChange, zh, afterGeneral}: {
   preferences: AppPreferences;
   onChange: (preferences: AppPreferences) => void;
   zh: boolean;
+  afterGeneral?: ReactNode;
 }) {
   const patch = <K extends PreferenceSection>(section: K, value: Partial<AppPreferences[K]>) => {
     onChange({...preferences, [section]: {...preferences[section], ...value}});
   };
-  const toggle = (section: PreferenceSection, key: string, label: string, checked: boolean) => (
-    <label className="dialog-checkbox"><input type="checkbox" checked={checked} onChange={(event) => patch(section, {[key]: event.target.checked} as never)} />{label}</label>
+  const toggle = (section: PreferenceSection, key: string, label: string, checked: boolean, wide = false) => (
+    <label className={`dialog-checkbox${wide ? " dialog-field-wide" : ""}`}><input type="checkbox" checked={checked} onChange={(event) => patch(section, {[key]: event.target.checked} as never)} />{label}</label>
   );
 
   return <div className="preferences-sections">
@@ -20,18 +22,20 @@ export function PreferencesPanel({preferences, onChange, zh}: {
       <div className="preferences-section-body preferences-general">
         <label className="dialog-field"><span>{zh ? "界面主题" : "Theme"}</span><select value={preferences.general.theme} onChange={(event) => patch("general", {theme: event.target.value as AppPreferences["general"]["theme"]})}><option value="dark">{zh ? "深色" : "Dark"}</option><option value="light">{zh ? "浅色" : "Light"}</option></select></label>
         <label className="dialog-field"><span>{zh ? "界面语言" : "Language"}</span><select value={preferences.general.language} onChange={(event) => patch("general", {language: event.target.value as AppPreferences["general"]["language"]})}><option value="zh">中文</option><option value="en">English</option></select></label>
-        <label className="dialog-field"><span>{zh ? "界面缩放" : "UI scale"}</span><select value={preferences.general.uiScale} onChange={(event) => patch("general", {uiScale: Number(event.target.value)})}>{[75, 100, 125, 150, 175, 200].map((value) => <option key={value} value={value}>{value}%</option>)}</select></label>
+        <label className="dialog-field dialog-field-wide"><span>{zh ? "界面缩放" : "UI scale"}</span><select value={preferences.general.uiScale} onChange={(event) => patch("general", {uiScale: Number(event.target.value)})}>{[75, 100, 125, 150, 175, 200].map((value) => <option key={value} value={value}>{value}%</option>)}</select></label>
         {toggle("general", "expandMenusOnHover", zh ? "悬停展开菜单" : "Expand menus on hover", preferences.general.expandMenusOnHover)}
         {toggle("general", "paletteSeparators", zh ? "显示调色板色块分隔" : "Separate palette entries", preferences.general.paletteSeparators)}
       </div>
     </details>
 
+    {afterGeneral}
+
     <details>
       <summary>{zh ? "文件与恢复" : "Files & Recovery"}</summary>
       <div className="preferences-section-body preferences-general">
-        {toggle("files", "autosaveEnabled", zh ? "启用恢复数据" : "Enable recovery data", preferences.files.autosaveEnabled)}
         <label className="dialog-field"><span>{zh ? "自动保存间隔（秒）" : "Autosave interval (sec)"}</span><input type="number" min="5" max="600" value={preferences.files.autosaveSeconds} onChange={(event) => patch("files", {autosaveSeconds: Math.max(5, Math.min(600, Math.round(Number(event.target.value) || 5)))})} /></label>
         <label className="dialog-field"><span>{zh ? "最近项目数量" : "Recent items"}</span><input type="number" min="0" max="50" value={preferences.files.recentItems} onChange={(event) => patch("files", {recentItems: Math.max(0, Math.min(50, Math.round(Number(event.target.value) || 0)))})} /></label>
+        {toggle("files", "autosaveEnabled", zh ? "启用恢复数据" : "Enable recovery data", preferences.files.autosaveEnabled, true)}
       </div>
     </details>
 
@@ -80,7 +84,7 @@ export function PreferencesPanel({preferences, onChange, zh}: {
       <div className="preferences-section-body preferences-general">
         {toggle("timeline", "autoShow", zh ? "创建图层或帧时显示时间轴" : "Show timeline after layer/frame creation", preferences.timeline.autoShow)}
         {toggle("timeline", "rewindOnStop", zh ? "停止播放时回到起始帧" : "Rewind on stop", preferences.timeline.rewindOnStop)}
-        {toggle("timeline", "keepSelection", zh ? "编辑画布时保留时间轴选区" : "Keep timeline selection", preferences.timeline.keepSelection)}
+        {toggle("timeline", "keepSelection", zh ? "编辑画布时保留时间轴选区" : "Keep timeline selection", preferences.timeline.keepSelection, true)}
         <label className="dialog-field"><span>{zh ? "首帧编号" : "First frame number"}</span><input type="number" min="0" max="9999" value={preferences.timeline.firstFrame} onChange={(event) => patch("timeline", {firstFrame: Math.max(0, Math.min(9999, Math.round(Number(event.target.value) || 0)))})} /></label>
         <label className="dialog-field"><span>{zh ? "前置洋葱帧" : "Previous onion frames"}</span><input type="number" min="0" max="16" value={preferences.timeline.onionPreviousFrames} onChange={(event) => patch("timeline", {onionPreviousFrames: Math.max(0, Math.min(16, Math.round(Number(event.target.value) || 0)))})} /></label>
         <label className="dialog-field"><span>{zh ? "后置洋葱帧" : "Next onion frames"}</span><input type="number" min="0" max="16" value={preferences.timeline.onionNextFrames} onChange={(event) => patch("timeline", {onionNextFrames: Math.max(0, Math.min(16, Math.round(Number(event.target.value) || 0)))})} /></label>
@@ -93,17 +97,17 @@ export function PreferencesPanel({preferences, onChange, zh}: {
     <details>
       <summary>{zh ? "光标" : "Cursors"}</summary>
       <div className="preferences-section-body preferences-general">
-        <label className="dialog-field"><span>{zh ? "笔刷预览" : "Brush preview"}</span><select value={preferences.cursor.preview} onChange={(event) => patch("cursor", {preview: event.target.value as AppPreferences["cursor"]["preview"]})}><option value="brush">{zh ? "笔刷边缘" : "Brush edges"}</option><option value="crosshair">{zh ? "十字准星" : "Crosshair"}</option><option value="both">{zh ? "两者" : "Both"}</option></select></label>
-        <label className="dialog-field"><span>{zh ? "光标缩放" : "Cursor scale"}</span><input type="number" min="50" max="400" step="25" value={preferences.cursor.scale} onChange={(event) => patch("cursor", {scale: Math.max(50, Math.min(400, Math.round(Number(event.target.value) || 100)))})} /></label>
+        <label className="dialog-field dialog-field-wide"><span>{zh ? "笔刷预览" : "Brush preview"}</span><select value={preferences.cursor.preview} onChange={(event) => patch("cursor", {preview: event.target.value as AppPreferences["cursor"]["preview"]})}><option value="brush">{zh ? "笔刷边缘" : "Brush edges"}</option><option value="crosshair">{zh ? "十字准星" : "Crosshair"}</option><option value="both">{zh ? "两者" : "Both"}</option></select></label>
+        <label className="dialog-field dialog-field-wide"><span>{zh ? "光标缩放" : "Cursor scale"}</span><input type="number" min="50" max="400" step="25" value={preferences.cursor.scale} onChange={(event) => patch("cursor", {scale: Math.max(50, Math.min(400, Math.round(Number(event.target.value) || 100)))})} /></label>
         <label className="dialog-color-field"><span>{zh ? "光标颜色" : "Cursor color"}</span><input type="color" value={preferences.cursor.color} onChange={(event) => patch("cursor", {color: event.target.value})} /></label>
       </div>
     </details>
 
     <details>
       <summary>{zh ? "透明背景" : "Background"}</summary>
-      <div className="preferences-general">
-        <label className="dialog-field"><span>{zh ? "新建项目背景" : "New document background"}</span><select value={preferences.background.defaultFill} onChange={(event) => patch("background", {defaultFill: event.target.value as AppPreferences["background"]["defaultFill"]})}><option value="transparent">{zh ? "透明" : "Transparent"}</option><option value="foreground">{zh ? "前景色" : "Foreground"}</option><option value="background">{zh ? "背景色" : "Background"}</option></select></label>
-        <label className="dialog-field"><span>{zh ? "棋盘格尺寸" : "Checker size"}</span><input type="number" min="2" max="64" value={preferences.background.checkerSize} onChange={(event) => patch("background", {checkerSize: Math.max(2, Math.min(64, Math.round(Number(event.target.value) || 8)))})} /></label>
+      <div className="preferences-section-body preferences-general">
+        <label className="dialog-field dialog-field-wide"><span>{zh ? "新建项目背景" : "New document background"}</span><select value={preferences.background.defaultFill} onChange={(event) => patch("background", {defaultFill: event.target.value as AppPreferences["background"]["defaultFill"]})}><option value="transparent">{zh ? "透明" : "Transparent"}</option><option value="foreground">{zh ? "前景色" : "Foreground"}</option><option value="background">{zh ? "背景色" : "Background"}</option></select></label>
+        <label className="dialog-field dialog-field-wide"><span>{zh ? "棋盘格尺寸" : "Checker size"}</span><input type="number" min="2" max="64" value={preferences.background.checkerSize} onChange={(event) => patch("background", {checkerSize: Math.max(2, Math.min(64, Math.round(Number(event.target.value) || 8)))})} /></label>
         <label className="dialog-color-field"><span>{zh ? "浅色格" : "Light square"}</span><input type="color" value={preferences.background.checkerLight} onChange={(event) => patch("background", {checkerLight: event.target.value})} /></label>
         <label className="dialog-color-field"><span>{zh ? "深色格" : "Dark square"}</span><input type="color" value={preferences.background.checkerDark} onChange={(event) => patch("background", {checkerDark: event.target.value})} /></label>
       </div>
@@ -113,11 +117,11 @@ export function PreferencesPanel({preferences, onChange, zh}: {
       <summary>{zh ? "网格" : "Grid"}</summary>
       <div className="preferences-section-body preferences-field-grid">
         {(["width", "height", "offsetX", "offsetY"] as const).map((key) => <label className="dialog-field" key={key}><span>{{width: zh ? "宽度" : "Width", height: zh ? "高度" : "Height", offsetX: zh ? "偏移 X" : "Offset X", offsetY: zh ? "偏移 Y" : "Offset Y"}[key]}</span><input type="number" min={key.startsWith("offset") ? -2048 : 1} max="2048" value={preferences.grid[key]} onChange={(event) => patch("grid", {[key]: Math.round(Number(event.target.value) || 0)})} /></label>)}
-        <label className="dialog-color-field"><span>{zh ? "网格线颜色" : "Grid line color"}</span><input type="color" value={preferences.grid.lineColor} onChange={(event) => patch("grid", {lineColor: event.target.value})} /></label>
         <label className="dialog-field"><span>{zh ? "网格线不透明度" : "Grid opacity"}</span><input type="number" min="0" max="100" value={preferences.grid.lineOpacity} onChange={(event) => patch("grid", {lineOpacity: Math.max(0, Math.min(100, Math.round(Number(event.target.value) || 0)))})} /></label>
-        {toggle("grid", "showPixelGrid", zh ? "默认显示像素网格" : "Show pixel grid by default", preferences.grid.showPixelGrid)}
-        <label className="dialog-color-field"><span>{zh ? "像素网格颜色" : "Pixel grid color"}</span><input type="color" value={preferences.grid.pixelGridColor} onChange={(event) => patch("grid", {pixelGridColor: event.target.value})} /></label>
         <label className="dialog-field"><span>{zh ? "像素网格不透明度" : "Pixel grid opacity"}</span><input type="number" min="0" max="100" value={preferences.grid.pixelGridOpacity} onChange={(event) => patch("grid", {pixelGridOpacity: Math.max(0, Math.min(100, Math.round(Number(event.target.value) || 0)))})} /></label>
+        <label className="dialog-checkbox dialog-field-wide"><input type="checkbox" checked={preferences.grid.showPixelGrid} onChange={(event) => patch("grid", {showPixelGrid: event.target.checked})} />{zh ? "默认显示像素网格" : "Show pixel grid by default"}</label>
+        <label className="dialog-color-field"><span>{zh ? "网格线颜色" : "Grid line color"}</span><input type="color" value={preferences.grid.lineColor} onChange={(event) => patch("grid", {lineColor: event.target.value})} /></label>
+        <label className="dialog-color-field"><span>{zh ? "像素网格颜色" : "Pixel grid color"}</span><input type="color" value={preferences.grid.pixelGridColor} onChange={(event) => patch("grid", {pixelGridColor: event.target.value})} /></label>
       </div>
     </details>
 
@@ -132,7 +136,7 @@ export function PreferencesPanel({preferences, onChange, zh}: {
     <details>
       <summary>{zh ? "历史记录" : "Undo"}</summary>
       <div className="preferences-section-body preferences-check-grid">
-        <label className="dialog-field"><span>{zh ? "历史内存上限（MB）" : "History memory limit (MB)"}</span><input type="number" min="16" max="2048" step="16" value={preferences.undo.memoryLimitMB} onChange={(event) => patch("undo", {memoryLimitMB: Math.max(16, Math.min(2048, Math.round(Number(event.target.value) || 16)))})} /></label>
+        <label className="dialog-field dialog-field-wide"><span>{zh ? "历史内存上限（MB）" : "History memory limit (MB)"}</span><input type="number" min="16" max="2048" step="16" value={preferences.undo.memoryLimitMB} onChange={(event) => patch("undo", {memoryLimitMB: Math.max(16, Math.min(2048, Math.round(Number(event.target.value) || 16)))})} /></label>
         {toggle("undo", "goToModified", zh ? "撤销时跳转到修改的帧与图层" : "Go to modified frame and layer", preferences.undo.goToModified)}
         {toggle("undo", "allowNonLinear", zh ? "允许非线性历史记录" : "Allow non-linear history", preferences.undo.allowNonLinear)}
         {toggle("undo", "showTooltip", zh ? "显示撤销提示" : "Show undo tooltip", preferences.undo.showTooltip)}

@@ -7,6 +7,7 @@
 <p align="center">面向像素艺术与逐帧动画创作的本地桌面编辑器。</p>
 
 <p align="center">
+  <a href="https://github.com/MiguelValentine/pixtorio/releases">下载</a> ·
   <a href="#快速开始">快速开始</a> ·
   <a href="#功能一览">功能</a> ·
   <a href="#构建">构建</a> ·
@@ -93,7 +94,7 @@ v4 有意不兼容旧版本：v1-v3 项目会被拒绝，不提供迁移、降�
 
 ## 项目状态
 
-Pixtorio 已具备较完整的像素编辑、动画、合成、导入导出、历史记录与 MCP 基础能力，但尚未宣称达到 Aseprite 全量功能对等。已确认的剩余差异和验证工作以 [PARITY_WORK.md](PARITY_WORK.md) 为准。
+Pixtorio 已具备较完整的像素编辑、动画、合成、导入导出、历史记录与 MCP 基础能力，但尚未宣称达到 Aseprite 全量功能对等。功能清单和验证检查点以 [AGENTS.md](AGENTS.md) 为准。
 
 以下能力不在项目范围内：自动化/CLI、脚本与插件 API、云同步、安装包维护，以及 `.aseprite` 兼容。
 

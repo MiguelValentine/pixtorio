@@ -1,4 +1,5 @@
 import {useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState} from "react";
+import {flushSync} from "react-dom";
 import {
   beginTool,
   applyInkMode,
@@ -63,6 +64,17 @@ import {
   type TransformQuad,
 } from "./transform";
 import {nextSliceSelection, orderedSliceOverlays, selectedSliceBounds} from "./sliceHitTesting";
+
+export function canvasLocalPoint(
+  pointer: {clientX: number; clientY: number},
+  rect: {left: number; top: number; width: number; height: number},
+  surface: {width: number; height: number},
+): Point {
+  return {
+    x: (pointer.clientX - rect.left) * (rect.width > 0 ? surface.width / rect.width : 1),
+    y: (pointer.clientY - rect.top) * (rect.height > 0 ? surface.height / rect.height : 1),
+  };
+}
 
 interface PixelCanvasProps {
   width: number;
@@ -263,6 +275,19 @@ const zoomLevels = [1, 2, 4, 6, 8, 12, 16, 24, 32];
 const transformHandleSize = 8;
 const brushCursorTools = new Set<ToolID>(["pencil", "eraser", "line", "rectangle", "ellipse", "curve", "polyline", "polygon", "spray", "blur", "jumble", "contour", "replace-color"]);
 const freehandTools = new Set<ToolID>(["pencil", "eraser"]);
+
+export function accumulateWheelZoom(
+  deltaY: number,
+  accumulator: number,
+  platform = typeof navigator === "undefined" ? "" : navigator.platform,
+): {step: -1 | 0 | 1; remainder: number} {
+  if (deltaY === 0) return {step: 0, remainder: accumulator};
+  const direction: -1 | 1 = deltaY < 0 ? 1 : -1;
+  const matchingAccumulator = accumulator === 0 || Math.sign(accumulator) === direction ? accumulator : 0;
+  const next = matchingAccumulator + direction * (/^Mac/i.test(platform) ? 0.25 : 1);
+  if (Math.abs(next) < 1) return {step: 0, remainder: next};
+  return {step: direction, remainder: next - direction};
+}
 
 const transformCursors: Record<TransformHandle, string> = {
   nw: "nwse-resize",
@@ -581,6 +606,7 @@ export function PixelCanvas({
   onSliceDoubleClick,
   interactionGuardRef,
 }: PixelCanvasProps) {
+  const canvasStackRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const cursorCanvasRef = useRef<HTMLCanvasElement>(null);
   const textPreviewCanvasRef = useRef<{preview: NonNullable<PixelCanvasProps["textPreview"]>; canvas: HTMLCanvasElement} | null>(null);
@@ -637,6 +663,7 @@ export function PixelCanvas({
   const dynamicsSampleRef = useRef<{x: number; y: number; time: number} | null>(null);
   const stabilizedPointRef = useRef<Point | null>(null);
   const fittedDocumentKeyRef = useRef("");
+  const wheelZoomAccumulatorRef = useRef(0);
 
   useEffect(() => {
     if (!autoFitOnOpen || !documentKey || fittedDocumentKeyRef.current === documentKey || surfaceSize.width <= 0 || surfaceSize.height <= 0) return;
@@ -731,7 +758,8 @@ export function PixelCanvas({
     let dynamicColor: RGBA = sourceColor;
     let dynamicBrush = rotatedBrush;
     if (brushDynamicsEnabled && brushDynamics && event) {
-      const currentSample = {x: event.clientX / zoom, y: event.clientY / zoom, time: event.timeStamp};
+      const point = canvasLocalPoint(event, event.currentTarget.getBoundingClientRect(), surfaceSize);
+      const currentSample = {x: point.x / zoom, y: point.y / zoom, time: event.timeStamp};
       const velocity = pointerVelocity(dynamicsSampleRef.current, currentSample);
       dynamicsSampleRef.current = currentSample;
       const dynamics = resolveBrushDynamics(
@@ -774,19 +802,22 @@ export function PixelCanvas({
       wrapX: tiledX,
       wrapY: tiledY,
     };
-  }, [backgroundClearColor, backgroundLayer, bitmapBrush, patternBrush, patternAlignment, patternOrigin, brushAngle, brushDynamics, brushDynamicsEnabled, brushShape, brushSize, brushSpacing, color, gradientDither, height, pixelPerfect, pixels, polygonSides, pressureEnabled, rotatedBrush, secondaryColor, tiledX, tiledY, width, zoom]);
+  }, [backgroundClearColor, backgroundLayer, bitmapBrush, patternBrush, patternAlignment, patternOrigin, brushAngle, brushDynamics, brushDynamicsEnabled, brushShape, brushSize, brushSpacing, color, gradientDither, height, pixelPerfect, pixels, polygonSides, pressureEnabled, rotatedBrush, secondaryColor, surfaceSize, tiledX, tiledY, width, zoom]);
 
   useEffect(() => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
+    const stack = canvasStackRef.current;
+    if (!stack) return;
     const observer = new ResizeObserver(([entry]) => {
       const width = entry.contentRect.width;
       const height = entry.contentRect.height;
-      setSurfaceSize((current) => current.width === width && current.height === height
-        ? current
-        : {width, height});
+      // Commit display size and bitmap redraw together so an old bitmap is never stretched.
+      flushSync(() => {
+        setSurfaceSize((current) => current.width === width && current.height === height
+          ? current
+          : {width, height});
+      });
     });
-    observer.observe(canvas);
+    observer.observe(stack);
     return () => observer.disconnect();
   }, []);
 
@@ -830,7 +861,7 @@ export function PixelCanvas({
     };
   }, []);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas || surfaceSize.width === 0 || surfaceSize.height === 0) return;
     const ratio = window.devicePixelRatio || 1;
@@ -1204,8 +1235,8 @@ export function PixelCanvas({
 
   const eventPoint = useCallback((event: React.MouseEvent<HTMLCanvasElement>) => {
     const rect = event.currentTarget.getBoundingClientRect();
-    return {x: event.clientX - rect.left, y: event.clientY - rect.top};
-  }, []);
+    return canvasLocalPoint(event, rect, surfaceSize);
+  }, [surfaceSize]);
 
   const documentPoint = useCallback((point: Point) => ({
     x: Math.floor((point.x - viewport.x) / zoom),
@@ -2266,16 +2297,22 @@ export function PixelCanvas({
   };
 
   const handleWheel = useCallback((event: WheelEvent) => {
-    if (!wheelZoom) return;
+    if (!wheelZoom) {
+      wheelZoomAccumulatorRef.current = 0;
+      return;
+    }
     event.preventDefault();
     const canvas = canvasRef.current;
     if (!canvas) return;
+    const accumulated = accumulateWheelZoom(event.deltaY, wheelZoomAccumulatorRef.current);
+    wheelZoomAccumulatorRef.current = accumulated.remainder;
+    if (accumulated.step === 0) return;
     const rect = canvas.getBoundingClientRect();
     const point = zoomFromCenter
-      ? {x: rect.width / 2, y: rect.height / 2}
-      : {x: event.clientX - rect.left, y: event.clientY - rect.top};
+      ? {x: surfaceSize.width / 2, y: surfaceSize.height / 2}
+      : canvasLocalPoint(event, rect, surfaceSize);
     const currentIndex = zoomLevels.indexOf(zoom);
-    const nextIndex = Math.max(0, Math.min(zoomLevels.length - 1, currentIndex + (event.deltaY < 0 ? 1 : -1)));
+    const nextIndex = Math.max(0, Math.min(zoomLevels.length - 1, currentIndex + accumulated.step));
     const nextZoom = zoomLevels[nextIndex];
     if (nextZoom === zoom) return;
     const documentX = (point.x - viewport.x) / zoom;
@@ -2285,7 +2322,7 @@ export function PixelCanvas({
       y: Math.round(point.y - documentY * nextZoom),
     });
     onZoomChange(nextZoom);
-  }, [onZoomChange, viewport, wheelZoom, zoom, zoomFromCenter]);
+  }, [onZoomChange, surfaceSize, viewport, wheelZoom, zoom, zoomFromCenter]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -2294,16 +2331,18 @@ export function PixelCanvas({
     return () => canvas.removeEventListener("wheel", handleWheel);
   }, [handleWheel]);
 
+  const canvasDisplayStyle = {width: surfaceSize.width, height: surfaceSize.height};
+
   return (
-    <div className="pixel-canvas-stack">
+    <div className="pixel-canvas-stack" ref={canvasStackRef}>
       <canvas
         ref={canvasRef}
         className={`pixel-canvas tool-${tool}${isPanning ? " is-panning" : ""}${editable || onTilemapPointer ? "" : " is-locked"}`}
         style={!isPanning && transformCursor
-          ? {cursor: transformCursor}
+          ? {...canvasDisplayStyle, cursor: transformCursor}
           : !isPanning && brushCursorVisible
-            ? {cursor: "none"}
-            : undefined}
+            ? {...canvasDisplayStyle, cursor: "none"}
+            : canvasDisplayStyle}
         onContextMenu={(event) => event.preventDefault()}
         onPointerDown={handlePointerDown}
         onPointerMove={handlePointerMove}
@@ -2311,7 +2350,7 @@ export function PixelCanvas({
         onPointerCancel={finishPointer}
         onPointerLeave={() => { onCursorChange(null); updateBrushCursor(null); if (!transformGestureRef.current) setTransformCursor(null); }}
       />
-      <canvas ref={cursorCanvasRef} className="pixel-cursor-canvas" aria-hidden="true" />
+      <canvas ref={cursorCanvasRef} className="pixel-cursor-canvas" style={canvasDisplayStyle} aria-hidden="true" />
     </div>
   );
 }

@@ -1,6 +1,6 @@
-import {useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type DragEvent as ReactDragEvent, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent} from "react";
+import {useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type DragEvent as ReactDragEvent, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent} from "react";
 import {GIFEncoder, applyPalette, quantize} from "gifenc";
-import {flushSync} from "react-dom";
+import {createPortal, flushSync} from "react-dom";
 import {
   Blend,
   Check,
@@ -78,6 +78,7 @@ import {
 } from "lucide-react";
 import {ClearRecovery, ClipboardReadImage, ClipboardWriteImage, ImportPNG, ImportPNGSequence, LoadRecovery, OpenPixio, OpenPixioPath, OpenStartupProject, SaveGIFWithOptions, SavePackedAtlas, SavePixio, SavePixioPath, SavePNGWithOptions, SavePNGSequence, SaveRecovery, SetWindowCloseState} from "../wailsjs/go/main/App";
 import {ClipboardGetText, ClipboardSetText, EventsOn, WindowFullscreen, WindowIsFullscreen, WindowUnfullscreen} from "../wailsjs/runtime/runtime";
+import {useConstrainedMenuStyle} from "./menuPositioning";
 import {ClaimMCPCommand, CompleteMCPCommand, SetMCPReady} from "../wailsjs/go/main/App";
 import {handleMCPWorkspaceCommand, type MCPWorkspaceTab} from "./editor/mcpWorkspace";
 import {defaultWorkspaceDimensions, defaultWorkspaceVisibility, readWorkspaceCanvasOnly, readWorkspaceLayouts, readWorkspaceVisibility, saveWorkspaceCanvasOnly, saveWorkspaceLayout, saveWorkspaceVisibility, deleteWorkspaceLayout} from "./editor/workspaceLayouts";
@@ -85,7 +86,7 @@ import {applyNewDocumentPreferenceDefaults, readPreferences, savePreferences, ty
 import {shouldAutoShowTimeline, timelineStructure} from "./editor/timelineVisibility";
 import {readDefaultPalette, saveDefaultPalette, resetDefaultPalette} from "./editor/defaultPalette";
 import {applyDocumentPalette, relocateTransparentIndex} from "./editor/paletteOperations";
-import {applyPixelAspectRatio, resizePixels} from "./editor/pixelAspectRatio";
+import {applyPixelAspectRatio, normalizePixelAspectRatio, resizePixels} from "./editor/pixelAspectRatio";
 import {CurveEditor} from "./CurveEditor";
 import {BrushPresetPanel} from "./BrushPresetPanel";
 import {BrushDynamicsPanel} from "./BrushDynamicsPanel";
@@ -1482,6 +1483,39 @@ function storedNumber(key: string, fallback: number, minimum: number, maximum: n
   return Number.isFinite(value) ? Math.max(minimum, Math.min(maximum, value)) : fallback;
 }
 
+export function calculatePanelResizeValue(startValue: number, startClient: number, currentClient: number, uiScalePercent: number, minimum: number, maximum: number) {
+  const uiScale = Math.max(0.01, uiScalePercent / 100);
+  const delta = (startClient - currentClient) / uiScale;
+  return Math.max(minimum, Math.min(maximum, Math.round(startValue + delta)));
+}
+
+export type TimelineScrollMetrics = {
+  scrollTop: number;
+  scrollHeight: number;
+  clientHeight: number;
+};
+
+export function getTimelineScrollTopForPeer(source: TimelineScrollMetrics, target: TimelineScrollMetrics) {
+  const targetMax = Math.max(0, target.scrollHeight - target.clientHeight);
+  return Math.max(0, Math.min(targetMax, source.scrollTop));
+}
+
+export function syncTimelineScrollPositions(source: TimelineScrollMetrics, target: TimelineScrollMetrics) {
+  const scrollTop = getTimelineScrollTopForPeer(source, target);
+  source.scrollTop = scrollTop;
+  target.scrollTop = scrollTop;
+  return scrollTop;
+}
+
+export function getTimelineHorizontalScrollbarHeight(surface: {offsetHeight: number; clientHeight: number}) {
+  return Math.max(0, surface.offsetHeight - surface.clientHeight);
+}
+
+function isMenuSurfaceTarget(target: EventTarget | null, refs: ReadonlyArray<{current: HTMLElement | null}>) {
+  if (typeof Node === "undefined" || !(target instanceof Node)) return false;
+  return refs.some((ref) => Boolean(ref.current?.contains(target)));
+}
+
 function defaultToolShortcutAssignments(): ToolShortcutAssignments {
   const assignments = Object.fromEntries(tools.map(({id}) => [id, ""])) as ToolShortcutAssignments;
   for (const [key, tool] of Object.entries(toolShortcuts)) assignments[tool] = key;
@@ -1585,7 +1619,21 @@ function App() {
   const spriteMenuRef = useRef<HTMLDivElement | null>(null);
   const viewMenuRef = useRef<HTMLDivElement | null>(null);
   const paletteMenuRef = useRef<HTMLDivElement | null>(null);
+  const menuLayerRef = useRef<HTMLDivElement | null>(null);
+  const fileMenuPopoverRef = useRef<HTMLDivElement | null>(null);
+  const editMenuPopoverRef = useRef<HTMLDivElement | null>(null);
+  const spriteMenuPopoverRef = useRef<HTMLDivElement | null>(null);
+  const viewMenuPopoverRef = useRef<HTMLDivElement | null>(null);
+  const pasteSpecialAnchorRef = useRef<HTMLDivElement | null>(null);
+  const pasteSpecialMenuRef = useRef<HTMLDivElement | null>(null);
+  const shiftPixelsAnchorRef = useRef<HTMLDivElement | null>(null);
+  const shiftPixelsMenuRef = useRef<HTMLDivElement | null>(null);
+  const imageEffectsAnchorRef = useRef<HTMLDivElement | null>(null);
+  const imageEffectsMenuRef = useRef<HTMLDivElement | null>(null);
   const documentTabsRef = useRef<HTMLDivElement | null>(null);
+  const timelineLayersRef = useRef<HTMLDivElement | null>(null);
+  const timelineFramesRef = useRef<HTMLDivElement | null>(null);
+  const timelineScrollSyncRef = useRef(false);
   const [revision, setRevision] = useState(0);
   const [displayDirtyBounds, setDisplayDirtyBounds] = useState<PixelBounds | null>(null);
   const pixelRenderRef = useRef<{frameRequest: number | null; bounds: PixelBounds | null}>({frameRequest: null, bounds: null});
@@ -1687,6 +1735,7 @@ function App() {
   const [previewOpen, setPreviewOpen] = useState(false);
   const [inspectorWidth, setInspectorWidth] = useState(() => storedNumber("pixtorio-inspector-width", 228, 190, 420));
   const [timelineHeight, setTimelineHeight] = useState(() => storedNumber("pixtorio-timeline-height", 254, 150, 520));
+  const [timelineLayersBottomPadding, setTimelineLayersBottomPadding] = useState(0);
   const [workspaceLayouts, setWorkspaceLayouts] = useState(() => readWorkspaceLayouts(localStorage));
   const [workspaceLayoutName, setWorkspaceLayoutName] = useState("");
   const [workspaceLayoutSelected, setWorkspaceLayoutSelected] = useState("");
@@ -1786,9 +1835,9 @@ function App() {
     const startClient = kind === "inspector" ? event.clientX : event.clientY;
     const startValue = kind === "inspector" ? inspectorWidth : timelineHeight;
     const onMove = (moveEvent: PointerEvent) => {
-      const delta = startClient - (kind === "inspector" ? moveEvent.clientX : moveEvent.clientY);
-      if (kind === "inspector") setInspectorWidth(Math.max(190, Math.min(420, startValue + delta)));
-      else setTimelineHeight(Math.max(150, Math.min(520, startValue + delta)));
+      const currentClient = kind === "inspector" ? moveEvent.clientX : moveEvent.clientY;
+      if (kind === "inspector") setInspectorWidth(calculatePanelResizeValue(startValue, startClient, currentClient, preferences.general.uiScale, 190, 420));
+      else setTimelineHeight(calculatePanelResizeValue(startValue, startClient, currentClient, preferences.general.uiScale, 150, 520));
     };
     const onUp = () => {
       window.removeEventListener("pointermove", onMove);
@@ -1796,7 +1845,7 @@ function App() {
     };
     window.addEventListener("pointermove", onMove);
     window.addEventListener("pointerup", onUp, {once: true});
-  }, [inspectorWidth, timelineHeight]);
+  }, [inspectorWidth, preferences.general.uiScale, timelineHeight]);
   const [celRotationDraft, setCelRotationDraft] = useState(0);
   const [celPropertiesDialog, setCelPropertiesDialog] = useState<{addresses: Array<{layerId: string; frameId: string}>; opacity: string; zIndex: string} | null>(null);
   const [celOffsetXDraft, setCelOffsetXDraft] = useState(0);
@@ -2005,6 +2054,38 @@ function App() {
     }
     return true;
   });
+  const handleTimelineScroll = useCallback((source: "layers" | "frames") => {
+    if (timelineScrollSyncRef.current) return;
+    const sourceElement = source === "layers" ? timelineLayersRef.current : timelineFramesRef.current;
+    const targetElement = source === "layers" ? timelineFramesRef.current : timelineLayersRef.current;
+    if (!sourceElement || !targetElement) return;
+    timelineScrollSyncRef.current = true;
+    try {
+      syncTimelineScrollPositions(sourceElement, targetElement);
+    } finally {
+      timelineScrollSyncRef.current = false;
+    }
+  }, []);
+  useLayoutEffect(() => {
+    if (!timelineVisible) {
+      setTimelineLayersBottomPadding((current) => current === 0 ? current : 0);
+      return;
+    }
+    const frames = timelineFramesRef.current;
+    if (!frames) {
+      setTimelineLayersBottomPadding((current) => current === 0 ? current : 0);
+      return;
+    }
+    const updateBottomPadding = () => {
+      const next = getTimelineHorizontalScrollbarHeight(frames);
+      setTimelineLayersBottomPadding((current) => current === next ? current : next);
+    };
+    updateBottomPadding();
+    if (typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(updateBottomPadding);
+    observer.observe(frames);
+    return () => observer.disconnect();
+  }, [activeTabID, hasOpenDocument, pixelDocument.frames.length, preferences.general.uiScale, timelineEntries.length, timelineHeight, timelineVisible]);
   const allTimelineImageLayerIDs = timelineLayerEntries(pixelDocument)
     .filter(({layer}) => isCelLayer(layer))
     .map(({layer}) => layer.id);
@@ -2108,9 +2189,17 @@ function App() {
     const canvas = preview.document.querySelector<HTMLCanvasElement>("canvas");
     const counter = preview.document.querySelector<HTMLElement>("[data-counter]");
     if (!canvas) return;
+    const ratio = normalizePixelAspectRatio(pixelDocument.pixelAspectRatio);
+    const displayWidth = pixelDocument.width * ratio.width;
+    const displayHeight = pixelDocument.height * ratio.height;
     canvas.width = pixelDocument.width;
     canvas.height = pixelDocument.height;
-    canvas.getContext("2d")?.putImageData(new ImageData(new Uint8ClampedArray(compositeFrame(pixelDocument)), pixelDocument.width, pixelDocument.height), 0, 0);
+    canvas.style.aspectRatio = `${displayWidth} / ${displayHeight}`;
+    canvas.style.width = `${displayWidth}px`;
+    canvas.style.height = "auto";
+    const imageData = new ImageData(pixelDocument.width, pixelDocument.height);
+    imageData.data.set(compositeFrame(pixelDocument));
+    canvas.getContext("2d")?.putImageData(imageData, 0, 0);
     preview.document.documentElement.dataset.theme = lightTheme ? "light" : "dark";
     preview.document.title = language === "zh" ? "Pixtorio 动画预览" : "Pixtorio Animation Preview";
     if (counter) counter.textContent = `${pixelDocument.frames.findIndex((frame) => frame.id === pixelDocument.activeFrameId) + preferences.timeline.firstFrame} / ${preferences.timeline.firstFrame + pixelDocument.frames.length - 1}`;
@@ -2350,7 +2439,8 @@ function App() {
   useEffect(() => {
     if (!isFileMenuOpen) return;
     const closeOnOutsidePointer = (event: PointerEvent) => {
-      if (!fileMenuRef.current?.contains(event.target as Node)) setIsFileMenuOpen(false);
+      if (!fileMenuRef.current?.contains(event.target as Node)
+        && !isMenuSurfaceTarget(event.target, [fileMenuPopoverRef])) setIsFileMenuOpen(false);
     };
     window.addEventListener("pointerdown", closeOnOutsidePointer);
     return () => window.removeEventListener("pointerdown", closeOnOutsidePointer);
@@ -2359,7 +2449,8 @@ function App() {
   useEffect(() => {
     if (!isEditMenuOpen) return;
     const closeOnOutsidePointer = (event: PointerEvent) => {
-      if (!editMenuRef.current?.contains(event.target as Node)) {
+      if (!editMenuRef.current?.contains(event.target as Node)
+        && !isMenuSurfaceTarget(event.target, [editMenuPopoverRef, pasteSpecialMenuRef, shiftPixelsMenuRef])) {
         setIsEditMenuOpen(false);
         setIsPasteSpecialMenuOpen(false);
         setIsShiftPixelsMenuOpen(false);
@@ -2372,7 +2463,8 @@ function App() {
   useEffect(() => {
     if (!isSpriteMenuOpen) return;
     const closeOnOutsidePointer = (event: PointerEvent) => {
-      if (!spriteMenuRef.current?.contains(event.target as Node)) {
+      if (!spriteMenuRef.current?.contains(event.target as Node)
+        && !isMenuSurfaceTarget(event.target, [spriteMenuPopoverRef, imageEffectsMenuRef])) {
         setIsSpriteMenuOpen(false);
         setIsImageEffectsMenuOpen(false);
       }
@@ -2384,7 +2476,8 @@ function App() {
   useEffect(() => {
     if (!isViewMenuOpen) return;
     const closeOnOutsidePointer = (event: PointerEvent) => {
-      if (!viewMenuRef.current?.contains(event.target as Node)) setIsViewMenuOpen(false);
+      if (!viewMenuRef.current?.contains(event.target as Node)
+        && !isMenuSurfaceTarget(event.target, [viewMenuPopoverRef])) setIsViewMenuOpen(false);
     };
     window.addEventListener("pointerdown", closeOnOutsidePointer);
     return () => window.removeEventListener("pointerdown", closeOnOutsidePointer);
@@ -5522,7 +5615,7 @@ function App() {
   const scrollDocumentTabs = (direction: -1 | 1) => {
     const container = documentTabsRef.current;
     if (!container) return;
-    const tabWidth = container.querySelector<HTMLElement>(".document-tab")?.getBoundingClientRect().width ?? 190;
+    const tabWidth = container.querySelector<HTMLElement>(".document-tab")?.offsetWidth ?? 190;
     const target = direction < 0
       ? Math.floor((container.scrollLeft - 1) / tabWidth) * tabWidth
       : Math.ceil((container.scrollLeft + 1) / tabWidth) * tabWidth;
@@ -5543,6 +5636,55 @@ function App() {
     setShowPixelGrid(next.grid.showPixelGrid);
   };
   const uiScale = preferences.general.uiScale / 100;
+  const fileMenuPopoverStyle = useConstrainedMenuStyle({
+    open: isFileMenuOpen,
+    anchorRef: fileMenuRef,
+    menuRef: fileMenuPopoverRef,
+    uiScalePercent: preferences.general.uiScale,
+    kind: "main",
+  });
+  const editMenuPopoverStyle = useConstrainedMenuStyle({
+    open: isEditMenuOpen,
+    anchorRef: editMenuRef,
+    menuRef: editMenuPopoverRef,
+    uiScalePercent: preferences.general.uiScale,
+    kind: "main",
+  });
+  const spriteMenuPopoverStyle = useConstrainedMenuStyle({
+    open: isSpriteMenuOpen,
+    anchorRef: spriteMenuRef,
+    menuRef: spriteMenuPopoverRef,
+    uiScalePercent: preferences.general.uiScale,
+    kind: "main",
+  });
+  const viewMenuPopoverStyle = useConstrainedMenuStyle({
+    open: isViewMenuOpen,
+    anchorRef: viewMenuRef,
+    menuRef: viewMenuPopoverRef,
+    uiScalePercent: preferences.general.uiScale,
+    kind: "main",
+  });
+  const pasteSpecialMenuStyle = useConstrainedMenuStyle({
+    open: isPasteSpecialMenuOpen,
+    anchorRef: pasteSpecialAnchorRef,
+    menuRef: pasteSpecialMenuRef,
+    uiScalePercent: preferences.general.uiScale,
+    kind: "submenu",
+  });
+  const shiftPixelsMenuStyle = useConstrainedMenuStyle({
+    open: isShiftPixelsMenuOpen,
+    anchorRef: shiftPixelsAnchorRef,
+    menuRef: shiftPixelsMenuRef,
+    uiScalePercent: preferences.general.uiScale,
+    kind: "submenu",
+  });
+  const imageEffectsMenuStyle = useConstrainedMenuStyle({
+    open: isImageEffectsMenuOpen,
+    anchorRef: imageEffectsAnchorRef,
+    menuRef: imageEffectsMenuRef,
+    uiScalePercent: preferences.general.uiScale,
+    kind: "submenu",
+  });
 
   return (
     <div
@@ -5550,9 +5692,8 @@ function App() {
       style={{
         "--inspector-width": inspectorVisible ? `${inspectorWidth}px` : "0px",
         "--timeline-height": timelineVisible ? `${timelineHeight}px` : "0px",
+        "--ui-scale": uiScale,
         zoom: uiScale,
-        width: `${100 / uiScale}%`,
-        height: `${100 / uiScale}%`,
       } as CSSProperties}
       onDragOver={(event) => { if (event.dataTransfer.types.includes("Files")) { event.preventDefault(); event.dataTransfer.dropEffect = "copy"; } }}
       onDrop={(event) => { if (event.dataTransfer.files.length > 0) { event.preventDefault(); void importDroppedFiles(event.dataTransfer.files); } }}
@@ -5564,6 +5705,10 @@ function App() {
         aria-label={language === "zh" ? "退出画布独占模式" : "Exit canvas-only mode"}
         onClick={() => setCanvasOnly(false)}
       ><PanelTopOpen size={17} /></button>}
+      <div
+        ref={menuLayerRef}
+        style={{position: "fixed", inset: 0, zIndex: 20, pointerEvents: "none"}}
+      />
       <header className="topbar">
         <div className="file-menu" ref={fileMenuRef} onPointerEnter={() => {
           if (!preferences.general.expandMenusOnHover || (!isFileMenuOpen && !isEditMenuOpen && !isSpriteMenuOpen && !isViewMenuOpen)) return;
@@ -5578,7 +5723,7 @@ function App() {
           >
             {ui.file} <ChevronDown size={14} aria-hidden="true" />
           </button>
-          {isFileMenuOpen && <div className="file-menu-popover" role="menu" aria-label={ui.file}>
+          {isFileMenuOpen && menuLayerRef.current && createPortal(<div ref={fileMenuPopoverRef} className="file-menu-popover" role="menu" aria-label={ui.file} style={fileMenuPopoverStyle}>
             <button type="button" role="menuitem" onClick={() => { setIsFileMenuOpen(false); dispatchCommandShortcut("new"); }}><FilePlus size={16} />{ui.newProject}<span>{formatShortcutForPlatform(commandShortcutAssignments.new)}</span></button>
             <button type="button" role="menuitem" disabled={!hasOpenDocument || !selection} onClick={() => { setIsFileMenuOpen(false); dispatchCommandShortcut("newFromSelection"); }}><BoxSelect size={16} />{language === "zh" ? "从选区新建" : "New from selection"}<span>{formatShortcutForPlatform(commandShortcutAssignments.newFromSelection)}</span></button>
             <button type="button" role="menuitem" onClick={() => { setIsFileMenuOpen(false); dispatchCommandShortcut("open"); }}><FolderOpen size={16} />{ui.openProject}<span>{formatShortcutForPlatform(commandShortcutAssignments.open)}</span></button>
@@ -5598,7 +5743,7 @@ function App() {
               <p className="menu-label">{ui.recentProjects}</p>
               {recentProjects.map((path) => <button key={path} type="button" role="menuitem" className="recent-menu-project" title={path} onClick={() => { setIsFileMenuOpen(false); void openRecentProject(path); }}>{path.split(/[\\/]/).pop()}</button>)}
             </>}
-          </div>}
+          </div>, menuLayerRef.current)}
         </div>
         <div className="file-menu" ref={editMenuRef} onPointerEnter={() => {
           if (!preferences.general.expandMenusOnHover || !hasOpenDocument || (!isFileMenuOpen && !isEditMenuOpen && !isSpriteMenuOpen && !isViewMenuOpen)) return;
@@ -5621,7 +5766,7 @@ function App() {
           >
             {language === "zh" ? "编辑" : "Edit"} <ChevronDown size={14} aria-hidden="true" />
           </button>
-          {isEditMenuOpen && <div className="file-menu-popover edit-menu-popover" role="menu" aria-label={language === "zh" ? "编辑" : "Edit"}>
+          {isEditMenuOpen && menuLayerRef.current && createPortal(<div ref={editMenuPopoverRef} className="file-menu-popover edit-menu-popover" role="menu" aria-label={language === "zh" ? "编辑" : "Edit"} style={editMenuPopoverStyle}>
             <button type="button" role="menuitem" disabled={!history.canUndo} onClick={() => { setIsEditMenuOpen(false); dispatchCommandShortcut("undo"); }}><Undo2 size={16} />{ui.undo}<span>{formatShortcutForPlatform(commandShortcutAssignments.undo)}</span></button>
             <button type="button" role="menuitem" disabled={!history.canRedo} onClick={() => { setIsEditMenuOpen(false); dispatchCommandShortcut("redo"); }}><Redo2 size={16} />{ui.redo}<span>{formatShortcutForPlatform(commandShortcutAssignments.redo)}</span></button>
             <div className="menu-divider" role="separator" />
@@ -5629,13 +5774,13 @@ function App() {
             <button type="button" role="menuitem" disabled={!selection} onClick={() => { setIsEditMenuOpen(false); dispatchCommandShortcut("copyMerged"); }}><Layers size={16} />{language === "zh" ? "复制合并结果" : "Copy Merged"}<span>{formatShortcutForPlatform(commandShortcutAssignments.copyMerged)}</span></button>
             <button type="button" role="menuitem" disabled={!selection || !canEditPixels} onClick={() => { setIsEditMenuOpen(false); dispatchCommandShortcut("cut"); }}><FileDown size={16} />{language === "zh" ? "剪切" : "Cut"}<span>{formatShortcutForPlatform(commandShortcutAssignments.cut)}</span></button>
             <button type="button" role="menuitem" disabled={!canEditPixels} onClick={() => { setIsEditMenuOpen(false); dispatchCommandShortcut("paste"); }}><FileUp size={16} />{language === "zh" ? "粘贴" : "Paste"}<span>{formatShortcutForPlatform(commandShortcutAssignments.paste)}</span></button>
-            <div className="file-menu-submenu">
+            <div className="file-menu-submenu" ref={pasteSpecialAnchorRef}>
               <button className={isPasteSpecialMenuOpen ? "submenu-trigger is-open" : "submenu-trigger"} type="button" role="menuitem" aria-haspopup="menu" aria-expanded={isPasteSpecialMenuOpen} onClick={() => { setIsPasteSpecialMenuOpen((value) => !value); setIsShiftPixelsMenuOpen(false); }}><FilePlus size={16} />{language === "zh" ? "选择性粘贴" : "Paste Special"}<ChevronRight size={14} /></button>
-              {isPasteSpecialMenuOpen && <div className="file-menu-popover edit-submenu" role="menu" aria-label={language === "zh" ? "选择性粘贴" : "Paste Special"}>
+              {isPasteSpecialMenuOpen && menuLayerRef.current && createPortal(<div ref={pasteSpecialMenuRef} className="file-menu-popover edit-submenu" role="menu" aria-label={language === "zh" ? "选择性粘贴" : "Paste Special"} style={pasteSpecialMenuStyle}>
                 <button type="button" role="menuitem" onClick={() => { setIsEditMenuOpen(false); dispatchCommandShortcut("pasteSpecialNewSprite"); }}><FilePlus size={16} />{language === "zh" ? "粘贴为新项目" : "Paste as New Sprite"}<span>{formatShortcutForPlatform(commandShortcutAssignments.pasteSpecialNewSprite)}</span></button>
                 <button type="button" role="menuitem" onClick={() => { setIsEditMenuOpen(false); dispatchCommandShortcut("pasteSpecialNewLayer"); }}><Layers size={16} />{language === "zh" ? "粘贴为新图层" : "Paste as New Layer"}<span>{formatShortcutForPlatform(commandShortcutAssignments.pasteSpecialNewLayer)}</span></button>
                 <button type="button" role="menuitem" onClick={() => { setIsEditMenuOpen(false); dispatchCommandShortcut("pasteSpecialReferenceLayer"); }}><Eye size={16} />{language === "zh" ? "粘贴为参考图层" : "Paste as Reference Layer"}<span>{formatShortcutForPlatform(commandShortcutAssignments.pasteSpecialReferenceLayer)}</span></button>
-              </div>}
+              </div>, menuLayerRef.current)}
             </div>
             <div className="menu-divider" role="separator" />
             <button type="button" role="menuitem" disabled={!selection || !canEditPixels} onClick={() => { setIsEditMenuOpen(false); dispatchCommandShortcut("fillSelection"); }}><PaintBucket size={16} />{language === "zh" ? "填充选区" : "Fill Selection"}<span>{formatShortcutForPlatform(commandShortcutAssignments.fillSelection)}</span></button>
@@ -5647,16 +5792,16 @@ function App() {
             <button type="button" role="menuitem" disabled={isPlaying || tabs.length < 2 || selectedFrameIds.length === 0} onClick={() => { setIsEditMenuOpen(false); dispatchCommandShortcut("copySelectedFramesToDocument"); }}><Copy size={16} />{language === "zh" ? "复制所选帧到其他文件" : "Copy Selected Frames to Open Document"}<span>{formatShortcutForPlatform(commandShortcutAssignments.copySelectedFramesToDocument)}</span></button>
             <button type="button" role="menuitem" disabled={isPlaying || tabs.length < 2 || activeTab.commandScope !== "layer" || selectedLayers.length === 0} onClick={() => { setIsEditMenuOpen(false); dispatchCommandShortcut("copySelectedLayersToDocument"); }}><Layers size={16} />{language === "zh" ? "复制所选图层到其他文件" : "Copy Selected Layers to Open Document"}<span>{formatShortcutForPlatform(commandShortcutAssignments.copySelectedLayersToDocument)}</span></button>
             <button type="button" role="menuitem" disabled={!hasOpenDocument} onClick={() => { setIsEditMenuOpen(false); dispatchCommandShortcut("layerProperties"); }}><Settings size={16} />{language === "zh" ? "图层属性" : "Layer Properties"}<span>{formatShortcutForPlatform(commandShortcutAssignments.layerProperties)}</span></button>
-            <div className="file-menu-submenu">
+            <div className="file-menu-submenu" ref={shiftPixelsAnchorRef}>
               <button className={isShiftPixelsMenuOpen ? "submenu-trigger is-open" : "submenu-trigger"} type="button" role="menuitem" disabled={!canEditPixels} aria-haspopup="menu" aria-expanded={isShiftPixelsMenuOpen} onClick={() => { setIsShiftPixelsMenuOpen((value) => !value); setIsPasteSpecialMenuOpen(false); }}><Move size={16} />{language === "zh" ? "环绕平移像素" : "Shift Pixels"}<ChevronRight size={14} /></button>
-              {isShiftPixelsMenuOpen && <div className="file-menu-popover edit-submenu" role="menu" aria-label={language === "zh" ? "环绕平移像素" : "Shift Pixels"}>
+              {isShiftPixelsMenuOpen && menuLayerRef.current && createPortal(<div ref={shiftPixelsMenuRef} className="file-menu-popover edit-submenu" role="menu" aria-label={language === "zh" ? "环绕平移像素" : "Shift Pixels"} style={shiftPixelsMenuStyle}>
                 <button type="button" role="menuitem" onClick={() => { setIsEditMenuOpen(false); dispatchCommandShortcut("shiftPixelsLeft"); }}><ChevronLeft size={16} />{language === "zh" ? "向左 1 像素" : "Left 1 Pixel"}<span>{formatShortcutForPlatform(commandShortcutAssignments.shiftPixelsLeft)}</span></button>
                 <button type="button" role="menuitem" onClick={() => { setIsEditMenuOpen(false); dispatchCommandShortcut("shiftPixelsRight"); }}><ChevronRight size={16} />{language === "zh" ? "向右 1 像素" : "Right 1 Pixel"}<span>{formatShortcutForPlatform(commandShortcutAssignments.shiftPixelsRight)}</span></button>
                 <button type="button" role="menuitem" onClick={() => { setIsEditMenuOpen(false); dispatchCommandShortcut("shiftPixelsUp"); }}><ChevronUp size={16} />{language === "zh" ? "向上 1 像素" : "Up 1 Pixel"}<span>{formatShortcutForPlatform(commandShortcutAssignments.shiftPixelsUp)}</span></button>
                 <button type="button" role="menuitem" onClick={() => { setIsEditMenuOpen(false); dispatchCommandShortcut("shiftPixelsDown"); }}><ChevronDown size={16} />{language === "zh" ? "向下 1 像素" : "Down 1 Pixel"}<span>{formatShortcutForPlatform(commandShortcutAssignments.shiftPixelsDown)}</span></button>
-              </div>}
+              </div>, menuLayerRef.current)}
             </div>
-          </div>}
+          </div>, menuLayerRef.current)}
         </div>
         <div className="file-menu" ref={spriteMenuRef} onPointerEnter={() => {
           if (!preferences.general.expandMenusOnHover || !hasOpenDocument || (!isFileMenuOpen && !isEditMenuOpen && !isSpriteMenuOpen && !isViewMenuOpen)) return;
@@ -5665,7 +5810,7 @@ function App() {
           <button className={isSpriteMenuOpen ? "menu-trigger is-open" : "menu-trigger"} type="button" disabled={!hasOpenDocument} aria-haspopup="menu" aria-expanded={isSpriteMenuOpen} onClick={() => { setIsFileMenuOpen(false); setIsEditMenuOpen(false); setIsViewMenuOpen(false); setIsImageEffectsMenuOpen(false); setIsSpriteMenuOpen((value) => !value); }}>
             {language === "zh" ? "图像" : "Sprite"} <ChevronDown size={14} aria-hidden="true" />
           </button>
-          {isSpriteMenuOpen && <div className="file-menu-popover sprite-menu-popover" role="menu" aria-label={language === "zh" ? "图像" : "Sprite"}>
+          {isSpriteMenuOpen && menuLayerRef.current && createPortal(<div ref={spriteMenuPopoverRef} className="file-menu-popover sprite-menu-popover" role="menu" aria-label={language === "zh" ? "图像" : "Sprite"} style={spriteMenuPopoverStyle}>
             <button type="button" role="menuitem" disabled={isPlaying} onClick={() => { setIsSpriteMenuOpen(false); dispatchCommandShortcut("duplicateSprite"); }}><Copy size={16} />{language === "zh" ? "复制精灵" : "Duplicate Sprite"}<span>{formatShortcutForPlatform(commandShortcutAssignments.duplicateSprite)}</span></button>
             <div className="menu-divider" role="separator" />
             <p className="menu-label">{ui.animation}</p>
@@ -5679,9 +5824,9 @@ function App() {
             <button type="button" role="menuitem" onClick={() => { setIsSpriteMenuOpen(false); dispatchCommandShortcut("spriteSize"); }}><Scaling size={16} />{language === "zh" ? "缩放图像内容" : "Sprite size"}<span>{formatShortcutForPlatform(commandShortcutAssignments.spriteSize)}</span></button>
             <button type="button" role="menuitem" onClick={() => { setIsSpriteMenuOpen(false); dispatchCommandShortcut("canvasSize"); }}><Crop size={16} />{language === "zh" ? "画布尺寸" : "Canvas size"}<span>{formatShortcutForPlatform(commandShortcutAssignments.canvasSize)}</span></button>
             <button type="button" role="menuitem" onClick={() => { setIsSpriteMenuOpen(false); dispatchCommandShortcut("trimCanvas"); }}><BoxSelect size={16} />{language === "zh" ? "裁去透明边缘" : "Trim transparent borders"}<span>{formatShortcutForPlatform(commandShortcutAssignments.trimCanvas)}</span></button>
-            <div className="file-menu-submenu">
+            <div className="file-menu-submenu" ref={imageEffectsAnchorRef}>
               <button className={isImageEffectsMenuOpen ? "submenu-trigger is-open" : "submenu-trigger"} type="button" role="menuitem" aria-haspopup="menu" aria-expanded={isImageEffectsMenuOpen} onClick={() => setIsImageEffectsMenuOpen((value) => !value)}><SlidersHorizontal size={16} />{language === "zh" ? "调整与效果" : "Adjustments and effects"}<ChevronRight size={14} /></button>
-              {isImageEffectsMenuOpen && <div className="file-menu-popover image-effects-submenu" role="menu" aria-label={language === "zh" ? "调整与效果" : "Adjustments and effects"}>
+              {isImageEffectsMenuOpen && menuLayerRef.current && createPortal(<div ref={imageEffectsMenuRef} className="file-menu-popover image-effects-submenu" role="menu" aria-label={language === "zh" ? "调整与效果" : "Adjustments and effects"} style={imageEffectsMenuStyle}>
                 <p className="menu-label">{language === "zh" ? "调整" : "Adjustments"}</p>
                 <button type="button" role="menuitem" disabled={!canOpenAdjustment} onClick={() => { setIsSpriteMenuOpen(false); setIsImageEffectsMenuOpen(false); dispatchCommandShortcut("adjustmentBrightnessContrast"); }}><Sun size={16} />{language === "zh" ? "亮度 / 对比度" : "Brightness / Contrast"}<span>{formatShortcutForPlatform(commandShortcutAssignments.adjustmentBrightnessContrast)}</span></button>
                 <button type="button" role="menuitem" disabled={!canOpenAdjustment} onClick={() => { setIsSpriteMenuOpen(false); setIsImageEffectsMenuOpen(false); dispatchCommandShortcut("adjustmentHSL"); }}><Blend size={16} />{language === "zh" ? "色相 / 饱和度" : "Hue / Saturation"}<span>{formatShortcutForPlatform(commandShortcutAssignments.adjustmentHSL)}</span></button>
@@ -5696,7 +5841,7 @@ function App() {
                 <p className="menu-label">{language === "zh" ? "效果" : "Effects"}</p>
                 <button type="button" role="menuitem" disabled={!canOpenAdjustment} onClick={() => { setIsSpriteMenuOpen(false); setIsImageEffectsMenuOpen(false); dispatchCommandShortcut("effectOutline"); }}><SquaresUnite size={16} />{language === "zh" ? "轮廓" : "Outline"}<span>{formatShortcutForPlatform(commandShortcutAssignments.effectOutline)}</span></button>
                 <button type="button" role="menuitem" disabled={!canEditPixels} onClick={() => { setIsSpriteMenuOpen(false); setIsImageEffectsMenuOpen(false); dispatchCommandShortcut("effectShading"); }}><WandSparkles size={16} />{language === "zh" ? "着色" : "Shading"}<span>{formatShortcutForPlatform(commandShortcutAssignments.effectShading)}</span></button>
-              </div>}
+              </div>, menuLayerRef.current)}
             </div>
             <div className="menu-divider" role="separator" />
             <button type="button" role="menuitem" onClick={() => { setIsSpriteMenuOpen(false); dispatchCommandShortcut("rotateSpriteCW"); }}><RotateCw size={16} />{language === "zh" ? "顺时针旋转 90°" : "Rotate 90° clockwise"}<span>{formatShortcutForPlatform(commandShortcutAssignments.rotateSpriteCW)}</span></button>
@@ -5706,7 +5851,7 @@ function App() {
             <button type="button" role="menuitem" onClick={() => { setIsSpriteMenuOpen(false); dispatchCommandShortcut("flipSpriteVertical"); }}><FlipVertical2 size={16} />{ui.flipVertical}<span>{formatShortcutForPlatform(commandShortcutAssignments.flipSpriteVertical)}</span></button>
             <div className="menu-divider" role="separator" />
             <button type="button" role="menuitem" onClick={() => { setIsSpriteMenuOpen(false); dispatchCommandShortcut("colorConfiguration"); }}><Sun size={16} />{language === "zh" ? "颜色配置" : "Color configuration"}<span>{formatShortcutForPlatform(commandShortcutAssignments.colorConfiguration)}</span></button>
-          </div>}
+          </div>, menuLayerRef.current)}
         </div>
         <div className="file-menu" ref={viewMenuRef} onPointerEnter={() => {
           if (!preferences.general.expandMenusOnHover || (!isFileMenuOpen && !isEditMenuOpen && !isSpriteMenuOpen && !isViewMenuOpen)) return;
@@ -5715,7 +5860,7 @@ function App() {
           <button className={isViewMenuOpen ? "menu-trigger is-open" : "menu-trigger"} type="button" aria-haspopup="menu" aria-expanded={isViewMenuOpen} onClick={() => { setIsFileMenuOpen(false); setIsEditMenuOpen(false); setIsSpriteMenuOpen(false); setIsViewMenuOpen((value) => !value); }}>
             {language === "zh" ? "视图" : "View"} <ChevronDown size={14} aria-hidden="true" />
           </button>
-          {isViewMenuOpen && <div className="file-menu-popover view-menu-popover" role="menu" aria-label={language === "zh" ? "视图" : "View"}>
+          {isViewMenuOpen && menuLayerRef.current && createPortal(<div ref={viewMenuPopoverRef} className="file-menu-popover view-menu-popover" role="menu" aria-label={language === "zh" ? "视图" : "View"} style={viewMenuPopoverStyle}>
             <button type="button" role="menuitemcheckbox" aria-checked={inspectorVisible} onClick={() => { setIsViewMenuOpen(false); dispatchCommandShortcut("toggleInspector"); }}>
               {inspectorVisible ? <Eye size={16} /> : <EyeOff size={16} />}
               {inspectorVisible ? (language === "zh" ? "隐藏侧栏" : "Hide Inspector") : (language === "zh" ? "显示侧栏" : "Show Inspector")}<span>{formatShortcutForPlatform(commandShortcutAssignments.toggleInspector)}</span>
@@ -5737,7 +5882,7 @@ function App() {
             <button type="button" role="menuitem" onClick={() => { setIsViewMenuOpen(false); dispatchCommandShortcut("toggleFullscreen"); }}><Fullscreen size={16} />{isFullscreen ? (language === "zh" ? "退出全屏" : "Exit full screen") : (language === "zh" ? "进入全屏" : "Enter full screen")}<span>{formatShortcutForPlatform(commandShortcutAssignments.toggleFullscreen)}</span></button>
             <div className="menu-divider" role="separator" />
             <button type="button" role="menuitem" onClick={() => { setIsViewMenuOpen(false); dispatchCommandShortcut("resetWorkspace"); }}><RotateCcw size={16} />{language === "zh" ? "重置工作区布局" : "Reset Workspace Layout"}<span>{formatShortcutForPlatform(commandShortcutAssignments.resetWorkspace)}</span></button>
-          </div>}
+          </div>, menuLayerRef.current)}
         </div>
         <div className="document-tab-strip">
           {hasOpenDocument && <button className="document-scroll-button" type="button" title={ui.previousDocuments} aria-label={ui.previousDocuments} disabled={!tabScrollState.canGoBack} onClick={() => scrollDocumentTabs(-1)}><ChevronLeft size={16} /></button>}
@@ -6101,6 +6246,7 @@ function App() {
           </div>
         </section>
 
+        <div className="inspector-scroll">
         {activeTileset && <section className="panel-section tilemap-section tool-settings-section">
           <div className="tilemap-heading"><h2>{language === "zh" ? "图块地图" : "Tilemap"}</h2><span>{activeTileset.tileWidth} × {activeTileset.tileHeight}</span></div>
           <div className="color-model-tabs" role="tablist" aria-label={language === "zh" ? "图块绘制模式" : "Tile drawing mode"}>
@@ -6340,6 +6486,7 @@ function App() {
         </section>
 
         {recentProjects.length > 0 && <section className="panel-section recent-section"><h2>{ui.recent}</h2>{recentProjects.map((path) => <button className="recent-project" key={path} title={path} onClick={() => void openRecentProject(path)}>{path.split(/[\\/]/).pop()}</button>)}</section>}
+        </div>
 
       </aside>}
 
@@ -6427,7 +6574,14 @@ function App() {
           </div>
         </header>
         <div className="timeline-body">
-          <div className="timeline-layers" role="listbox" aria-label={ui.layers}>
+          <div
+            className="timeline-layers"
+            ref={timelineLayersRef}
+            role="listbox"
+            aria-label={ui.layers}
+            style={{paddingBottom: `${timelineLayersBottomPadding}px`}}
+            onScroll={() => handleTimelineScroll("layers")}
+          >
             <div className="timeline-layer-header">{ui.layers}</div>
             {timelineEntries.map(({layer, depth}) => {
               const cel = getCel(pixelDocument, layer.id, pixelDocument.activeFrameId);
@@ -6468,7 +6622,16 @@ function App() {
               </div>;
             })}
           </div>
-          <div className="timeline-frames" role="grid" aria-label={ui.frames} aria-multiselectable="true" aria-colcount={pixelDocument.frames.length + 1} aria-rowcount={timelineEntries.length + 1}>
+          <div
+            className="timeline-frames"
+            ref={timelineFramesRef}
+            role="grid"
+            aria-label={ui.frames}
+            aria-multiselectable="true"
+            aria-colcount={pixelDocument.frames.length + 1}
+            aria-rowcount={timelineEntries.length + 1}
+            onScroll={() => handleTimelineScroll("frames")}
+          >
             <div className="timeline-frame-header" role="row" style={{gridTemplateColumns: `repeat(${pixelDocument.frames.length + 1}, 42px)`}}>{pixelDocument.frames.map((frame, index) => {
               const tag = pixelDocument.tags.find((candidate) => frameIDsInRange(pixelDocument, candidate.fromFrameId, candidate.toFrameId).includes(frame.id));
               const active = frame.id === pixelDocument.activeFrameId;
@@ -6544,7 +6707,7 @@ function App() {
 
       {hasOpenDocument && previewOpen && <aside className="animation-preview" aria-label={language === "zh" ? "动画预览" : "Animation preview"}>
         <header><span>{language === "zh" ? "动画预览" : "Animation preview"}</span><button type="button" title={ui.closeDocument} onClick={() => setPreviewOpen(false)}><X size={14} /></button></header>
-        <div className="animation-preview-canvas"><LayerThumbnail pixels={compositeFrame(pixelDocument)} width={pixelDocument.width} height={pixelDocument.height} revision={revision} visible ariaLabel={language === "zh" ? "当前动画帧" : "Current animation frame"} size={192} /></div>
+        <div className="animation-preview-canvas"><LayerThumbnail pixels={compositeFrame(pixelDocument)} width={pixelDocument.width} height={pixelDocument.height} revision={revision} visible ariaLabel={language === "zh" ? "当前动画帧" : "Current animation frame"} size={192} pixelAspectRatio={pixelDocument.pixelAspectRatio} /></div>
         <footer><button type="button" onClick={togglePlayback}>{isPlaying ? <Pause size={14} /> : <Play size={14} />}</button><span>{activeFrameIndex + preferences.timeline.firstFrame} / {preferences.timeline.firstFrame + pixelDocument.frames.length - 1}</span></footer>
       </aside>}
 
@@ -6574,55 +6737,75 @@ function App() {
       </div>}
 
       {settingsOpen && <div className="dialog-backdrop" role="presentation">
-        <form className="canvas-dialog editor-dialog preferences-dialog" role="dialog" aria-modal="true" aria-label={language === "zh" ? "偏好设置" : "Preferences"} onSubmit={(event) => { event.preventDefault(); setSettingsOpen(false); }}>
-          <h2>{language === "zh" ? "偏好设置" : "Preferences"}</h2>
-          <PreferencesPanel preferences={preferences} onChange={applyPreferences} zh={language === "zh"} />
-          <div className="preferences-heading"><span>{language === "zh" ? "工作区布局" : "Workspace layouts"}</span><button type="button" onClick={() => { setInspectorWidth(defaultWorkspaceDimensions.inspectorWidth); setTimelineHeight(defaultWorkspaceDimensions.timelineHeight); setInspectorVisible(defaultWorkspaceVisibility.inspectorVisible); setTimelineVisible(defaultWorkspaceVisibility.timelineVisible); setCanvasOnly(false); setWorkspaceLayoutNotice("reset"); }}>{language === "zh" ? "重置布局" : "Reset layout"}</button></div>
-          <div className="preferences-general">
-            <label className="dialog-field"><span>{language === "zh" ? "侧栏宽度" : "Inspector width"}</span><input type="number" min="190" max="420" value={inspectorWidth} onChange={(event) => setInspectorWidth(Math.max(190, Math.min(420, Math.round(Number(event.target.value) || 190))))} /></label>
-            <label className="dialog-field"><span>{language === "zh" ? "时间轴高度" : "Timeline height"}</span><input type="number" min="150" max="520" value={timelineHeight} onChange={(event) => setTimelineHeight(Math.max(150, Math.min(520, Math.round(Number(event.target.value) || 150))))} /></label>
-            <label className="dialog-field"><span>{language === "zh" ? "布局名称" : "Layout name"}</span><input type="text" maxLength={64} value={workspaceLayoutName} onChange={(event) => { setWorkspaceLayoutName(event.target.value); setWorkspaceLayoutNotice(null); }} /></label>
-            <button className="panel-command workspace-layout-button" type="button" disabled={!workspaceLayoutName.trim()} onClick={() => {
-              try {
-                const name = workspaceLayoutName.trim();
-                setWorkspaceLayouts(saveWorkspaceLayout(localStorage, {name, inspectorWidth: Math.round(inspectorWidth), timelineHeight: Math.round(timelineHeight)}));
-                setWorkspaceLayoutSelected(name);
-                setWorkspaceLayoutNotice("saved");
-              } catch { setWorkspaceLayoutNotice("error"); }
-            }}>{workspaceLayouts.some((layout) => layout.name === workspaceLayoutName.trim()) ? (language === "zh" ? "更新同名布局" : "Update named layout") : (language === "zh" ? "保存当前布局" : "Save current layout")}</button>
-            <label className="dialog-field dialog-field-wide"><span>{language === "zh" ? "已保存布局" : "Saved layouts"}</span><select value={workspaceLayoutSelected} onChange={(event) => { setWorkspaceLayoutSelected(event.target.value); setWorkspaceLayoutName(event.target.value); setWorkspaceLayoutNotice(null); }}><option value="">{language === "zh" ? "选择布局" : "Choose layout"}</option>{workspaceLayouts.map((layout) => <option key={layout.name} value={layout.name}>{layout.name}</option>)}</select></label>
-            <button className="panel-command" type="button" disabled={!workspaceLayoutSelected} onClick={() => {
-              const layout = workspaceLayouts.find((entry) => entry.name === workspaceLayoutSelected);
-              if (!layout) return;
-              setInspectorWidth(layout.inspectorWidth);
-              setTimelineHeight(layout.timelineHeight);
-              setCanvasOnly(false);
-              setWorkspaceLayoutNotice("loaded");
-            }}>{language === "zh" ? "应用布局" : "Apply layout"}</button>
-            <button className="panel-command" type="button" disabled={!workspaceLayoutSelected} onClick={() => {
-              try {
-                setWorkspaceLayouts(deleteWorkspaceLayout(localStorage, workspaceLayoutSelected));
-                setWorkspaceLayoutSelected("");
-                setWorkspaceLayoutNotice("deleted");
-              } catch { setWorkspaceLayoutNotice("error"); }
-            }}>{language === "zh" ? "删除保存的布局" : "Delete saved layout"}</button>
+        <form className="canvas-dialog editor-dialog preferences-dialog" role="dialog" aria-modal="true" aria-labelledby="preferences-dialog-title" onSubmit={(event) => event.preventDefault()}>
+          <header className="preferences-dialog-header">
+            <h2 id="preferences-dialog-title">{language === "zh" ? "偏好设置" : "Preferences"}</h2>
+            <button type="button" onClick={() => setSettingsOpen(false)} title={language === "zh" ? "关闭" : "Close"} aria-label={language === "zh" ? "关闭偏好设置" : "Close preferences"}><X size={17} /></button>
+          </header>
+          <div className="preferences-dialog-content">
+            <PreferencesPanel
+              preferences={preferences}
+              onChange={applyPreferences}
+              zh={language === "zh"}
+              afterGeneral={<>
+                <details>
+                  <summary>{language === "zh" ? "工作区布局" : "Workspace Layouts"}</summary>
+                  <div className="preferences-section-body">
+                    <div className="preferences-section-actions"><button type="button" onClick={() => { setInspectorWidth(defaultWorkspaceDimensions.inspectorWidth); setTimelineHeight(defaultWorkspaceDimensions.timelineHeight); setInspectorVisible(defaultWorkspaceVisibility.inspectorVisible); setTimelineVisible(defaultWorkspaceVisibility.timelineVisible); setCanvasOnly(false); setWorkspaceLayoutNotice("reset"); }}>{language === "zh" ? "重置布局" : "Reset layout"}</button></div>
+                    <div className="preferences-general">
+                      <label className="dialog-field"><span>{language === "zh" ? "侧栏宽度" : "Inspector width"}</span><input type="number" min="190" max="420" value={inspectorWidth} onChange={(event) => setInspectorWidth(Math.max(190, Math.min(420, Math.round(Number(event.target.value) || 190))))} /></label>
+                      <label className="dialog-field"><span>{language === "zh" ? "时间轴高度" : "Timeline height"}</span><input type="number" min="150" max="520" value={timelineHeight} onChange={(event) => setTimelineHeight(Math.max(150, Math.min(520, Math.round(Number(event.target.value) || 150))))} /></label>
+                      <label className="dialog-field dialog-field-wide"><span>{language === "zh" ? "布局名称" : "Layout name"}</span><input type="text" maxLength={64} value={workspaceLayoutName} onChange={(event) => { setWorkspaceLayoutName(event.target.value); setWorkspaceLayoutNotice(null); }} /></label>
+                      <button className="panel-command workspace-layout-button" type="button" disabled={!workspaceLayoutName.trim()} onClick={() => {
+                        try {
+                          const name = workspaceLayoutName.trim();
+                          setWorkspaceLayouts(saveWorkspaceLayout(localStorage, {name, inspectorWidth: Math.round(inspectorWidth), timelineHeight: Math.round(timelineHeight)}));
+                          setWorkspaceLayoutSelected(name);
+                          setWorkspaceLayoutNotice("saved");
+                        } catch { setWorkspaceLayoutNotice("error"); }
+                      }}>{workspaceLayouts.some((layout) => layout.name === workspaceLayoutName.trim()) ? (language === "zh" ? "更新同名布局" : "Update named layout") : (language === "zh" ? "保存当前布局" : "Save current layout")}</button>
+                      <label className="dialog-field dialog-field-wide"><span>{language === "zh" ? "已保存布局" : "Saved layouts"}</span><select value={workspaceLayoutSelected} onChange={(event) => { setWorkspaceLayoutSelected(event.target.value); setWorkspaceLayoutName(event.target.value); setWorkspaceLayoutNotice(null); }}><option value="">{language === "zh" ? "选择布局" : "Choose layout"}</option>{workspaceLayouts.map((layout) => <option key={layout.name} value={layout.name}>{layout.name}</option>)}</select></label>
+                      <button className="panel-command" type="button" disabled={!workspaceLayoutSelected} onClick={() => {
+                        const layout = workspaceLayouts.find((entry) => entry.name === workspaceLayoutSelected);
+                        if (!layout) return;
+                        setInspectorWidth(layout.inspectorWidth);
+                        setTimelineHeight(layout.timelineHeight);
+                        setCanvasOnly(false);
+                        setWorkspaceLayoutNotice("loaded");
+                      }}>{language === "zh" ? "应用布局" : "Apply layout"}</button>
+                      <button className="panel-command" type="button" disabled={!workspaceLayoutSelected} onClick={() => {
+                        try {
+                          setWorkspaceLayouts(deleteWorkspaceLayout(localStorage, workspaceLayoutSelected));
+                          setWorkspaceLayoutSelected("");
+                          setWorkspaceLayoutNotice("deleted");
+                        } catch { setWorkspaceLayoutNotice("error"); }
+                      }}>{language === "zh" ? "删除保存的布局" : "Delete saved layout"}</button>
+                    </div>
+                    {workspaceLayoutNotice && <p className="dialog-note" role="status">{({
+                      saved: language === "zh" ? "布局已保存到本机。" : "Layout saved on this device.",
+                      loaded: language === "zh" ? "布局已应用。" : "Layout applied.",
+                      deleted: language === "zh" ? "已删除保存的布局，当前布局不变。" : "Saved layout deleted; current layout retained.",
+                      reset: language === "zh" ? "已恢复默认面板尺寸。" : "Default panel dimensions restored.",
+                      error: language === "zh" ? "无法保存布局，请检查本地存储是否可用。" : "Could not save layouts. Check local storage availability.",
+                    })[workspaceLayoutNotice]}</p>}
+                  </div>
+                </details>
+                <details>
+                  <summary>{language === "zh" ? "快捷键" : "Shortcuts"}</summary>
+                  <div className="preferences-section-body preferences-shortcuts">
+                    <div className="preferences-heading"><span>{language === "zh" ? "命令快捷键" : "Command shortcuts"}</span><button type="button" onClick={() => setCommandShortcutAssignments({...defaultCommandShortcuts})}>{language === "zh" ? "恢复默认" : "Reset"}</button></div>
+                    <div className="command-shortcut-grid">
+                      {(Object.keys(defaultCommandShortcuts) as CommandShortcutID[]).map((command) => <label key={command}><span>{commandShortcutLabels[language][command]}</span><input type="text" readOnly value={formatShortcutForPlatform(commandShortcutAssignments[command])} placeholder={language === "zh" ? "未设置" : "Unassigned"} aria-label={`${commandShortcutLabels[language][command]} ${language === "zh" ? "快捷键" : "shortcut"}`} onKeyDown={(event) => captureCommandShortcut(command, event)} onFocus={(event) => event.currentTarget.select()} /></label>)}
+                    </div>
+                    <div className="preferences-heading"><span>{language === "zh" ? "工具快捷键" : "Tool shortcuts"}</span><button type="button" onClick={resetToolShortcuts}>{language === "zh" ? "恢复默认" : "Reset"}</button></div>
+                    <div className="shortcut-grid">
+                      {tools.map(({id, icon: Icon}) => <label key={id}><span><Icon size={14} />{ui.toolsByID[id]}</span><input type="text" value={shortcutAssignments[id].toUpperCase()} maxLength={1} aria-label={`${ui.toolsByID[id]} ${language === "zh" ? "快捷键" : "shortcut"}`} onChange={(event) => updateToolShortcut(id, event.target.value)} onFocus={(event) => event.currentTarget.select()} /></label>)}
+                    </div>
+                  </div>
+                </details>
+              </>}
+            />
           </div>
-          {workspaceLayoutNotice && <p className="dialog-note" role="status">{({
-            saved: language === "zh" ? "布局已保存到本机。" : "Layout saved on this device.",
-            loaded: language === "zh" ? "布局已应用。" : "Layout applied.",
-            deleted: language === "zh" ? "已删除保存的布局，当前布局不变。" : "Saved layout deleted; current layout retained.",
-            reset: language === "zh" ? "已恢复默认面板尺寸。" : "Default panel dimensions restored.",
-            error: language === "zh" ? "无法保存布局，请检查本地存储是否可用。" : "Could not save layouts. Check local storage availability.",
-          })[workspaceLayoutNotice]}</p>}
-          <div className="preferences-heading"><span>{language === "zh" ? "命令快捷键" : "Command shortcuts"}</span><button type="button" onClick={() => setCommandShortcutAssignments({...defaultCommandShortcuts})}>{language === "zh" ? "恢复默认" : "Reset"}</button></div>
-          <div className="command-shortcut-grid">
-            {(Object.keys(defaultCommandShortcuts) as CommandShortcutID[]).map((command) => <label key={command}><span>{commandShortcutLabels[language][command]}</span><input type="text" readOnly value={formatShortcutForPlatform(commandShortcutAssignments[command])} placeholder={language === "zh" ? "未设置" : "Unassigned"} aria-label={`${commandShortcutLabels[language][command]} ${language === "zh" ? "快捷键" : "shortcut"}`} onKeyDown={(event) => captureCommandShortcut(command, event)} onFocus={(event) => event.currentTarget.select()} /></label>)}
-          </div>
-          <div className="preferences-heading"><span>{language === "zh" ? "工具快捷键" : "Tool shortcuts"}</span><button type="button" onClick={resetToolShortcuts}>{language === "zh" ? "恢复默认" : "Reset"}</button></div>
-          <div className="shortcut-grid">
-            {tools.map(({id, icon: Icon}) => <label key={id}><span><Icon size={14} />{ui.toolsByID[id]}</span><input type="text" value={shortcutAssignments[id].toUpperCase()} maxLength={1} aria-label={`${ui.toolsByID[id]} ${language === "zh" ? "快捷键" : "shortcut"}`} onChange={(event) => updateToolShortcut(id, event.target.value)} onFocus={(event) => event.currentTarget.select()} /></label>)}
-          </div>
-          <div className="dialog-actions"><button type="submit">{language === "zh" ? "完成" : "Done"}</button></div>
         </form>
       </div>}
 

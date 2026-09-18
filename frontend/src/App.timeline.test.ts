@@ -1,12 +1,16 @@
 import {describe, expect, it} from "vitest";
 
 import {
+  calculatePanelResizeValue,
   captureTabTimeline,
   createEditorTab,
   EditorDocumentStateCommand,
   extendTimelineLoopAfterInsertion,
+  getTimelineHorizontalScrollbarHeight,
+  getTimelineScrollTopForPeer,
   normalizeTabTimeline,
   shouldExtendTimelineLoopAfterInsertion,
+  syncTimelineScrollPositions,
   syncPlaybackFrameSelection,
 } from "./App";
 import {
@@ -156,5 +160,37 @@ describe("timeline playback and insertion state", () => {
     expect(shouldExtend).toBe(false);
     expect([tab.loopStartFrameId, tab.loopEndFrameId]).toEqual([second.id, third.id]);
     expect(tab.loopStartFrameId).not.toBe(first.id);
+  });
+});
+
+describe("timeline scrolling and panel resizing", () => {
+  it("keeps both timeline columns at one scroll position within the peer range", () => {
+    const layers = {scrollTop: 0, scrollHeight: 1000, clientHeight: 400};
+    const frames = {scrollTop: 615, scrollHeight: 1000, clientHeight: 385};
+
+    expect(getTimelineScrollTopForPeer(frames, layers)).toBe(600);
+    expect(syncTimelineScrollPositions(frames, layers)).toBe(600);
+    expect(frames.scrollTop).toBe(600);
+    expect(layers.scrollTop).toBe(600);
+  });
+
+  it("uses the frame pane horizontal scrollbar height as layer bottom padding", () => {
+    expect(getTimelineHorizontalScrollbarHeight({offsetHeight: 300, clientHeight: 285})).toBe(15);
+    expect(getTimelineHorizontalScrollbarHeight({offsetHeight: 300, clientHeight: 300})).toBe(0);
+  });
+
+  it("converts pointer deltas from scaled UI coordinates before clamping", () => {
+    expect(calculatePanelResizeValue(254, 200, 100, 100, 150, 520)).toBe(354);
+    expect(calculatePanelResizeValue(254, 200, 100, 200, 150, 520)).toBe(304);
+    expect(calculatePanelResizeValue(254, 200, 1000, 200, 150, 520)).toBe(150);
+  });
+
+  it("rounds fractional scaled resize values to integer CSS pixels while clamping", () => {
+    const resized = calculatePanelResizeValue(254, 200.5, 100.25, 150, 150, 520);
+
+    expect(resized).toBe(321);
+    expect(Number.isInteger(resized)).toBe(true);
+    expect(calculatePanelResizeValue(500, 300.25, 0.5, 125, 150, 520)).toBe(520);
+    expect(calculatePanelResizeValue(170, 100.25, 400.5, 150, 150, 520)).toBe(150);
   });
 });
