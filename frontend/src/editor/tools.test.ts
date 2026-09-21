@@ -312,6 +312,34 @@ describe("pencil tool", () => {
   });
 });
 
+describe("shape tools with bitmap-sized brushes", () => {
+  it("keeps both vertical sides closed for a size-10 square rectangle", () => {
+    const context = createContext(40, 40);
+    context.brushSize = 10;
+    context.brushShape = "square";
+    context.bitmapBrush = createShapeBitmapBrush("square", 10);
+    context.bitmapBrushPrepared = true;
+
+    drawRectangle(
+      context.pixels,
+      context.width,
+      context.height,
+      {x: 10, y: 10},
+      {x: 30, y: 30},
+      RED,
+      10,
+      "square",
+      "outline",
+      context,
+    );
+
+    for (let y = 15; y <= 25; y += 1) {
+      expect(pixelAt(context.pixels, context.width, 10, y)).toEqual([...RED]);
+      expect(pixelAt(context.pixels, context.width, 30, y)).toEqual([...RED]);
+    }
+  });
+});
+
 describe("eraser tool", () => {
   it("clears the starting pixel and the connected stroke to transparency", () => {
     const context = createContext(7, 3);

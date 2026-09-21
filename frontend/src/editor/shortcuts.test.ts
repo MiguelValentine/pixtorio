@@ -1,5 +1,5 @@
 import {describe, expect, it} from "vitest";
-import {assignCommandShortcut, commandForShortcutEvent, commandShortcutIDs, defaultCommandShortcuts, documentOptionalCommandIDs, formatShortcutForPlatform, normalizeShortcut, shortcutFromEvent} from "./shortcuts";
+import {assignCommandShortcut, commandForShortcutEvent, commandShortcutIDs, defaultCommandShortcuts, documentOptionalCommandIDs, formatShortcutForPlatform, isUnmodifiedDeletionKey, normalizeShortcut, shortcutFromEvent} from "./shortcuts";
 
 describe("command shortcuts", () => {
   it("normalizes modifier order and platform command keys", () => {
@@ -40,5 +40,14 @@ describe("command shortcuts", () => {
     expect(commandForShortcutEvent({key: "Tab"}, defaultCommandShortcuts)).toBe("toggleCanvasOnly");
     expect(commandForShortcutEvent({key: ","}, defaultCommandShortcuts)).toBe("previousFrame");
     expect(commandForShortcutEvent({key: "."}, defaultCommandShortcuts)).toBe("nextFrame");
+  });
+
+  it("recognizes unmodified Backspace and Delete as contextual deletion keys", () => {
+    expect(isUnmodifiedDeletionKey({key: "Backspace"})).toBe(true);
+    expect(isUnmodifiedDeletionKey({key: "Delete"})).toBe(true);
+    expect(isUnmodifiedDeletionKey({key: "Del"})).toBe(true);
+    expect(isUnmodifiedDeletionKey({key: "Backspace", shiftKey: true})).toBe(false);
+    expect(isUnmodifiedDeletionKey({key: "Delete", ctrlKey: true})).toBe(false);
+    expect(isUnmodifiedDeletionKey({key: "x"})).toBe(false);
   });
 });

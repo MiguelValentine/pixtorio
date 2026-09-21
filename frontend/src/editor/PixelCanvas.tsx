@@ -256,6 +256,7 @@ type TransformSession = {
 type PendingOutsideGesture = {
   tool: "pencil" | "eraser" | "line" | "rectangle" | "ellipse" | "curve" | "polyline" | "polygon" | "gradient" | "spray" | "blur" | "jumble";
   start: Point;
+  last: Point;
   constrainLine: boolean;
 };
 
@@ -329,6 +330,27 @@ const zoomLevels = [1, 2, 4, 6, 8, 12, 16, 24, 32];
 const transformHandleSize = 8;
 const brushCursorTools = new Set<ToolID>(["pencil", "eraser", "line", "rectangle", "ellipse", "curve", "polyline", "polygon", "spray", "blur", "jumble", "contour", "replace-color"]);
 const freehandTools = new Set<ToolID>(["pencil", "eraser"]);
+const continuousStrokeTools = new Set<ToolID>(["pencil", "eraser", "spray", "blur", "jumble"]);
+
+function segmentTouchesDocument(start: Point, end: Point, width: number, height: number, margin = 0) {
+  let entry = 0;
+  let exit = 1;
+  for (const [origin, delta, maximum] of [
+    [start.x, end.x - start.x, width - 1],
+    [start.y, end.y - start.y, height - 1],
+  ]) {
+    if (delta === 0) {
+      if (origin < -margin || origin > maximum + margin) return false;
+      continue;
+    }
+    const first = (-margin - origin) / delta;
+    const second = (maximum + margin - origin) / delta;
+    entry = Math.max(entry, Math.min(first, second));
+    exit = Math.min(exit, Math.max(first, second));
+    if (entry > exit) return false;
+  }
+  return true;
+}
 
 export function accumulateWheelZoom(
   deltaY: number,
@@ -405,10 +427,10 @@ function createSelectionOutline(
   const path = new Path2D();
   if (!selection.mask) {
     path.rect(
-      Math.round(viewport.x + selection.x * zoom) + 0.5,
-      Math.round(viewport.y + selection.y * zoom) + 0.5,
-      selection.width * zoom,
-      selection.height * zoom,
+      Math.round(viewport.x + selection.x * zoom) - 0.5,
+      Math.round(viewport.y + selection.y * zoom) - 0.5,
+      selection.width * zoom + 1,
+      selection.height * zoom + 1,
     );
     return path;
   }
@@ -431,7 +453,8 @@ function createSelectionOutline(
   return path;
 }
 
-function createBrushOutline(
+function drawBrushOutline(
+  context: CanvasRenderingContext2D,
   cursor: Point,
   brushSize: number,
   brushShape: BrushShape,
@@ -445,8 +468,8 @@ function createBrushOutline(
   const brushHeight = bitmapBrush?.height ?? normalizeBrushSize(brushSize);
   const originX = cursor.x - (bitmapBrush?.anchorX ?? Math.floor(brushWidth / 2));
   const originY = cursor.y - (bitmapBrush?.anchorY ?? Math.floor(brushHeight / 2));
-  const path = new Path2D();
   const contains = (localX: number, localY: number) => {
+    if (localX < 0 || localY < 0 || localX >= brushWidth || localY >= brushHeight) return false;
     const x = originX + localX;
     const y = originY + localY;
     return x >= 0 && y >= 0 && x < canvasWidth && y < canvasHeight
@@ -455,10 +478,11 @@ function createBrushOutline(
         : isBrushPixel(localX, localY, brushWidth, brushShape));
   };
   const edge = (fromX: number, fromY: number, toX: number, toY: number) => {
-    path.moveTo(Math.round(viewport.x + fromX * zoom) + 0.5, Math.round(viewport.y + fromY * zoom) + 0.5);
-    path.lineTo(Math.round(viewport.x + toX * zoom) + 0.5, Math.round(viewport.y + toY * zoom) + 0.5);
+    context.moveTo(Math.round(viewport.x + fromX * zoom) + 0.5, Math.round(viewport.y + fromY * zoom) + 0.5);
+    context.lineTo(Math.round(viewport.x + toX * zoom) + 0.5, Math.round(viewport.y + toY * zoom) + 0.5);
   };
 
+  context.beginPath();
   for (let localY = 0; localY < brushHeight; localY += 1) {
     for (let localX = 0; localX < brushWidth; localX += 1) {
       if (!contains(localX, localY)) continue;
@@ -470,7 +494,6 @@ function createBrushOutline(
       if (!contains(localX - 1, localY)) edge(x, y + 1, x, y);
     }
   }
-  return path;
 }
 
 function transformHandles(quad: TransformQuad, viewport: Point, zoom: number) {
@@ -694,6 +717,7 @@ export function PixelCanvas({
     path: Path2D;
   } | null>(null);
   const checkerPatternRef = useRef<{dark: string; light: string; checkerSize: number; pattern: CanvasPattern} | null>(null);
+  const pixelGridCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const [viewport, setViewport] = useState({x: 96, y: 72});
   const [surfaceSize, setSurfaceSize] = useState({width: 0, height: 0});
   const [isPanning, setIsPanning] = useState(false);
@@ -1016,20 +1040,35 @@ export function PixelCanvas({
     }
 
     if (showPixelGrid && zoom >= 8) {
-      context.strokeStyle = colorWithOpacity(pixelGridColor, pixelGridOpacity);
-      context.lineWidth = 1;
-      context.beginPath();
-      for (let x = 0; x <= width; x += 1) {
-        const screenX = Math.round(viewport.x + x * zoom) + 0.5;
-        context.moveTo(screenX, viewport.y);
-        context.lineTo(screenX, viewport.y + documentHeight);
+      const gridCanvas = pixelGridCanvasRef.current ?? (pixelGridCanvasRef.current = document.createElement("canvas"));
+      if (gridCanvas.width !== targetWidth) gridCanvas.width = targetWidth;
+      if (gridCanvas.height !== targetHeight) gridCanvas.height = targetHeight;
+      const gridContext = gridCanvas.getContext("2d");
+      if (gridContext) {
+        gridContext.setTransform(1, 0, 0, 1, 0, 0);
+        gridContext.clearRect(0, 0, targetWidth, targetHeight);
+        gridContext.setTransform(ratio, 0, 0, ratio, 0, 0);
+        gridContext.imageSmoothingEnabled = false;
+        gridContext.strokeStyle = colorWithOpacity(pixelGridColor, pixelGridOpacity);
+        gridContext.lineWidth = 1;
+        gridContext.beginPath();
+        for (let x = 0; x <= width; x += 1) {
+          const screenX = Math.round(viewport.x + x * zoom) + 0.5;
+          gridContext.moveTo(screenX, viewport.y);
+          gridContext.lineTo(screenX, viewport.y + documentHeight);
+        }
+        for (let y = 0; y <= height; y += 1) {
+          const screenY = Math.round(viewport.y + y * zoom) + 0.5;
+          gridContext.moveTo(viewport.x, screenY);
+          gridContext.lineTo(viewport.x + documentWidth, screenY);
+        }
+        gridContext.stroke();
+        // Keep grid lines on artwork without shading the transparency checker.
+        gridContext.globalCompositeOperation = "destination-in";
+        gridContext.drawImage(source, viewport.x, viewport.y, documentWidth, documentHeight);
+        gridContext.globalCompositeOperation = "source-over";
+        context.drawImage(gridCanvas, 0, 0, targetWidth / ratio, targetHeight / ratio);
       }
-      for (let y = 0; y <= height; y += 1) {
-        const screenY = Math.round(viewport.y + y * zoom) + 0.5;
-        context.moveTo(viewport.x, screenY);
-        context.lineTo(viewport.x + documentWidth, screenY);
-      }
-      context.stroke();
     }
     if (snapToGrid && gridWidth > 0 && gridHeight > 0) {
       const effectiveGridOffsetX = gridPreview?.x ?? gridOffsetX;
@@ -1277,8 +1316,11 @@ export function PixelCanvas({
   }, [activeSliceId, brushShape, brushSize, cropPreview, displayDirtyBounds, displayPixels, editable, gridLineColor, gridLineOpacity, gridPreview, guideColor, guidePreview, guides, gridHeight, gridOffsetX, gridOffsetY, gridWidth, height, lightTheme, pixelGridColor, pixelGridOpacity, preferredCheckerDark, preferredCheckerLight, preferredCheckerSize, revision, selectedSliceIds, selection, showPixelGrid, showSelectionEdges, sliceOverlays, slicePreview, snapToGrid, surfaceSize, symmetryAxisX, symmetryAxisY, symmetryX, symmetryY, tileCellOverlays, tileGridLines, tileImagePreviews, tiledX, tiledY, tool, transformPivot, transformPreviewQuad, viewport, width, zoom]);
 
   const previewBrush = useMemo(
-    () => rotatedBrush ? resizeBitmapBrush(rotatedBrush, brushSize) : null,
-    [brushSize, rotatedBrush],
+    // `rotatedBrush` is already the final footprint used by the active tool.
+    // Resizing it again changes rotated/custom masks and makes the cursor differ
+    // from the pixels that the gesture will actually stamp.
+    () => rotatedBrush,
+    [rotatedBrush],
   );
 
   const drawBrushCursor = useCallback((cursor: Point | null) => {
@@ -1297,14 +1339,14 @@ export function PixelCanvas({
       if (brushCursorTools.has(tool)) {
         context.save();
         if (cursorPreview === "brush" || cursorPreview === "both") {
-          const outline = createBrushOutline(cursor, brushSize, brushShape, viewport, zoom, width, height, previewBrush);
+          drawBrushOutline(context, cursor, brushSize, brushShape, viewport, zoom, width, height, previewBrush);
           context.lineJoin = "miter";
           context.strokeStyle = "rgba(0, 0, 0, 0.9)";
           context.lineWidth = 3;
-          context.stroke(outline);
+          context.stroke();
           context.strokeStyle = cursorColor;
           context.lineWidth = 1;
-          context.stroke(outline);
+          context.stroke();
         }
         if (cursorPreview === "crosshair" || cursorPreview === "both") {
           const x = viewport.x + (cursor.x + 0.5) * zoom;
@@ -1949,7 +1991,7 @@ export function PixelCanvas({
     event.currentTarget.setPointerCapture(event.pointerId);
     secondaryGestureRef.current = event.button === 2;
     if (!isInside(pixel) && (tool === "pencil" || tool === "eraser" || tool === "line" || tool === "rectangle" || tool === "ellipse" || tool === "polygon" || tool === "gradient" || tool === "spray" || tool === "blur" || tool === "jumble")) {
-      pendingOutsideGestureRef.current = {tool, start: pixel, constrainLine: event.shiftKey};
+      pendingOutsideGestureRef.current = {tool, start: pixel, last: pixel, constrainLine: event.shiftKey};
       return;
     }
     const editPixels = onEnsureEditablePixels();
@@ -2187,7 +2229,17 @@ export function PixelCanvas({
 
     const pendingOutsideGesture = pendingOutsideGestureRef.current;
     if (pendingOutsideGesture) {
-      if (!inside) return;
+      const continuous = continuousStrokeTools.has(pendingOutsideGesture.tool);
+      const previous = pendingOutsideGesture.last;
+      pendingOutsideGesture.last = rawPixel;
+      const margin = continuous ? Math.max(
+        rotatedBrush.width,
+        rotatedBrush.height,
+        brushDynamicsEnabled && brushDynamics?.size.enabled ? Math.max(brushDynamics.size.min, brushDynamics.size.max) * 2 : 0,
+        pendingOutsideGesture.tool === "blur" ? blurRadius : 0,
+        pendingOutsideGesture.tool === "jumble" ? jumbleAmount : 0,
+      ) : 0;
+      if (!inside && !segmentTouchesDocument(previous, rawPixel, width, height, margin)) return;
       const editPixels = onEnsureEditablePixels();
       if (!editPixels) {
         pendingOutsideGestureRef.current = null;
@@ -2195,21 +2247,25 @@ export function PixelCanvas({
         return;
       }
       activeEditPixelsRef.current = editPixels;
-      stabilizedPointRef.current = clampToDocument(pendingOutsideGesture.start);
+      const start = continuous && !pendingOutsideGesture.constrainLine
+        ? previous
+        : continuous ? pendingOutsideGesture.start : clampToDocument(pendingOutsideGesture.start);
+      stabilizedPointRef.current = start;
       const gesture = beginTool(
         toolContext(event),
         pendingOutsideGesture.tool,
-        clampToDocument(pendingOutsideGesture.start),
-        pendingOutsideGesture.constrainLine,
+        start,
+        pendingOutsideGesture.constrainLine && freehandTools.has(pendingOutsideGesture.tool),
       );
       pendingOutsideGestureRef.current = null;
       gestureRef.current = gesture;
       applyResult(gesture, gesture.before);
+      const pointer = continuous ? rawPixel : clampToDocument(rawPixel);
       const movePoint = gesture.tool === "ellipse" && event.shiftKey
-        ? constrainPointToSquare(gesture.start, rawPixel)
+        ? constrainPointToSquare(gesture.start, pointer)
         : freehandTools.has(gesture.tool)
-          ? (stabilizedPointRef.current = stabilizePointerPoint(stabilizedPointRef.current, rawPixel, brushStabilizer))
-          : rawPixel;
+          ? (stabilizedPointRef.current = stabilizePointerPoint(stabilizedPointRef.current, pointer, brushStabilizer))
+          : pointer;
       applyResult(moveTool(toolContext(event), gesture, movePoint), gesture.before);
       return;
     }
@@ -2281,16 +2337,24 @@ export function PixelCanvas({
     const gesture = gestureRef.current;
     if (!gesture || gesture.tool === "fill") return;
     if (!previewShiftLine && gesture.constrainLine && (gesture.tool === "pencil" || gesture.tool === "eraser")) return;
-    if (!inside && gesture.tool !== "line" && gesture.tool !== "rectangle" && gesture.tool !== "ellipse" && gesture.tool !== "curve" && gesture.tool !== "polyline" && gesture.tool !== "gradient" && gesture.tool !== "blur" && gesture.tool !== "jumble") return;
+    if (!inside && !continuousStrokeTools.has(gesture.tool) && gesture.tool !== "line" && gesture.tool !== "rectangle" && gesture.tool !== "ellipse" && gesture.tool !== "curve" && gesture.tool !== "polyline" && gesture.tool !== "polygon" && gesture.tool !== "gradient") return;
+    // Preserve the off-canvas path; clamping endpoints bends strokes along the border.
+    const pointer = continuousStrokeTools.has(gesture.tool) ? rawPixel : clampToDocument(rawPixel);
     const movePoint = gesture.tool === "ellipse" && event.shiftKey
-      ? constrainPointToSquare(gesture.start, clampToDocument(rawPixel))
+      ? constrainPointToSquare(gesture.start, pointer)
       : freehandTools.has(gesture.tool)
-        ? (stabilizedPointRef.current = stabilizePointerPoint(stabilizedPointRef.current, clampToDocument(rawPixel), brushStabilizer))
-        : clampToDocument(rawPixel);
+        ? (stabilizedPointRef.current = stabilizePointerPoint(stabilizedPointRef.current, pointer, brushStabilizer))
+        : pointer;
     applyResult(moveTool(toolContext(event), gesture, movePoint), gesture.before);
   };
 
   const finishPointer = (event: React.PointerEvent<HTMLCanvasElement>) => {
+    const finalPixel = snapPointToGrid(documentPoint(eventPoint(event)));
+    const lastPoint = gestureRef.current?.last;
+    if (event.type !== "pointercancel" && (pendingOutsideGestureRef.current
+      || (lastPoint && (lastPoint.x !== finalPixel.x || lastPoint.y !== finalPixel.y)))) {
+      handlePointerMove(event);
+    }
     if (event.currentTarget.hasPointerCapture(event.pointerId)) {
       event.currentTarget.releasePointerCapture(event.pointerId);
     }
@@ -2427,13 +2491,15 @@ export function PixelCanvas({
     }
     const gesture = gestureRef.current;
     if (gesture) {
-      const pointer = clampToDocument(snapPointToGrid(documentPoint(eventPoint(event))));
+      const pointer = continuousStrokeTools.has(gesture.tool) ? finalPixel : clampToDocument(finalPixel);
       const point = gesture.tool === "ellipse" && event.shiftKey
         ? constrainPointToSquare(gesture.start, pointer)
         : freehandTools.has(gesture.tool)
-          ? stabilizePointerPoint(stabilizedPointRef.current, pointer, brushStabilizer)
+          ? !previewShiftLine && gesture.constrainLine
+            ? pointer
+            : stabilizedPointRef.current ?? pointer
           : pointer;
-      applyResult(finishTool(toolContext(event), gesture, point), gesture.before);
+      if (event.type !== "pointercancel") applyResult(finishTool(toolContext(event), gesture, point), gesture.before);
       onEditCommit(gesture.before);
     }
     gestureRef.current = null;

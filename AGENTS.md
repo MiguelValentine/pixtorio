@@ -32,6 +32,16 @@ Terrain definition IDs use `1..65534`. In authoritative `TerrainMapData`, `0` me
 
 Orthogonal `blob8` uses 47 canonical masks with clockwise bits N, NE, E, SE, S, SW, W, NW. Diagonal connections require both adjacent cardinal connections. Neighbor sampling removes unsupported corners; strict rule validation rejects noncanonical masks without migration or read-time repair.
 
+## Tilemap and Terrain Invariants
+
+- Tilemaps natively support orthogonal, isometric and hexagonal grids. They share Tileset, history, serialization and Terrain infrastructure, but each grid keeps its own coordinate conversion, exact hit testing, cell polygons, visible-range calculation, neighbor topology, draw order and wrap mapping. Isometric and hexagonal layouts must not be simulated as visually offset orthogonal grids.
+- Tileset layout is authoritative for tile dimensions and grid geometry. Isometric layouts persist base dimensions, visual height and image anchors. Hexagonal layouts persist pointy/flat orientation, side length and odd/even row or column offset; Terrain rules use orientation-independent logical directions.
+- Manual Tilemap Cels treat cell Tile IDs and transform flags as authoritative. Terrain-managed Cels treat the three-state `TerrainMapData`, Terrain rules, boundary mode and fixed seed as authoritative; their Tile IDs, RGBA pixels and indexed pixels are rebuildable caches.
+- Terrain evaluation is deterministic and independent of traversal order. Orthogonal grids support `edge4` and canonical `blob8`, isometric grids use logical diamond neighbors and stable depth sorting, and hexagonal grids use axial/cube neighbor semantics with 64 `edge6` masks. Tall isometric artwork affects rendering and dirty bounds, not Terrain adjacency.
+- Terrain edits recompute the deduplicated affected cells and required neighbors. Preview and commit must use the same affected-cell calculation, including tiled-document wrapping. Tools use logical cell centers for selection clipping and preserve unwrapped pointer paths until samples are mapped back into the document.
+- A pointer gesture or structural edit produces one reversible history command. Undo/redo must restore authoritative Terrain or Tilemap data together with flags, indexes and RGBA caches. Linked Cels remain coherent; operations that change Terrain authority apply to the complete linked group unless an explicit detach workflow is accepted.
+- Tileset PNG plus `pixtorio-tilemap-v1` sidecar import is transactional. Validate filenames, dimensions, exact Tile ID rectangles, shared references, grid layout, Terrain data and rebuilt caches on a cloned document, then replace live state only after every check succeeds. Ordinary PNG, GIF, sprite-sheet and atlas exports contain final composited pixels rather than editable Terrain semantics.
+
 ## `.pixio v5` Format
 
 The project is a strict ZIP container:

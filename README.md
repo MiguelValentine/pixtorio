@@ -27,6 +27,7 @@ The default interface is Simplified Chinese with a light theme. Both language an
 - **Brushes and colour**: shape, bitmap, and pattern brushes; brush presets; pressure and velocity dynamics; RGBA/HSLA editing; palette management; indexed colour; colour wheel; and tint, tone, and shade selectors.
 - **Layers and animation**: nested groups, all 19 Aseprite raster blend modes, background/reference layers, per-cel opacity and Z-index, a timeline, linked cels, tags, onion skinning, and detached animation previews.
 - **Selection and transforms**: rectangle, ellipse, lasso, polygon, magic-wand, colour, and opaque-content selections; boolean operations, feathering, grow/shrink, copy/paste, and selection, cel, and document transforms.
+- **Tilemaps and Terrain**: shared tilesets; native orthogonal, isometric, and pointy/flat hexagonal grids; tile-cell selections and drawing tools; deterministic auto-Terrain rules; rule diagnostics and previews; and transactional Tileset PNG plus `pixtorio-tilemap-v1` sidecar interchange.
 - **Effects and assets**: brightness/contrast, HSL, curves, convolution, outline, shading, tilemaps, slices, ICC colour profiles, pixel aspect ratios, history, recovery, and configurable shortcuts.
 - **Interchange**: PNG, GIF, sprite sheets, packed atlases, image sequences, and GPL/JASC-PAL palettes, with configurable frame ranges, directions, tags, and layer splitting.
 
@@ -89,11 +90,11 @@ The macOS bundle is written to `build/bin/Pixtorio.app`. A release distributed t
 
 ## Project Files
 
-`.pixio` is Pixtorio's only editable project format. The current format is a strict `.pixio v5` ZIP container containing canvas, layers, frames, cels, palettes, tilesets, tilemaps, slices, guides, colour profiles, settings, and thumbnails.
+`.pixio` is Pixtorio's only editable project format. The current format is a strict `.pixio v5` ZIP container containing canvas, layers, frames, cels, palettes, tilesets, tilemaps, Terrain definitions and maps, grid layouts, slices, guides, colour profiles, settings, and thumbnails.
 
 v5 intentionally rejects older projects: v1-v4 files are not migrated, downgraded, or opened through a compatibility reader. PNG, GIF, sprite sheets, atlases, and image sequences are interchange formats, not project formats.
 
-Terrain maps preserve three logical cell states: `0` is unspecified, `65535` is explicit empty, and `1..65534` references a Terrain definition.
+Terrain maps preserve three logical cell states: `0` is unspecified, `65535` is explicit empty, and `1..65534` references a Terrain definition. Terrain cells, rules, boundary behaviour, and fixed random seeds are authoritative; rendered Tile IDs and RGBA/indexed pixels are validated rebuildable caches.
 
 ## Project Status
 

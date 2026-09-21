@@ -51,9 +51,27 @@ button {
   height: 100%;
   background: #1e1f22;
   user-select: none;
+  --motion-fast: 140ms;
+  --motion-base: 220ms;
+  --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+  --ease-in-out: cubic-bezier(0.65, 0, 0.35, 1);
+  --accent: #ff7777;
+  --accent-soft: rgb(255 119 119 / 14%);
+  --surface-raised: #2b2c30;
+  --surface-overlay: rgb(43 44 48 / 96%);
+  --border-subtle: rgb(255 255 255 / 9%);
+  --shadow-overlay: 0 14px 36px rgb(0 0 0 / 28%), 0 2px 8px rgb(0 0 0 / 18%);
 }
 
 .app-shell.is-light { background: #e7e8ea; color: #202124; }
+.app-shell.is-light {
+  --accent: #d95555;
+  --accent-soft: rgb(217 85 85 / 12%);
+  --surface-raised: #f5f6f7;
+  --surface-overlay: rgb(255 255 255 / 96%);
+  --border-subtle: rgb(32 33 36 / 10%);
+  --shadow-overlay: 0 14px 36px rgb(45 47 52 / 16%), 0 2px 8px rgb(45 47 52 / 10%);
+}
 .app-shell.is-light .topbar, .app-shell.is-light .statusbar { background: #f5f6f7; color: #4b4d52; border-color: #c8cacf; }
 .app-shell.is-light .tool-rail, .app-shell.is-light .inspector { background: #eceef0; border-color: #c8cacf; }
 .app-shell.is-light .workspace { background: #d9dbde; }
@@ -134,6 +152,10 @@ button {
   margin-left: 0;
 }
 
+.topbar > .file-menu + .file-menu {
+  margin-left: 4px;
+}
+
 .menu-trigger {
   display: flex;
   align-items: center;
@@ -177,7 +199,9 @@ button {
   border: 1px solid #45474d;
   border-radius: 5px;
   background: #2b2c30;
-  box-shadow: 0 10px 24px rgb(0 0 0 / 35%);
+  box-shadow: var(--shadow-overlay);
+  animation: overlay-enter var(--motion-base) var(--ease-out);
+  transform-origin: top left;
 }
 
 .editor-context-menu {
@@ -193,7 +217,9 @@ button {
   border: 1px solid #45474d;
   border-radius: 5px;
   background: #2b2c30;
-  box-shadow: 0 10px 24px rgb(0 0 0 / 35%);
+  box-shadow: var(--shadow-overlay);
+  animation: overlay-enter var(--motion-base) var(--ease-out);
+  transform-origin: top left;
   pointer-events: auto;
 }
 
@@ -288,6 +314,13 @@ button {
 
 .file-menu-submenu { position: relative; }
 .file-menu-popover button.submenu-trigger.is-open { background: #3a3c42; color: #ffffff; }
+.recent-projects-submenu {
+  top: -6px;
+  left: calc(100% + 5px);
+  width: 300px;
+  max-height: min(70vh, 460px);
+  overflow-y: auto;
+}
 .image-effects-submenu {
   top: -6px;
   left: calc(100% + 5px);
@@ -309,6 +342,7 @@ button {
   min-width: 120px;
   max-width: min(64vw, 760px);
   margin-left: 14px;
+  border-left: 1px solid #34363b;
   background: #222328;
 }
 
@@ -422,17 +456,13 @@ button {
   color: #ffffff;
 }
 
-.document-scroll-button:first-child {
-  border-left: 1px solid #34363b;
-}
-
 .document-scroll-button:disabled {
   color: #55575d;
   cursor: default;
 }
 
 .app-shell.is-light .document-scroll-button { border-color: #c8cacf; color: #65686e; }
-.app-shell.is-light .document-tab-strip { background: #e1e3e6; }
+.app-shell.is-light .document-tab-strip { border-color: #c8cacf; background: #e1e3e6; }
 .app-shell.is-light .document-scroll-button { background: #e1e3e6; }
 .app-shell.is-light .document-scroll-button:hover:not(:disabled) { background: #dde0e4; color: #202124; }
 .app-shell.is-light .document-scroll-button:disabled { color: #b6b9be; }
@@ -469,12 +499,20 @@ button {
   border-radius: 5px;
   background: transparent;
   cursor: pointer;
+  transition: background-color var(--motion-fast) var(--ease-out), color var(--motion-fast) var(--ease-out), border-color var(--motion-fast) var(--ease-out), transform var(--motion-fast) var(--ease-out);
 }
 
 .icon-button:hover:not(:disabled),
 .tool-button:hover,
 .zoom-control button:hover {
   background: #3a3c42;
+  transform: translateY(-1px);
+}
+
+.icon-button:active:not(:disabled),
+.tool-button:active:not(:disabled),
+.zoom-control button:active:not(:disabled) {
+  transform: translateY(0) scale(0.96);
 }
 
 .icon-button:disabled {
@@ -515,6 +553,17 @@ button {
 
 .command-button:hover {
   background: #ff8080;
+  transform: translateY(-1px);
+}
+
+.command-button {
+  transition: background-color var(--motion-fast) var(--ease-out), border-color var(--motion-fast) var(--ease-out), transform var(--motion-fast) var(--ease-out), box-shadow var(--motion-fast) var(--ease-out);
+  box-shadow: 0 1px 0 rgb(255 255 255 / 14%) inset, 0 3px 10px rgb(255 107 107 / 16%);
+}
+
+.command-button:active {
+  transform: translateY(0) scale(0.98);
+  box-shadow: 0 1px 0 rgb(255 255 255 / 10%) inset;
 }
 
 .tool-rail {
@@ -562,9 +611,22 @@ button {
 }
 
 .tool-button.is-active {
-  border-color: #ff6b6b;
-  background: #413033;
-  color: #ff8585;
+  position: relative;
+  border-color: transparent;
+  background: var(--accent-soft);
+  color: var(--accent);
+  box-shadow: inset 0 0 0 1px rgb(255 119 119 / 22%);
+}
+
+.tool-button.is-active::before {
+  position: absolute;
+  left: -1px;
+  width: 2px;
+  height: 18px;
+  border-radius: 0 2px 2px 0;
+  background: currentColor;
+  content: "";
+  animation: active-marker-in var(--motion-base) var(--ease-out);
 }
 
 .tool-group-popover {
@@ -576,7 +638,9 @@ button {
   border: 1px solid #45474d;
   border-radius: 5px;
   background: #2b2c30;
-  box-shadow: 0 10px 24px rgb(0 0 0 / 35%);
+  box-shadow: var(--shadow-overlay);
+  animation: overlay-enter var(--motion-base) var(--ease-out);
+  transform-origin: top left;
   pointer-events: auto;
 }
 
@@ -612,8 +676,9 @@ button {
 }
 
 .app-shell :where(button, [role="tab"], [role="option"]):focus-visible {
-  outline: 2px solid #ff8585;
-  outline-offset: 1px;
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  box-shadow: 0 0 0 4px var(--accent-soft);
 }
 
 .app-shell.is-light :where(button, [role="tab"], [role="option"]):focus-visible {
@@ -658,6 +723,7 @@ button {
 }
 
 .timeline-panel {
+  --timeline-layers-width: 240px;
   grid-column: 2 / -1;
   grid-row: 3;
   min-width: 0;
@@ -899,6 +965,83 @@ button {
 .timeline-cel.is-active span { background: #ff8585; }
 .timeline-cel:focus-visible { z-index: 2; outline: 2px solid #a9d7f5; outline-offset: -3px; }
 
+.timeline-frame-number,
+.timeline-cel,
+.timeline-layer-row,
+.frame-chip,
+.panel-actions button,
+.layer-toggle,
+.menu-trigger,
+.file-menu-popover button,
+.editor-context-menu button,
+.tool-group-popover button {
+  transition: background-color var(--motion-fast) var(--ease-out), color var(--motion-fast) var(--ease-out), border-color var(--motion-fast) var(--ease-out), box-shadow var(--motion-fast) var(--ease-out), transform var(--motion-fast) var(--ease-out);
+}
+
+.timeline-cel.is-active,
+.timeline-frame-number.is-selected,
+.frame-chip.is-selected,
+.panel-actions button.is-active {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.timeline-cel.is-active {
+  box-shadow: inset 0 0 0 1px var(--accent);
+}
+
+.timeline-cel.is-active span { background: var(--accent); }
+
+.panel-section {
+  border-bottom-color: var(--border-subtle);
+}
+
+.panel-section h2,
+.timeline-title,
+.timeline-layer-header {
+  letter-spacing: 0.06em;
+}
+
+.inspector,
+.tool-rail,
+.timeline-panel,
+.timeline-toolbar,
+.timeline-layers,
+.color-section {
+  background-image: linear-gradient(rgb(255 255 255 / 1.5%), transparent 34px);
+}
+
+.app-shell.is-light .inspector,
+.app-shell.is-light .tool-rail,
+.app-shell.is-light .timeline-panel,
+.app-shell.is-light .timeline-toolbar,
+.app-shell.is-light .timeline-layers,
+.app-shell.is-light .color-section {
+  background-image: linear-gradient(rgb(255 255 255 / 48%), transparent 34px);
+}
+
+@keyframes overlay-enter {
+  from { opacity: 0; transform: translateY(-5px) scale(0.98); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+@keyframes active-marker-in {
+  from { opacity: 0; transform: scaleY(0.35); }
+  to { opacity: 1; transform: scaleY(1); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .app-shell,
+  .app-shell *,
+  .app-shell *::before,
+  .app-shell *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    scroll-behavior: auto !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
 .app-shell.is-light .timeline-panel { border-color: #c8cacf; background: #eceef0; }
 .app-shell.is-light .timeline-toolbar { border-color: #c8cacf; background: #f5f6f7; }
 .app-shell.is-light .timeline-title, .app-shell.is-light .timeline-fps, .app-shell.is-light .timeline-onion, .app-shell.is-light .timeline-opacity { color: #4b4d52; }
@@ -1098,13 +1241,6 @@ button {
   font-size: 11px;
 }
 
-.recent-section { padding: 10px 14px; }
-.recent-project { display: block; width: 100%; overflow: hidden; padding: 5px 0; border: 0; background: transparent; color: #d8d9dc; text-align: left; text-overflow: ellipsis; white-space: nowrap; cursor: pointer; }
-.recent-project:hover { color: #ff8585; }
-.recent-project:active { background: #3a3c42; color: #ffb0b0; }
-.app-shell.is-light .recent-project { color: #34363b; }
-.app-shell.is-light .recent-project:hover { color: #982f2f; }
-.app-shell.is-light .recent-project:active { background: #e2e4e7; color: #7f2727; }
 .app-shell.is-light .menu-trigger:hover, .app-shell.is-light .menu-trigger.is-open { background: #dde0e4; }
 .app-shell.is-light .file-menu-popover { border-color: #c4c6cb; background: #ffffff; box-shadow: 0 10px 24px rgb(0 0 0 / 18%); }
 .app-shell.is-light .file-menu-popover button { color: #27282b; }
@@ -1922,8 +2058,9 @@ button {
 
 /* Two-row Aseprite-style timeline controls */
 .timeline-toolbar {
-  display: flex;
-  flex-direction: column;
+  display: grid;
+  grid-template-columns: var(--timeline-layers-width) minmax(0, 1fr);
+  grid-template-rows: 35px 35px;
   align-items: stretch;
   gap: 0;
   height: 70px;
@@ -1934,9 +2071,26 @@ button {
 }
 
 .timeline-toolbar::-webkit-scrollbar { display: none; }
-.timeline-toolbar-row { display: flex; flex: 0 0 35px; align-items: center; gap: 6px; min-width: max-content; padding: 0 9px; }
-.timeline-toolbar-row:first-child { border-bottom: 1px solid #37393f; }
+.timeline-toolbar-row { display: flex; align-items: center; gap: 6px; min-width: 0; padding: 0 9px; overflow-x: auto; scrollbar-width: none; }
+.timeline-toolbar-row::-webkit-scrollbar { display: none; }
+.timeline-toolbar-row > * { flex-shrink: 0; }
+.timeline-toolbar-row:first-child { grid-column: 1 / -1; border-bottom: 1px solid #37393f; }
+.timeline-layer-actions { min-width: 0; padding: 0 9px; border-right: 1px solid #37393f; }
+.timeline-layer-actions .timeline-group-label { flex: 1; }
+.app-shell.is-light .timeline-layer-actions { border-color: #c8cacf; }
 .timeline-animation-row { background: rgb(20 21 24 / 15%); }
+.timeline-action-group { flex: 0 0 auto; }
+.timeline-group-label {
+  flex: 0 0 auto;
+  margin-right: 4px;
+  color: #aeb1b7;
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.timeline-action-group:first-child .timeline-group-label { min-width: 42px; }
+.timeline-toolbar-separator { flex: 0 0 1px; }
+.app-shell.is-light .timeline-group-label { color: #4b4d52; }
 .timeline-advanced-settings { position: relative; }
 .timeline-advanced-settings > summary {
   display: grid;
@@ -1974,7 +2128,7 @@ button {
 .app-shell.is-light .timeline-advanced-settings[open] > summary { background: #dde0e4; color: #202124; }
 .app-shell.is-light .timeline-advanced-popover { border-color: #c4c6cb; background: #ffffff; box-shadow: 0 10px 24px rgb(0 0 0 / 18%); }
 .app-shell.is-light .timeline-advanced-color { color: #4b4d52; }
-.timeline-body { height: calc(100% - 70px); grid-template-columns: 240px minmax(0, 1fr); }
+.timeline-body { height: calc(100% - 70px); grid-template-columns: var(--timeline-layers-width) minmax(0, 1fr); }
 .timeline-title { min-width: 96px; }
 
 .timeline-select,

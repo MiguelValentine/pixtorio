@@ -294,7 +294,7 @@ import {buildSpriteSheet, exportAtlasMetadata, exportSpriteSheetMetadata, packAt
 import {deleteSlices, moveSlices, resizeSliceKeys, reuseSliceColor, scaleSlices} from "./editor/sliceOperations";
 import {touchedSliceIds} from "./editor/sliceHitTesting";
 import {DocumentStateCommand, CommandHistory, defaultHistoryLimitBytes, PixelEditCommand, TerrainCellsCommand, TilemapCellsCommand} from "./editor/history";
-import {assignCommandShortcut, commandForShortcutEvent, defaultCommandShortcuts, documentOptionalCommandIDs, formatShortcutForPlatform, normalizeShortcut, shortcutFromEvent, type CommandShortcutID} from "./editor/shortcuts";
+import {assignCommandShortcut, commandForShortcutEvent, defaultCommandShortcuts, documentOptionalCommandIDs, formatShortcutForPlatform, isUnmodifiedDeletionKey, normalizeShortcut, shortcutFromEvent, type CommandShortcutID} from "./editor/shortcuts";
 import {adjacentFocusedFrameId, focusTagIdForFrame, focusedFrameIdAtEntry, focusedFrameRange, tagContainsFrame} from "./editor/timelineFocus";
 import {deserializePixelClipboard, enqueueSerialTask, orderFrameIDs, serializePixelClipboard} from "./editor/appHelpers";
 import {clearCelSelection, copyCelSelection, pasteCelSelection, type CelAddress, type CelClipboard} from "./editor/celClipboard";
@@ -1036,7 +1036,7 @@ const labels: Record<Language, {
   selectionShape: string; rectangularSelection: string; ellipticalSelection: string; lassoSelection: string; polygonSelection: string; magicWand: string; tolerance: string; selectOpaque: string; selectColor: string; invertSelection: string; reselect: string; growSelection: string; shrinkSelection: string; borderSelection: string; amount: string;
   transform: string; transformModeLabel: string; transformScale: string; transformPerspective: string; transformDistort: string; scaleSelection: string; rotateClockwise: string; rotateCounterclockwise: string; flipHorizontal: string; flipVertical: string;
   arbitraryRotation: string; applyRotation: string;
-  recent: string; layers: string; addLayer: string; addGroup: string; duplicateLayer: string;
+  layers: string; addLayer: string; addGroup: string; duplicateLayer: string;
   moveLayerUp: string; moveLayerDown: string; mergeLayerDown: string; hideLayer: string; showLayer: string;
   renameLayer: string; lockLayer: string; unlockLayer: string; collapseGroup: string; expandGroup: string;
   opacity: string; layerOpacity: string; blendMode: string; normal: string; multiply: string; screen: string; overlay: string;
@@ -1068,7 +1068,7 @@ const labels: Record<Language, {
     selectionShape: "Shape", rectangularSelection: "Rectangle", ellipticalSelection: "Ellipse", lassoSelection: "Lasso", polygonSelection: "Polygon", magicWand: "Magic wand", tolerance: "Tolerance", selectOpaque: "Select opaque pixels", selectColor: "Select foreground color", invertSelection: "Invert selection", reselect: "Reselect", growSelection: "Grow selection", shrinkSelection: "Shrink selection", borderSelection: "Selection border", amount: "Amount",
     transform: "Transform", transformModeLabel: "Mode", transformScale: "Scale", transformPerspective: "Perspective", transformDistort: "Distort", scaleSelection: "Scale selection", rotateClockwise: "Rotate clockwise", rotateCounterclockwise: "Rotate counterclockwise", flipHorizontal: "Flip horizontally", flipVertical: "Flip vertically",
     arbitraryRotation: "Rotation angle", applyRotation: "Rotate selection",
-    recent: "Recent", layers: "Layers", addLayer: "Add layer", addGroup: "Add layer group", duplicateLayer: "Duplicate layer",
+    layers: "Layers", addLayer: "Add layer", addGroup: "Add layer group", duplicateLayer: "Duplicate layer",
     moveLayerUp: "Move layer up", moveLayerDown: "Move layer down", mergeLayerDown: "Merge layer down", hideLayer: "Hide layer", showLayer: "Show layer",
     renameLayer: "Rename layer", lockLayer: "Lock layer", unlockLayer: "Unlock layer", collapseGroup: "Collapse group", expandGroup: "Expand group",
     opacity: "Opacity", layerOpacity: "Layer opacity", blendMode: "Blend mode", normal: "Normal", multiply: "Multiply", screen: "Screen", overlay: "Overlay",
@@ -1102,7 +1102,7 @@ const labels: Record<Language, {
     selectionShape: "形状", rectangularSelection: "矩形", ellipticalSelection: "椭圆", lassoSelection: "套索", polygonSelection: "多边形", magicWand: "魔棒", tolerance: "容差", selectOpaque: "选择不透明像素", selectColor: "选择前景色", invertSelection: "反选", reselect: "重新选择", growSelection: "扩展选区", shrinkSelection: "收缩选区", borderSelection: "选区边框", amount: "数量",
     transform: "变换", transformModeLabel: "模式", transformScale: "缩放", transformPerspective: "透视", transformDistort: "扭曲", scaleSelection: "缩放选区", rotateClockwise: "顺时针旋转", rotateCounterclockwise: "逆时针旋转", flipHorizontal: "水平翻转", flipVertical: "垂直翻转",
     arbitraryRotation: "旋转角度", applyRotation: "旋转选区",
-    recent: "最近项目", layers: "图层", addLayer: "新建图层", addGroup: "新建图层组", duplicateLayer: "复制图层",
+    layers: "图层", addLayer: "新建图层", addGroup: "新建图层组", duplicateLayer: "复制图层",
     moveLayerUp: "上移图层", moveLayerDown: "下移图层", mergeLayerDown: "向下合并图层", hideLayer: "隐藏图层", showLayer: "显示图层",
     renameLayer: "重命名图层", lockLayer: "锁定图层", unlockLayer: "解锁图层", collapseGroup: "折叠图层组", expandGroup: "展开图层组",
     opacity: "不透明度", layerOpacity: "图层不透明度", blendMode: "混合模式", normal: "正常", multiply: "正片叠底", screen: "滤色", overlay: "叠加",
@@ -1735,6 +1735,8 @@ function App() {
   const editMenuPopoverRef = useRef<HTMLDivElement | null>(null);
   const spriteMenuPopoverRef = useRef<HTMLDivElement | null>(null);
   const viewMenuPopoverRef = useRef<HTMLDivElement | null>(null);
+  const recentProjectsAnchorRef = useRef<HTMLDivElement | null>(null);
+  const recentProjectsMenuRef = useRef<HTMLDivElement | null>(null);
   const pasteSpecialAnchorRef = useRef<HTMLDivElement | null>(null);
   const pasteSpecialMenuRef = useRef<HTMLDivElement | null>(null);
   const shiftPixelsAnchorRef = useRef<HTMLDivElement | null>(null);
@@ -2059,6 +2061,7 @@ function App() {
   const [language, setLanguage] = useState<Language>(initialLanguageRef.current);
   const [recoveryReady, setRecoveryReady] = useState(false);
   const [isFileMenuOpen, setIsFileMenuOpen] = useState(false);
+  const [isRecentProjectsMenuOpen, setIsRecentProjectsMenuOpen] = useState(false);
   const [isEditMenuOpen, setIsEditMenuOpen] = useState(false);
   const [isPasteSpecialMenuOpen, setIsPasteSpecialMenuOpen] = useState(false);
   const [isShiftPixelsMenuOpen, setIsShiftPixelsMenuOpen] = useState(false);
@@ -2071,7 +2074,7 @@ function App() {
   const [timelineVisible, setTimelineVisible] = useState(() => readWorkspaceVisibility(localStorage).timelineVisible ?? defaultWorkspaceVisibility.timelineVisible);
   const [canvasOnly, setCanvasOnly] = useState(() => readWorkspaceCanvasOnly(localStorage));
   const [isFullscreen, setIsFullscreen] = useState(false);
-  const [tabScrollState, setTabScrollState] = useState({canGoBack: false, canGoForward: false});
+  const [tabScrollState, setTabScrollState] = useState({hasOverflow: false, canGoBack: false, canGoForward: false});
   const [canvasDialog, setCanvasDialog] = useState<"new" | "resize" | "sprite-size" | null>(null);
   const [layerPropertiesDialog, setLayerPropertiesDialog] = useState<LayerPropertiesDialogState | null>(null);
   const [slicePropertiesDialog, setSlicePropertiesDialog] = useState<SlicePropertiesDialogState | null>(null);
@@ -2803,11 +2806,18 @@ function App() {
     if (!isFileMenuOpen) return;
     const closeOnOutsidePointer = (event: PointerEvent) => {
       if (!fileMenuRef.current?.contains(event.target as Node)
-        && !isMenuSurfaceTarget(event.target, [fileMenuPopoverRef])) setIsFileMenuOpen(false);
+        && !isMenuSurfaceTarget(event.target, [fileMenuPopoverRef, recentProjectsMenuRef])) {
+        setIsFileMenuOpen(false);
+        setIsRecentProjectsMenuOpen(false);
+      }
     };
     window.addEventListener("pointerdown", closeOnOutsidePointer);
     return () => window.removeEventListener("pointerdown", closeOnOutsidePointer);
   }, [isFileMenuOpen]);
+
+  useEffect(() => {
+    if (!isFileMenuOpen || recentProjects.length === 0) setIsRecentProjectsMenuOpen(false);
+  }, [isFileMenuOpen, recentProjects.length]);
 
   useEffect(() => {
     if (!isEditMenuOpen) return;
@@ -2918,11 +2928,12 @@ function App() {
   const updateTabScrollState = useCallback(() => {
     const container = documentTabsRef.current;
     if (!container) return;
+    const hasOverflow = container.scrollWidth > container.clientWidth + 1;
     const canGoForward = container.scrollLeft + container.clientWidth < container.scrollWidth - 1;
     const canGoBack = container.scrollLeft > 1;
-    setTabScrollState((current) => current.canGoBack === canGoBack && current.canGoForward === canGoForward
+    setTabScrollState((current) => current.hasOverflow === hasOverflow && current.canGoBack === canGoBack && current.canGoForward === canGoForward
       ? current
-      : {canGoBack, canGoForward});
+      : {hasOverflow, canGoBack, canGoForward});
   }, []);
 
   useEffect(() => {
@@ -2936,7 +2947,7 @@ function App() {
       observer.disconnect();
       container.removeEventListener("scroll", updateTabScrollState);
     };
-  }, [revision, updateTabScrollState]);
+  }, [revision, tabs.length, updateTabScrollState]);
 
   useEffect(() => {
     const selectedTab = documentTabsRef.current?.querySelector<HTMLElement>("[role=tab][aria-selected=true]");
@@ -7334,6 +7345,11 @@ function App() {
         setIsShiftPixelsMenuOpen(false);
         return;
       }
+      if (key === "escape" && isRecentProjectsMenuOpen) {
+        event.preventDefault();
+        setIsRecentProjectsMenuOpen(false);
+        return;
+      }
       if (key === "escape" && isFileMenuOpen) {
         event.preventDefault();
         setIsFileMenuOpen(false);
@@ -7341,7 +7357,14 @@ function App() {
       }
       if (celPropertiesDialog || canvasDialog || layerPropertiesDialog || slicePropertiesDialog || tagDialog || crossDocumentCopyDialog || exportDialog || adjustmentDialog || spriteImportDialog || settingsOpen || historyOpen || colorProfileDialog || isViewMenuOpen) return;
       const command = commandForShortcutEvent(event, commandShortcutAssignments);
-      if (command && isEditableTarget(event.target)) return;
+      const editableTarget = isEditableTarget(event.target);
+      if (command && editableTarget) return;
+      const contextualDeleteScope = activeTab.commandScope === "frame" || activeTab.commandScope === "layer";
+      if (hasOpenDocument && !editableTarget && contextualDeleteScope && isUnmodifiedDeletionKey(event) && (!command || command === "delete")) {
+        event.preventDefault();
+        dispatchCommandShortcut("delete");
+        return;
+      }
       const targetElement = typeof Element !== "undefined" && event.target instanceof Element ? event.target : null;
       const isTimelineNavigationKey = ["arrowleft", "arrowright", "arrowup", "arrowdown", "home", "end"].includes(key);
       const isTimelineNavigationTarget = Boolean(targetElement?.closest(".timeline-frame-number, .timeline-cel, .document-tab"));
@@ -7361,7 +7384,7 @@ function App() {
         dispatchCommandShortcut(command);
         return;
       }
-      if (isEditableTarget(event.target)) return;
+      if (editableTarget) return;
       if (hasOpenDocument && !event.ctrlKey && !event.metaKey && !event.altKey && !event.shiftKey && (key === "arrowleft" || key === "arrowright")) {
         event.preventDefault();
         dispatchCommandShortcut(key === "arrowleft" ? "previousFrame" : "nextFrame");
@@ -7392,7 +7415,7 @@ function App() {
     };
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [activeCel, activeClearColor, activeLayer, activeTab, activateTool, adjustmentDialog, canEditPixels, canvasDialog, canvasOnly, celPropertiesDialog, clearCurrentCels, colorProfileDialog, commandShortcutAssignments, commitPixelMutation, crossDocumentCopyDialog, dispatchCommandShortcut, exportDialog, hasOpenDocument, historyOpen, isEditMenuOpen, isFileMenuOpen, isPaletteMenuOpen, isPlaying, isSpriteMenuOpen, isViewMenuOpen, layerPropertiesDialog, preferences.selection.keepAfterDelete, selection, settingsOpen, shortcutToolByKey, slicePropertiesDialog, spriteImportDialog, tagDialog]);
+  }, [activeCel, activeClearColor, activeLayer, activeTab, activateTool, adjustmentDialog, canEditPixels, canvasDialog, canvasOnly, celPropertiesDialog, clearCurrentCels, colorProfileDialog, commandShortcutAssignments, commitPixelMutation, crossDocumentCopyDialog, dispatchCommandShortcut, exportDialog, hasOpenDocument, historyOpen, isEditMenuOpen, isFileMenuOpen, isPaletteMenuOpen, isPlaying, isRecentProjectsMenuOpen, isSpriteMenuOpen, isViewMenuOpen, layerPropertiesDialog, preferences.selection.keepAfterDelete, selection, settingsOpen, shortcutToolByKey, slicePropertiesDialog, spriteImportDialog, tagDialog]);
 
   const siblingLayers = pixelDocument.layers.filter((layer) => layer.parentId === activeLayer.parentId);
   const activeSiblingIndex = siblingLayers.findIndex((layer) => layer.id === activeLayer.id);
@@ -7482,6 +7505,13 @@ function App() {
     menuRef: viewMenuPopoverRef,
     uiScalePercent: preferences.general.uiScale,
     kind: "main",
+  });
+  const recentProjectsMenuStyle = useConstrainedMenuStyle({
+    open: isRecentProjectsMenuOpen,
+    anchorRef: recentProjectsAnchorRef,
+    menuRef: recentProjectsMenuRef,
+    uiScalePercent: preferences.general.uiScale,
+    kind: "submenu",
   });
   const pasteSpecialMenuStyle = useConstrainedMenuStyle({
     open: isPasteSpecialMenuOpen,
@@ -7752,10 +7782,53 @@ function App() {
           >
             {ui.file} <ChevronDown size={14} aria-hidden="true" />
           </button>
-          {isFileMenuOpen && menuLayerRef.current && createPortal(<div ref={fileMenuPopoverRef} className="file-menu-popover" role="menu" aria-label={ui.file} style={fileMenuPopoverStyle}>
+          {isFileMenuOpen && menuLayerRef.current && createPortal(<div
+            ref={fileMenuPopoverRef}
+            className="file-menu-popover"
+            role="menu"
+            aria-label={ui.file}
+            style={fileMenuPopoverStyle}
+            onPointerMove={(event) => {
+              const item = event.target instanceof Element ? event.target.closest("button") : null;
+              if (item && !item.classList.contains("recent-projects-trigger")) setIsRecentProjectsMenuOpen(false);
+            }}
+          >
             <button type="button" role="menuitem" onClick={() => { setIsFileMenuOpen(false); dispatchCommandShortcut("new"); }}><FilePlus size={16} />{ui.newProject}<span>{formatShortcutForPlatform(commandShortcutAssignments.new)}</span></button>
             <button type="button" role="menuitem" disabled={!hasOpenDocument || !selection} onClick={() => { setIsFileMenuOpen(false); dispatchCommandShortcut("newFromSelection"); }}><BoxSelect size={16} />{language === "zh" ? "从选区新建" : "New from selection"}<span>{formatShortcutForPlatform(commandShortcutAssignments.newFromSelection)}</span></button>
             <button type="button" role="menuitem" onClick={() => { setIsFileMenuOpen(false); dispatchCommandShortcut("open"); }}><FolderOpen size={16} />{ui.openProject}<span>{formatShortcutForPlatform(commandShortcutAssignments.open)}</span></button>
+            <div className="file-menu-submenu" ref={recentProjectsAnchorRef}>
+              <button
+                className={`submenu-trigger recent-projects-trigger${isRecentProjectsMenuOpen ? " is-open" : ""}`}
+                type="button"
+                role="menuitem"
+                disabled={recentProjects.length === 0}
+                aria-haspopup="menu"
+                aria-expanded={isRecentProjectsMenuOpen}
+                onPointerEnter={() => { if (recentProjects.length > 0) setIsRecentProjectsMenuOpen(true); }}
+                onFocus={() => { if (recentProjects.length > 0) setIsRecentProjectsMenuOpen(true); }}
+                onClick={() => setIsRecentProjectsMenuOpen((value) => recentProjects.length > 0 && !value)}
+              ><HistoryIcon size={16} />{ui.recentProjects}<ChevronRight size={14} /></button>
+              {isRecentProjectsMenuOpen && menuLayerRef.current && createPortal(<div
+                ref={recentProjectsMenuRef}
+                className="file-menu-popover recent-projects-submenu"
+                role="menu"
+                aria-label={ui.recentProjects}
+                style={recentProjectsMenuStyle}
+              >
+                {recentProjects.map((path) => <button
+                  key={path}
+                  type="button"
+                  role="menuitem"
+                  className="recent-menu-project"
+                  title={path}
+                  onClick={() => {
+                    setIsRecentProjectsMenuOpen(false);
+                    setIsFileMenuOpen(false);
+                    void openRecentProject(path);
+                  }}
+                >{path.split(/[\\/]/).pop()}</button>)}
+              </div>, menuLayerRef.current)}
+            </div>
             <button type="button" role="menuitem" onClick={() => { setIsFileMenuOpen(false); dispatchCommandShortcut("importPNG"); }}><FileImage size={16} />{ui.importPNG}<span>{formatShortcutForPlatform(commandShortcutAssignments.importPNG)}</span></button>
             <button type="button" role="menuitem" onClick={() => { setIsFileMenuOpen(false); dispatchCommandShortcut("importSpriteSheet"); }}><Grid2X2 size={16} />{language === "zh" ? "导入精灵表" : "Import sprite sheet"}<span>{formatShortcutForPlatform(commandShortcutAssignments.importSpriteSheet)}</span></button>
             <button type="button" role="menuitem" onClick={() => { setIsFileMenuOpen(false); dispatchCommandShortcut("importPNGSequence"); }}><FolderPlus size={16} />{language === "zh" ? "导入 PNG 序列" : "Import PNG sequence"}<span>{formatShortcutForPlatform(commandShortcutAssignments.importPNGSequence)}</span></button>
@@ -7767,11 +7840,6 @@ function App() {
             <button type="button" role="menuitem" disabled={!hasOpenDocument} onClick={() => { setIsFileMenuOpen(false); dispatchCommandShortcut("exportGIF"); }}><FileImage size={16} />{ui.exportGIF}<span>{formatShortcutForPlatform(commandShortcutAssignments.exportGIF)}</span></button>
             <button type="button" role="menuitem" disabled={!hasOpenDocument} onClick={() => { setIsFileMenuOpen(false); dispatchCommandShortcut("exportSpriteSheet"); }}><Grid2X2 size={16} />{ui.exportSpriteSheet}<span>{formatShortcutForPlatform(commandShortcutAssignments.exportSpriteSheet)}</span></button>
             <button type="button" role="menuitem" disabled={!hasOpenDocument} onClick={() => { setIsFileMenuOpen(false); dispatchCommandShortcut("exportPNGSequence"); }}><Folder size={16} />{language === "zh" ? "导出 PNG 序列" : "Export PNG sequence"}<span>{formatShortcutForPlatform(commandShortcutAssignments.exportPNGSequence)}</span></button>
-            {recentProjects.length > 0 && <>
-              <div className="menu-divider" role="separator" />
-              <p className="menu-label">{ui.recentProjects}</p>
-              {recentProjects.map((path) => <button key={path} type="button" role="menuitem" className="recent-menu-project" title={path} onClick={() => { setIsFileMenuOpen(false); void openRecentProject(path); }}>{path.split(/[\\/]/).pop()}</button>)}
-            </>}
           </div>, menuLayerRef.current)}
         </div>
         <div className="file-menu" ref={editMenuRef} onPointerEnter={() => {
@@ -7913,8 +7981,8 @@ function App() {
             <button type="button" role="menuitem" onClick={() => { setIsViewMenuOpen(false); dispatchCommandShortcut("resetWorkspace"); }}><RotateCcw size={16} />{language === "zh" ? "重置工作区布局" : "Reset Workspace Layout"}<span>{formatShortcutForPlatform(commandShortcutAssignments.resetWorkspace)}</span></button>
           </div>, menuLayerRef.current)}
         </div>
-        <div className="document-tab-strip">
-          {hasOpenDocument && <button className="document-scroll-button" type="button" title={ui.previousDocuments} aria-label={ui.previousDocuments} disabled={!tabScrollState.canGoBack} onClick={() => scrollDocumentTabs(-1)}><ChevronLeft size={16} /></button>}
+        {hasOpenDocument && <div className="document-tab-strip">
+          {tabScrollState.hasOverflow && <button className="document-scroll-button" type="button" title={ui.previousDocuments} aria-label={ui.previousDocuments} disabled={!tabScrollState.canGoBack} onClick={() => scrollDocumentTabs(-1)}><ChevronLeft size={16} /></button>}
           <div className="document-tabs" ref={documentTabsRef} role="tablist" aria-label={ui.openDocuments}>
           {tabs.map((tab) => {
             const selected = tab.id === activeTab.id;
@@ -7993,8 +8061,8 @@ function App() {
             </div>;
           })}
           </div>
-          {hasOpenDocument && <button className="document-scroll-button" type="button" title={ui.nextDocuments} aria-label={ui.nextDocuments} disabled={!tabScrollState.canGoForward} onClick={() => scrollDocumentTabs(1)}><ChevronRight size={16} /></button>}
-        </div>
+          {tabScrollState.hasOverflow && <button className="document-scroll-button" type="button" title={ui.nextDocuments} aria-label={ui.nextDocuments} disabled={!tabScrollState.canGoForward} onClick={() => scrollDocumentTabs(1)}><ChevronRight size={16} /></button>}
+        </div>}
         <div className="topbar-actions">
           {hasOpenDocument && <>
             <button className="icon-button" onClick={undo} disabled={!history.canUndo} title={preferences.undo.showTooltip ? ui.undo : undefined} aria-label={ui.undo}><Undo2 size={17} /></button>
@@ -8844,7 +8912,6 @@ function App() {
           {pixelDocument.guides.map((guide) => <div className="guide-row" key={guide.id}><span>{guide.axis === "vertical" ? "X" : "Y"}</span><input type="number" min="0" max={guide.axis === "vertical" ? pixelDocument.width : pixelDocument.height} value={guide.position} onChange={(event) => mutateDocument("Move Guide", () => { guide.position = Math.max(0, Math.min(guide.axis === "vertical" ? pixelDocument.width : pixelDocument.height, Number(event.target.value) || 0)); return true; })} /><button type="button" title={language === "zh" ? "删除辅助线" : "Delete guide"} onClick={() => mutateDocument("Delete Guide", () => { const index = pixelDocument.guides.findIndex((candidate) => candidate.id === guide.id); if (index < 0) return false; pixelDocument.guides.splice(index, 1); return true; })}><X size={13} /></button></div>)}
         </section>
 
-        {recentProjects.length > 0 && <section className="panel-section recent-section"><h2>{ui.recent}</h2>{recentProjects.map((path) => <button className="recent-project" key={path} title={path} onClick={() => void openRecentProject(path)}>{path.split(/[\\/]/).pop()}</button>)}</section>}
         </div>
 
       </aside>}
@@ -8869,14 +8936,6 @@ function App() {
       }}>
         <header className="timeline-toolbar">
           <div className="timeline-toolbar-row">
-            <div className="timeline-title" onContextMenu={(event) => openContextMenu(event, {kind: "panel", panel: "timeline"})}>{ui.layers} / {ui.animation}</div>
-            <div className="panel-actions">
-              <button title={ui.addLayer} disabled={isPlaying} onClick={() => mutateDocument("Add Layer", () => { const layer = addLayer(pixelDocument, nextLayerName(pixelDocument, ui.layerBaseName)); if (!layer) return false; setTabCommandScope(activeTab, "layer"); return true; })}><Plus size={15} /></button>
-              <button title={ui.addGroup} disabled={isPlaying} onClick={() => mutateDocument("Add Layer Group", () => { const group = addLayerGroup(pixelDocument, nextGroupName(pixelDocument, ui.groupBaseName)); if (!group) return false; setTabCommandScope(activeTab, "layer"); return true; })}><FolderPlus size={15} /></button>
-              <button title={language === "zh" ? "新建图块地图图层" : "New tilemap layer"} disabled={isPlaying} onClick={createTilemapLayer}><Grid2X2 size={14} /></button>
-              <button title={selectedLayerRoots.length > 1 ? (language === "zh" ? "复制所选图层" : "Duplicate selected layers") : ui.duplicateLayer} disabled={isPlaying} onClick={duplicateSelectedLayers}><Copy size={14} /></button>
-            </div>
-            <span className="timeline-toolbar-separator" />
             <label className="timeline-select"><span>{ui.blendMode}</span><select disabled={isPlaying} value={activeLayer.blendMode} onChange={(event) => mutateSelectedLayers("Change Blend Mode", (layerId) => setLayerBlendMode(pixelDocument, layerId, event.target.value as BlendMode))}>
               {allBlendModes.map((mode) => <option value={mode} key={mode}>{blendModeText[language][mode]}</option>)}
             </select></label>
@@ -8887,12 +8946,24 @@ function App() {
             {isImageLayer(activeLayer) && <label className="timeline-onion"><input type="checkbox" checked={activeLayer.continuous} onChange={(event) => mutateSelectedLayers("Change Continuous Layers", (layerId) => setLayerContinuous(pixelDocument, layerId, event.target.checked))} /> {language === "zh" ? "连续动画格" : "Continuous"}</label>}
             <label className="timeline-opacity"><span>{ui.opacity}</span><input type="range" min="0" max="100" disabled={isPlaying} value={Math.round(activeLayer.opacity * 100)} aria-label={ui.layerOpacity} onPointerDown={beginOpacityChange} onPointerUp={finishOpacityChange} onKeyDown={beginOpacityChange} onKeyUp={finishOpacityChange} onBlur={finishOpacityChange} onChange={(event) => { if (!isPlaying) { for (const layer of layerTargetsFor()) setLayerOpacity(pixelDocument, layer.id, Number(event.target.value) / 100); activeTab.compositeCache.clear(); invalidate(); } }} /><output>{Math.round(activeLayer.opacity * 100)}%</output></label>
           </div>
+          <div className="panel-actions timeline-action-group timeline-layer-actions" role="group" aria-label={language === "zh" ? "图层操作" : "Layer actions"}>
+            <span className="timeline-group-label" onContextMenu={(event) => openContextMenu(event, {kind: "panel", panel: "timeline"})}>{ui.layers}</span>
+            <button title={ui.addLayer} disabled={isPlaying} onClick={() => mutateDocument("Add Layer", () => { const layer = addLayer(pixelDocument, nextLayerName(pixelDocument, ui.layerBaseName)); if (!layer) return false; setTabCommandScope(activeTab, "layer"); return true; })}><Plus size={15} /></button>
+            <button title={ui.addGroup} disabled={isPlaying} onClick={() => mutateDocument("Add Layer Group", () => { const group = addLayerGroup(pixelDocument, nextGroupName(pixelDocument, ui.groupBaseName)); if (!group) return false; setTabCommandScope(activeTab, "layer"); return true; })}><FolderPlus size={15} /></button>
+            <button title={language === "zh" ? "新建图块地图图层" : "New tilemap layer"} disabled={isPlaying} onClick={createTilemapLayer}><Grid2X2 size={14} /></button>
+            <button title={selectedLayerRoots.length > 1 ? (language === "zh" ? "复制所选图层" : "Duplicate selected layers") : ui.duplicateLayer} disabled={isPlaying} onClick={duplicateSelectedLayers}><Copy size={14} /></button>
+          </div>
           <div className="timeline-toolbar-row timeline-animation-row">
-            <div className="panel-actions">
+            <div className="panel-actions timeline-action-group" role="group" aria-label={language === "zh" ? "帧操作" : "Frame actions"}>
+              <span className="timeline-group-label">{language === "zh" ? "帧" : "Frames"}</span>
               <button title={ui.addFrame} disabled={isPlaying} onClick={() => dispatchCommandShortcut("addFrame")}><Plus size={14} /></button>
               <button title={ui.newEmptyFrame} disabled={isPlaying} onClick={() => dispatchCommandShortcut("newEmptyFrame")}><FilePlus size={14} /></button>
               <button title={ui.duplicateFrame} disabled={isPlaying} onClick={() => mutateDocument("Duplicate Frame", () => { const extendLoop = shouldExtendTimelineLoopAfterInsertion(activeTab); const frames = duplicateFrames(pixelDocument, selectedFrameIds); if (frames.length === 0) return false; extendTimelineLoopAfterInsertion(activeTab, extendLoop); activeTab.selectedFrameIds = frames.map((frame) => frame.id); activeTab.frameSelectionAnchorId = frames[0].id; setTabCommandScope(activeTab, "frame"); return true; })}><Copy size={14} /></button>
               <button title={ui.deleteFrame} disabled={isPlaying || selectedFrameIds.length >= pixelDocument.frames.length} onClick={deleteCurrentFrames}><Trash2 size={14} /></button>
+            </div>
+            <span className="timeline-toolbar-separator" aria-hidden="true" />
+            <div className="panel-actions timeline-action-group" role="group" aria-label={language === "zh" ? "动画格操作" : "Cel actions"}>
+              <span className="timeline-group-label">{language === "zh" ? "动画格" : "Cels"}</span>
               <button title={language === "zh" ? "创建空动画格" : "Create cel"} disabled={isPlaying || !isCelLayer(activeLayer)} onClick={() => mutateDocument("Create Cels", () => { const addresses = activeTab.commandScope === "cels" && selectedCels.length ? selectedCels : [{layerId: activeLayer.id, frameId: pixelDocument.activeFrameId}]; let changed = false; for (const address of addresses) { if (getCel(pixelDocument, address.layerId, address.frameId)) continue; changed = Boolean(ensureCel(pixelDocument, address.layerId, address.frameId)) || changed; } return changed; })}><FilePlus size={14} /></button>
               <button title={ui.duplicateCels} disabled={isPlaying || (!activeCel && !selectedCels.some(({layerId, frameId}) => Boolean(getCel(pixelDocument, layerId, frameId))))} onClick={() => dispatchCommandShortcut("duplicateCels")}><Copy size={14} /></button>
               <button title={language === "zh" ? "删除动画格" : "Delete cel"} disabled={isPlaying || !selectedCels.some(({layerId, frameId}) => Boolean(getCel(pixelDocument, layerId, frameId)))} onClick={() => {

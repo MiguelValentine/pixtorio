@@ -141,10 +141,17 @@ export interface ToolContext extends BrushSettings {
   eraserColor?: RGBA;
 }
 
+interface DirtyBounds {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
 export interface ToolResult {
   changed: boolean;
   pickedColor?: RGBA;
-  dirtyBounds?: {x: number; y: number; width: number; height: number};
+  dirtyBounds?: DirtyBounds;
 }
 
 interface ResolvedBrushSettings {
@@ -1522,20 +1529,39 @@ function applyAtPoint(context: ToolContext, gesture: ToolGesture, point: Point, 
       brush.patternDestination = gesture.patternDestination;
       drawEllipseOutline(context.pixels, context.width, context.height, gesture.start, point, context.color, brush.size, brush.shape, context.shapeFillMode, brush);
       return {changed: true, dirtyBounds: {x: 0, y: 0, width: context.width, height: context.height}};
-    case "spray":
-  sprayPaint(context.pixels, context.width, context.height, point, context.color, brush.size, gesture.path?.length ?? 0, context.wrapX, context.wrapY);
+    case "spray": {
+      const from = starting ? point : gesture.last;
+      const seed = gesture.path?.length ?? 0;
+      forEachGestureSample(from, point, starting, (sample) => {
+        sprayPaint(context.pixels, context.width, context.height, sample, context.color, brush.size, seed, context.wrapX, context.wrapY);
+      });
       gesture.path?.push(point);
-      return {changed: true, dirtyBounds: brushLineBounds(context, point, point, brush.size)};
+      return {changed: true, dirtyBounds: brushLineBounds(context, from, point, brush.size)};
+    }
     case "blur": {
-      const result = blurPixelsInPlace(context.pixels, context.width, context.height, point, context.blurRadius ?? brush.size);
+      const from = starting ? point : gesture.last;
+      let changed = false;
+      let dirtyBounds: DirtyBounds | undefined;
+      forEachGestureSample(from, point, starting, (sample) => {
+        const result = blurPixelsInPlace(context.pixels, context.width, context.height, sample, context.blurRadius ?? brush.size);
+        changed = result.changed || changed;
+        dirtyBounds = mergeDirtyBounds(dirtyBounds, result.bounds);
+      });
       gesture.path?.push(point);
-      return {changed: result.changed, dirtyBounds: result.bounds};
+      return {changed, dirtyBounds: dirtyBounds ?? emptyDirtyBounds()};
     }
     case "jumble": {
+      const from = starting ? point : gesture.last;
       const seed = gesture.path?.length ?? 0;
+      let changed = false;
+      let dirtyBounds: DirtyBounds | undefined;
+      forEachGestureSample(from, point, starting, (sample) => {
+        const result = jumblePixelsInPlace(context.pixels, context.width, context.height, sample, context.jumbleAmount ?? brush.size, seed);
+        changed = result.changed || changed;
+        dirtyBounds = mergeDirtyBounds(dirtyBounds, result.bounds);
+      });
       gesture.path?.push(point);
-      const result = jumblePixelsInPlace(context.pixels, context.width, context.height, point, context.jumbleAmount ?? brush.size, seed);
-      return {changed: result.changed, dirtyBounds: result.bounds};
+      return {changed, dirtyBounds: dirtyBounds ?? emptyDirtyBounds()};
     }
     case "contour": {
       if (!starting) return {changed: false};
@@ -1704,6 +1730,13 @@ export function blurPixelsInPlace(
   const right = Math.min(width - 1, Math.ceil(center.x + r));
   const top = Math.max(0, Math.floor(center.y - r));
   const bottom = Math.min(height - 1, Math.ceil(center.y + r));
+  const bounds = {
+    x: left,
+    y: top,
+    width: Math.max(0, right - left + 1),
+    height: Math.max(0, bottom - top + 1),
+  };
+  if (bounds.width === 0 || bounds.height === 0) return {changed: false, bounds};
   let changed = false;
   for (let y = top; y <= bottom; y += 1) for (let x = left; x <= right; x += 1) {
     if (Math.hypot(x - center.x, y - center.y) > r) continue;
@@ -1724,7 +1757,7 @@ export function blurPixelsInPlace(
       pixels[target + channel] = value;
     }
   }
-  return {changed, bounds: {x: left, y: top, width: right - left + 1, height: bottom - top + 1}};
+  return {changed, bounds};
 }
 
 /** Deterministically displace pixels inside a circular brush area. */
@@ -1742,6 +1775,13 @@ export function jumblePixelsInPlace(
   const right = Math.min(width - 1, Math.ceil(center.x + r));
   const top = Math.max(0, Math.floor(center.y - r));
   const bottom = Math.min(height - 1, Math.ceil(center.y + r));
+  const bounds = {
+    x: left,
+    y: top,
+    width: Math.max(0, right - left + 1),
+    height: Math.max(0, bottom - top + 1),
+  };
+  if (bounds.width === 0 || bounds.height === 0) return {changed: false, bounds};
   const points: Point[] = [];
   for (let y = top; y <= bottom; y += 1) for (let x = left; x <= right; x += 1) if (Math.hypot(x - center.x, y - center.y) <= r) points.push({x, y});
   const shuffled = points.slice();
@@ -1764,7 +1804,7 @@ export function jumblePixelsInPlace(
     const offset = (point.y * width + point.x) * 4;
     for (let channel = 0; channel < 4; channel += 1) changed = changed || pixels[offset + channel] !== before[offset + channel];
   }
-  return {changed, bounds: {x: left, y: top, width: right - left + 1, height: bottom - top + 1}};
+  return {changed, bounds};
 }
 
 /** Apply an Aseprite-style ink rule to pixels already produced by a tool preview. */
@@ -2069,6 +2109,40 @@ function forEachLinePoint(from: Point, to: Point, callback: (x: number, y: numbe
       y += sy;
     }
   }
+}
+
+function forEachGestureSample(
+  from: Point,
+  to: Point,
+  starting: boolean,
+  callback: (point: Point) => void,
+) {
+  if (starting) {
+    callback(to);
+    return;
+  }
+  let skipStart = true;
+  forEachLinePoint(from, to, (x, y) => {
+    if (skipStart) {
+      skipStart = false;
+      return;
+    }
+    callback({x, y});
+  });
+}
+
+function emptyDirtyBounds(): DirtyBounds {
+  return {x: 0, y: 0, width: 0, height: 0};
+}
+
+function mergeDirtyBounds(current: DirtyBounds | undefined, next: DirtyBounds): DirtyBounds | undefined {
+  if (next.width <= 0 || next.height <= 0) return current;
+  if (!current || current.width <= 0 || current.height <= 0) return {...next};
+  const left = Math.min(current.x, next.x);
+  const top = Math.min(current.y, next.y);
+  const right = Math.max(current.x + current.width, next.x + next.width);
+  const bottom = Math.max(current.y + current.height, next.y + next.height);
+  return {x: left, y: top, width: right - left, height: bottom - top};
 }
 
 function readPixel(context: ToolContext, point: Point): RGBA | undefined {

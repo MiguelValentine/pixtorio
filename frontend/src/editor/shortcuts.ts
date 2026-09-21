@@ -190,6 +190,12 @@ export function shortcutFromEvent(event: ShortcutEventLike) {
   return parts.join("+");
 }
 
+export function isUnmodifiedDeletionKey(event: ShortcutEventLike) {
+  if (event.ctrlKey || event.metaKey || event.altKey || event.shiftKey) return false;
+  const key = normalizeEventKey(event);
+  return key === "Backspace" || key === "Delete";
+}
+
 export function normalizeShortcut(value: string) {
   const tokens = value.split("+").map((token) => token.trim()).filter(Boolean);
   const modifiers = new Set(tokens.slice(0, -1).map((token) => token.toLowerCase()));
@@ -211,6 +217,7 @@ export function formatShortcutForPlatform(value: string, platform = typeof navig
 
 export function commandForShortcutEvent(event: ShortcutEventLike, assignments: Readonly<Record<CommandShortcutID, string>>) {
   const shortcut = shortcutFromEvent(event);
+  if (!shortcut) return null;
   return (Object.keys(assignments) as CommandShortcutID[]).find((command) => normalizeShortcut(assignments[command]) === shortcut) ?? null;
 }
 
