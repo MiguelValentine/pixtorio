@@ -1,13 +1,18 @@
 import {describe, expect, it} from "vitest";
 
-import {celKey, cloneDocument, createCel, createDocument, type PixelDocument} from "./document";
+import {celKey, cloneDocument, createCel, createDocument, getActiveCel, type PixelDocument} from "./document";
 import {
   CommandHistory,
   DocumentStateCommand,
   PixelEditCommand,
+  TerrainCellsCommand,
+  TilemapCellsCommand,
   type HistoryCommand,
 } from "./history";
 import {createPatch, setPixel} from "./pixels";
+import {convertImageLayerToTilemap, createTileset, renderTilemapCel, tilemapPixelSize} from "./tilemap";
+import {decodeProject, encodeProject} from "./serialization";
+import {createTerrainMapData, recalculateTerrainCells} from "./terrain";
 
 interface Counter {
   value: number;
@@ -410,5 +415,140 @@ describe("DocumentStateCommand", () => {
       12, 34, 56, 255,
     ]);
     expect(command.byteSize).toBeGreaterThan(0);
+  });
+});
+
+describe("TilemapCellsCommand", () => {
+  it("restores overlapping high tiles across linked Cels and strict project round trips", () => {
+    const document = createDocument({width: 3, height: 5});
+    const pixels = new Uint8ClampedArray(32);
+    for (let offset = 0; offset < pixels.length; offset += 4) pixels.set([255, 0, 0, 255], offset);
+    const top = new Uint8ClampedArray(32);
+    top.set([0, 0, 255, 128]);
+    const tileset = createTileset({
+      tileWidth: 2, tileHeight: 4,
+      grid: {kind: "isometric", cellWidth: 2, cellHeight: 2, anchorX: 1, anchorY: 4},
+      tiles: [{id: 1, pixels}, {id: 2, pixels: top}],
+    });
+    document.tilesets = [tileset];
+    document.layers[0].kind = "tilemap";
+    document.layers[0].tilesetId = tileset.id;
+    const cel = getActiveCel(document);
+    cel.tilemap = {columns: 2, rows: 1, tiles: new Uint32Array([1, 0])};
+    Object.assign(cel, tilemapPixelSize(tileset, 2, 1));
+    cel.pixels = renderTilemapCel(cel, tileset);
+    const frame = {id: "linked-frame", durationMs: 100};
+    document.frames.push(frame);
+    const alias = {...cel, id: "linked-cel", frameId: frame.id};
+    document.cels[celKey(cel.layerId, frame.id)] = alias;
+    const before = cel.pixels.slice();
+    const command = new TilemapCellsCommand(cel.id, [{index: 1, before: 0, after: 2}], "overlap");
+    command.redo(document);
+    expect(pixelAt(document, cel.id, 1, 1)).toEqual([127, 0, 128, 255]);
+    expect(alias.pixels).toBe(cel.pixels);
+    const decoded = decodeProject(encodeProject(document));
+    expect(getActiveCel(decoded).pixels).toEqual(cel.pixels);
+    command.undo(document);
+    expect(cel.pixels).toEqual(before);
+    expect(alias.pixels).toBe(cel.pixels);
+    command.redo(document);
+    expect(cel.pixels).toEqual(getActiveCel(decoded).pixels);
+  });
+
+  it("restores sparse tile cells and refreshes linked render caches", () => {
+    const document = createDocument({width: 2, height: 1});
+    getActiveCel(document).pixels.set([
+      255, 0, 0, 255,
+      0, 255, 0, 255,
+    ]);
+    const converted = convertImageLayerToTilemap(document, document.activeLayerId, {tileWidth: 1, tileHeight: 1});
+    document.layers[0] = converted.layer;
+    document.tilesets = [converted.tileset];
+    document.cels = {[celKey(converted.layer.id, document.activeFrameId)]: converted.cels[0]};
+    const cel = getActiveCel(document);
+    const before = cel.tilemap!.tiles[0];
+    const after = cel.tilemap!.tiles[1];
+    cel.tilemap!.tiles[0] = after;
+    const command = new TilemapCellsCommand(cel.id, [{index: 0, before, after}], "paint tiles");
+
+    command.undo(document);
+    expect([...cel.tilemap!.tiles]).toEqual([before, after]);
+    expect([...cel.pixels.slice(0, 4)]).toEqual([255, 0, 0, 255]);
+
+    command.redo(document);
+    expect([...cel.tilemap!.tiles]).toEqual([after, after]);
+    expect([...cel.pixels.slice(0, 4)]).toEqual([0, 255, 0, 255]);
+    expect(command.byteSize).toBe(76);
+  });
+
+  it("rejects duplicate or out-of-range sparse changes", () => {
+    expect(() => new TilemapCellsCommand("cel", [
+      {index: 0, before: 0, after: 1},
+      {index: 0, before: 1, after: 2},
+    ], "invalid")).toThrow("Tilemap history changes are invalid");
+
+    const document = createDocument({width: 1, height: 1});
+    const command = new TilemapCellsCommand(getActiveCel(document).id, [{index: 1, before: 0, after: 1}], "invalid");
+    expect(() => command.undo(document)).toThrow("does not exist");
+  });
+
+  it("rejects an out-of-range batch before changing any cell", () => {
+    const document = createDocument({width: 1, height: 1});
+    const cel = getActiveCel(document);
+    cel.tilemap = {columns: 1, rows: 1, tiles: new Uint32Array([2])};
+    const command = new TilemapCellsCommand(cel.id, [
+      {index: 0, before: 1, after: 2},
+      {index: 1, before: 0, after: 2},
+    ], "invalid batch");
+    expect(() => command.undo(document)).toThrow("outside the tilemap");
+    expect([...cel.tilemap.tiles]).toEqual([2]);
+  });
+});
+
+describe("TerrainCellsCommand", () => {
+  it("restores logical Terrain cells and deterministically rebuilds neighboring tiles", () => {
+    const document = createDocument({width: 3, height: 1});
+    getActiveCel(document).pixels.set([
+      255, 0, 0, 255,
+      0, 255, 0, 255,
+      0, 0, 255, 255,
+    ]);
+    const converted = convertImageLayerToTilemap(document, document.activeLayerId, {tileWidth: 1, tileHeight: 1});
+    converted.tileset.terrains = [{
+      id: 1,
+      name: "Path",
+      color: "#ffffffff",
+      neighborMode: "edge4",
+      boundary: "empty",
+      rules: [
+        {mask: 0, candidates: [{tileId: 1, flags: 0, weight: 1}]},
+        {mask: 2, candidates: [{tileId: 2, flags: 0, weight: 1}]},
+        {mask: 8, candidates: [{tileId: 3, flags: 0, weight: 1}]},
+        {mask: 10, candidates: [{tileId: 2, flags: 0, weight: 1}]},
+      ],
+    }];
+    document.layers[0] = converted.layer;
+    document.tilesets = [converted.tileset];
+    document.cels = {[celKey(converted.layer.id, document.activeFrameId)]: converted.cels[0]};
+    const cel = getActiveCel(document);
+    cel.terrainmap = createTerrainMapData(3, 1);
+    cel.terrainmap.terrains.set([1, 1, 0]);
+    recalculateTerrainCells(
+      cel.terrainmap,
+      converted.tileset.terrains,
+      {kind: "orthogonal", tileWidth: 1, tileHeight: 1},
+      cel.tilemap!.tiles,
+      [{column: 0, row: 0}, {column: 1, row: 0}],
+    );
+    const command = new TerrainCellsCommand(cel.id, [{index: 1, before: 0, after: 1}], "paint terrain");
+
+    command.undo(document);
+    expect([...cel.terrainmap.terrains]).toEqual([1, 0, 0]);
+    expect([...cel.tilemap!.tiles]).toEqual([1, 0, 0]);
+
+    command.redo(document);
+    expect([...cel.terrainmap.terrains]).toEqual([1, 1, 0]);
+    expect([...cel.tilemap!.tiles]).toEqual([2, 3, 0]);
+    expect(command.byteSize).toBe(72);
   });
 });

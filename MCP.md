@@ -6,6 +6,10 @@ process with `Pixtorio.exe --mcp`. That process speaks MCP over stdin/stdout;
 it does not open another editor window. Go, Node.js and a development server
 are not required on the target machine. The desktop still requires WebView2.
 
+Terrain definition IDs are `1..65534`. TerrainMap cells use `0` for unspecified, `65535` for explicit empty, and `1..65534` for a Terrain definition. Reads and writes preserve all three states.
+
+Orthogonal `blob8` uses the 47 canonical Blob masks. Bits run clockwise from N: N, NE, E, SE, S, SW, W, NW. A diagonal bit is valid only when both adjoining cardinal bits are set. Rules with unsupported corners are rejected, not normalized on import; neighbor sampling removes unsupported corners before rule resolution. `edge4` and `edge6` retain their 16 and 64 masks.
+
 ## Client Configuration
 
 For clients using the common `mcpServers` JSON format:
@@ -43,10 +47,10 @@ not its filename. Obtain document, layer and frame IDs from the metadata tools.
 | `read_pixels` | Read a rectangular region as row-major RGBA HEX colors; composited by default or from a specified layer. |
 | `read_indexes` | Read row-major palette indexes from a specified Cel in an indexed document. |
 | `read_tileset` | Read tileset metadata and authoritative row-major tile colors/indexes. |
-| `read_tilemap` | Read a tilemap Cel's row-major tile values, including flip flags and sparse Cel geometry. |
+| `read_tilemap` | Read a tilemap Cel's row-major tile values, including flip flags, sparse Cel geometry and an optional per-map hex `gridOffset`. |
 | `get_preview` | Return the specified or active composited frame as a transparent PNG MCP image. |
 | `undo`, `redo` | Use the same history as the editor UI, for the specified tab. |
-| `open_project` | Open a local strict `.pixio` v4 file in a tab. Older versions are rejected. |
+| `open_project` | Open a local strict `.pixio` v5 file in a tab. Older versions are rejected. |
 | `save_project` | Save an open tab to an absolute `.pixio` path. |
 | `export_image` | Export active-frame PNG, all-frame animated GIF, or a PNG sprite sheet. |
 
@@ -68,7 +72,8 @@ preserve continuous partial alpha. PNG and `.pixio` preserve RGBA.
 - `update_tileset` / `delete_tileset`: rename a tileset or delete an unused tileset.
 - `add_tile`: add a row-major tile to a tileset using `pixels` as RGBA HEX values; optional `indexes` and explicit `tileId` are supported.
 - `update_tile` / `delete_tile`: replace a tile payload or delete it. Deletion clears references in every tilemap Cel using that tileset.
-- `set_tile_cells`: set row-major tile values in a tilemap Cel. Values include the tile ID and optional X/Y/diagonal flip flags.
+- `set_tile_cells`: set row-major tile values in a tilemap Cel. Values include the tile ID and optional X/Y/diagonal flip flags. If the target Cel is Terrain-managed, an actual change is rejected unless `detachTerrain: true` is supplied; that option detaches Terrain authority from the complete linked Cel group before writing. A no-op write never detaches Terrain.
+- `read_tilemap` and document Cel metadata return `gridOffset` only when a hex map overrides its shared Tileset parity layout. Omission inherits the Tileset offset; linked Cels always share the same override.
 - `add_layer`: `name`, optional `parentId`, `kind` (`image`, `group`, or `tilemap`), and `tilesetId` for tilemap layers. Cel-layer properties include `role` (`standard`, `background`, `reference`), `continuous`, `alphaLock`, `opacity`, and any of the 19 blend modes.
 - `update_layer`: `layerId`, optional `name`, `visible`, `locked`, `opacity` (0-1), `blendMode`, `role`, `continuous`, and `alphaLock`.
 - `delete_layer`: `layerId`.
@@ -112,7 +117,7 @@ MCP pixel edits target explicit pixels, not the UI selection mask. A successful
 edit clears stale UI selections on its target tab. Linked Cels retain the
 editor's shared-buffer semantics, including indexed palette indexes.
 
-`get_document` and `list_documents` expose the v4 metadata model without raw
+`get_document` and `list_documents` expose the v5 metadata model without raw
 pixel payloads: color profile type/name and embedded profile byte count, pixel
 aspect ratio, tileset dimensions/counts, layer roles and flags including
 tilemap `tilesetId`, sparse Cel geometry/link IDs, tilemap dimensions and
@@ -149,6 +154,6 @@ Inspect state before retrying a timed-out mutation.
 
 The protocol implementation uses the official Go MCP SDK. No scripts, arbitrary
 code evaluation, shell execution, cloud sync, `.aseprite` compatibility, or
-installer are introduced by this interface. The protocol targets `.pixio` v4
+installer are introduced by this interface. The protocol targets `.pixio` v5
 only; it intentionally has no compatibility or migration path for older
 project versions.

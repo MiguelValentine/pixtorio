@@ -479,6 +479,49 @@ func TestMarshalPackedAtlasMetadataRejectsNonObject(t *testing.T) {
 	}
 }
 
+func TestWriteTilesetBundleUsesChosenImageName(t *testing.T) {
+	directory := t.TempDir()
+	path := filepath.Join(directory, "renamed-tiles.png")
+	metadata := `{"format":"pixtorio-tilemap-v1","tileset":{"id":"tiles"},"tilemap":{"columns":1,"rows":1},"terrainmap":null,"cel":null,"tilesetImage":{"file":"original.png","width":2,"height":1,"tiles":[{"tileId":7,"x":0,"y":0,"width":2,"height":1}]}}`
+	if err := writePackedAtlasFiles(path, 2, 1, []byte{255, 0, 0, 255, 0, 0, 0, 0}, metadata, true); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(filepath.Join(directory, "renamed-tiles.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var decoded map[string]any
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		t.Fatal(err)
+	}
+	if _, exists := decoded["image"]; exists {
+		t.Fatal("tilemap sidecar contains unknown atlas image field")
+	}
+	image := decoded["tilesetImage"].(map[string]any)
+	if image["file"] != filepath.Base(path) {
+		t.Fatalf("image filename = %v, want %s", image["file"], filepath.Base(path))
+	}
+	if image["width"] != float64(2) || image["height"] != float64(1) ||
+		len(image["tiles"].([]any)) != 1 || decoded["format"] != "pixtorio-tilemap-v1" {
+		t.Fatalf("tileset metadata changed: %#v", decoded)
+	}
+	if _, err := os.Stat(filepath.Join(directory, image["file"].(string))); err != nil {
+		t.Fatalf("sidecar image reference does not exist: %v", err)
+	}
+}
+
+func TestTilesetBundleRejectsMissingImageDescriptorBeforeWriting(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "invalid.png")
+	err := writePackedAtlasFiles(path, 1, 1, []byte{255, 0, 0, 255},
+		`{"format":"pixtorio-tilemap-v1","tilesetImage":null}`, true)
+	if err == nil {
+		t.Fatal("expected missing image descriptor error")
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatalf("invalid metadata must not write an image: %v", err)
+	}
+}
+
 func testPixioDocument(name string, pixels []byte) pixio.Document {
 	return pixio.Document{
 		FormatVersion:    pixio.FormatVersion,

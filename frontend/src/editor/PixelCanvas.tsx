@@ -64,6 +64,22 @@ import {
   type TransformQuad,
 } from "./transform";
 import {nextSliceSelection, orderedSliceOverlays, selectedSliceBounds} from "./sliceHitTesting";
+import type {TileLineSegment} from "./tileGrid";
+import {wrapTiledPoint} from "./tiledPointer";
+export {wrapTiledPoint} from "./tiledPointer";
+
+export interface TileCellOverlay {
+  points: ReadonlyArray<Point>;
+  kind: "primary" | "affected";
+}
+
+export interface TileImagePreview {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  pixels: Uint8ClampedArray;
+}
 
 export function canvasLocalPoint(
   pointer: {clientX: number; clientY: number},
@@ -129,6 +145,9 @@ interface PixelCanvasProps {
   pixelGridOpacity?: number;
   gridLineColor?: string;
   gridLineOpacity?: number;
+  tileGridLines?: ReadonlyArray<TileLineSegment>;
+  tileCellOverlays?: ReadonlyArray<TileCellOverlay>;
+  tileImagePreviews?: ReadonlyArray<TileImagePreview>;
   guideColor?: string;
   showSelectionEdges?: boolean;
   wheelZoom?: boolean;
@@ -175,7 +194,9 @@ interface PixelCanvasProps {
   onActiveSliceChange?: (id: string) => void;
   onSliceSelectionChange?: (ids: string[]) => void;
   onSliceDoubleClick?: (id: string) => void;
+  onOverlayContextMenu?: (target: CanvasContextTarget, position: {clientX: number; clientY: number}) => void;
   onTilemapPointer?: (phase: "start" | "move" | "end", point: Point, secondary: boolean) => boolean;
+  onTilemapHover?: (point: Point | null) => void;
   onCelMovePointer?: (phase: "start" | "move" | "end", start: Point, point: Point, options: {lockAxis: boolean; autoSelect: boolean}) => boolean;
   interactionGuardRef?: {current: (() => boolean) | null};
 }
@@ -257,6 +278,39 @@ type StagedCurveGesture = {
   pointerMoved: boolean;
   finishOnUp: boolean;
 };
+
+export type CanvasContextTarget =
+  | {kind: "slice"; id: string}
+  | {kind: "guide"; id: string; axis: "horizontal" | "vertical"};
+
+type CanvasContextSlice = {id: string; x: number; y: number; width: number; height: number};
+type CanvasContextGuide = {id: string; axis: "horizontal" | "vertical"; position: number};
+
+export function findCanvasContextTarget(
+  documentPoint: Point,
+  screenPoint: Point,
+  sliceOverlays: ReadonlyArray<CanvasContextSlice>,
+  guides: ReadonlyArray<CanvasContextGuide>,
+  activeSliceId: string,
+  viewport: Point,
+  zoom: number,
+): CanvasContextTarget | null {
+  const slice = orderedSliceOverlays(sliceOverlays, activeSliceId).find((candidate) => (
+    documentPoint.x >= candidate.x
+    && documentPoint.x < candidate.x + candidate.width
+    && documentPoint.y >= candidate.y
+    && documentPoint.y < candidate.y + candidate.height
+  ));
+  if (slice) return {kind: "slice", id: slice.id};
+
+  const guide = guides.find((candidate) => {
+    const screenPosition = candidate.axis === "vertical"
+      ? viewport.x + candidate.position * zoom
+      : viewport.y + candidate.position * zoom;
+    return Math.abs((candidate.axis === "vertical" ? screenPoint.x : screenPoint.y) - screenPosition) <= 5;
+  });
+  return guide ? {kind: "guide", id: guide.id, axis: guide.axis} : null;
+}
 
 type CanvasAidGesture =
   | {kind: "guide"; id: string; axis: "horizontal" | "vertical"; position: number}
@@ -557,6 +611,9 @@ export function PixelCanvas({
   pixelGridOpacity = 28,
   gridLineColor = "#5fb7eb",
   gridLineOpacity = 48,
+  tileGridLines = [],
+  tileCellOverlays = [],
+  tileImagePreviews = [],
   guideColor = "#4cc9f0",
   showSelectionEdges = true,
   wheelZoom = true,
@@ -599,11 +656,13 @@ export function PixelCanvas({
   onCrop,
   textPreview,
   onTilemapPointer,
+  onTilemapHover,
   onCelMovePointer,
   onTextPlace,
   onActiveSliceChange,
   onSliceSelectionChange,
   onSliceDoubleClick,
+  onOverlayContextMenu,
   interactionGuardRef,
 }: PixelCanvasProps) {
   const canvasStackRef = useRef<HTMLDivElement>(null);
@@ -932,6 +991,29 @@ export function PixelCanvas({
     }
     sourceImageRef.current = {pixels: displayPixels, imageData, width, height, dirtyBounds: displayDirtyBounds};
     context.drawImage(source, viewport.x, viewport.y, documentWidth, documentHeight);
+    if (tileImagePreviews.length > 0) {
+      context.save();
+      context.imageSmoothingEnabled = false;
+      context.globalAlpha = 0.58;
+      for (const preview of tileImagePreviews) {
+        const previewCanvas = createSourceCanvas();
+        previewCanvas.width = preview.width;
+        previewCanvas.height = preview.height;
+        const previewContext = previewCanvas.getContext("2d");
+        if (!previewContext) continue;
+        const image = previewContext.createImageData(preview.width, preview.height);
+        image.data.set(preview.pixels);
+        previewContext.putImageData(image, 0, 0);
+        context.drawImage(
+          previewCanvas,
+          viewport.x + preview.x * zoom,
+          viewport.y + preview.y * zoom,
+          preview.width * zoom,
+          preview.height * zoom,
+        );
+      }
+      context.restore();
+    }
 
     if (showPixelGrid && zoom >= 8) {
       context.strokeStyle = colorWithOpacity(pixelGridColor, pixelGridOpacity);
@@ -975,6 +1057,31 @@ export function PixelCanvas({
         context.fillRect(originX - 4, originY - 4, 8, 8);
       }
     }
+    if (tileCellOverlays.length > 0) {
+      for (const overlay of tileCellOverlays) {
+        if (overlay.points.length < 3) continue;
+        context.save();
+        context.beginPath();
+        overlay.points.forEach((point, index) => {
+          const x = viewport.x + point.x * zoom;
+          const y = viewport.y + point.y * zoom;
+          if (index === 0) context.moveTo(x, y);
+          else context.lineTo(x, y);
+        });
+        context.closePath();
+        context.fillStyle = overlay.kind === "primary"
+          ? (lightTheme ? "rgba(37, 126, 175, 0.18)" : "rgba(116, 199, 245, 0.2)")
+          : (lightTheme ? "rgba(210, 117, 33, 0.12)" : "rgba(255, 180, 92, 0.14)");
+        context.strokeStyle = overlay.kind === "primary"
+          ? (lightTheme ? "#276f9f" : "#74c7f5")
+          : (lightTheme ? "#b86a22" : "#ffb45c");
+        context.lineWidth = overlay.kind === "primary" ? 2 : 1;
+        if (overlay.kind === "affected") context.setLineDash([4, 3]);
+        context.fill();
+        context.stroke();
+        context.restore();
+      }
+    }
     if (cropPreview) {
       context.save();
       context.setLineDash([5, 3]);
@@ -998,6 +1105,26 @@ export function PixelCanvas({
         if (row === 0 && column === 0) continue;
         context.drawImage(source, viewport.x + column * documentWidth, viewport.y + row * documentHeight, documentWidth, documentHeight);
       }
+      context.restore();
+    }
+    if (tileGridLines.length > 0) {
+      context.save();
+      context.strokeStyle = colorWithOpacity(gridLineColor, gridLineOpacity);
+      context.lineWidth = 1;
+      context.beginPath();
+      for (const row of tileRows) for (const column of tileColumns) {
+        for (const line of tileGridLines) {
+          context.moveTo(
+            Math.round(viewport.x + (line.start.x + column * width) * zoom) + 0.5,
+            Math.round(viewport.y + (line.start.y + row * height) * zoom) + 0.5,
+          );
+          context.lineTo(
+            Math.round(viewport.x + (line.end.x + column * width) * zoom) + 0.5,
+            Math.round(viewport.y + (line.end.y + row * height) * zoom) + 0.5,
+          );
+        }
+      }
+      context.stroke();
       context.restore();
     }
 
@@ -1147,7 +1274,7 @@ export function PixelCanvas({
         context.restore();
       }
     }
-  }, [activeSliceId, brushShape, brushSize, cropPreview, displayDirtyBounds, displayPixels, editable, gridLineColor, gridLineOpacity, gridPreview, guideColor, guidePreview, guides, gridHeight, gridOffsetX, gridOffsetY, gridWidth, height, lightTheme, pixelGridColor, pixelGridOpacity, preferredCheckerDark, preferredCheckerLight, preferredCheckerSize, revision, selectedSliceIds, selection, showPixelGrid, showSelectionEdges, sliceOverlays, slicePreview, snapToGrid, surfaceSize, symmetryAxisX, symmetryAxisY, symmetryX, symmetryY, tiledX, tiledY, tool, transformPivot, transformPreviewQuad, viewport, width, zoom]);
+  }, [activeSliceId, brushShape, brushSize, cropPreview, displayDirtyBounds, displayPixels, editable, gridLineColor, gridLineOpacity, gridPreview, guideColor, guidePreview, guides, gridHeight, gridOffsetX, gridOffsetY, gridWidth, height, lightTheme, pixelGridColor, pixelGridOpacity, preferredCheckerDark, preferredCheckerLight, preferredCheckerSize, revision, selectedSliceIds, selection, showPixelGrid, showSelectionEdges, sliceOverlays, slicePreview, snapToGrid, surfaceSize, symmetryAxisX, symmetryAxisY, symmetryX, symmetryY, tileCellOverlays, tileGridLines, tileImagePreviews, tiledX, tiledY, tool, transformPivot, transformPreviewQuad, viewport, width, zoom]);
 
   const previewBrush = useMemo(
     () => rotatedBrush ? resizeBitmapBrush(rotatedBrush, brushSize) : null,
@@ -1246,6 +1373,10 @@ export function PixelCanvas({
   const isInside = useCallback((point: Point) => (
     point.x >= 0 && point.y >= 0 && point.x < width && point.y < height
   ), [height, width]);
+
+  const tiledDocumentPoint = useCallback((point: Point): Point | null => {
+    return wrapTiledPoint(point, width, height, tiledX, tiledY);
+  }, [height, tiledX, tiledY, width]);
 
   const clampToDocument = useCallback((point: Point) => ({
     x: Math.max(0, Math.min(width - 1, point.x)),
@@ -1386,6 +1517,22 @@ export function PixelCanvas({
 
   const handlePointerDown = (event: React.PointerEvent<HTMLCanvasElement>) => {
     const point = eventPoint(event);
+    if (event.button === 2) {
+      const contextTarget = findCanvasContextTarget(
+        documentPoint(point),
+        point,
+        sliceOverlays,
+        guides,
+        activeSliceId,
+        viewport,
+        zoom,
+      );
+      if (contextTarget) {
+        event.preventDefault();
+        onOverlayContextMenu?.(contextTarget, {clientX: event.clientX, clientY: event.clientY});
+        return;
+      }
+    }
     const pixel = snapPointToGrid(documentPoint(point));
     updateBrushCursor(isInside(pixel) && (brushCursorTools.has(tool) || tool === "text") ? pixel : null);
     if (tool === "selection" && event.button === 2) {
@@ -1432,7 +1579,8 @@ export function PixelCanvas({
       event.currentTarget.setPointerCapture(event.pointerId);
       return;
     }
-    if (onTilemapPointer && isInside(pixel) && onTilemapPointer("start", pixel, event.button === 2)) {
+    const tilemapPixel = tiledDocumentPoint(pixel);
+    if (onTilemapPointer && tilemapPixel && onTilemapPointer("start", pixel, event.button === 2)) {
       tilemapGestureRef.current = {secondary: event.button === 2};
       event.currentTarget.setPointerCapture(event.pointerId);
       return;
@@ -1820,7 +1968,9 @@ export function PixelCanvas({
     const point = eventPoint(event);
     const rawPixel = snapPointToGrid(documentPoint(point));
     const inside = isInside(rawPixel);
+    const tilemapPixel = tiledDocumentPoint(rawPixel);
     onCursorChange(inside ? rawPixel : null);
+    onTilemapHover?.(tilemapPixel);
     updateBrushCursor(inside && (brushCursorTools.has(tool) || tool === "text") ? rawPixel : null);
 
     const transformGesture = transformGestureRef.current;
@@ -1847,7 +1997,7 @@ export function PixelCanvas({
       return;
     }
     if (tilemapGestureRef.current) {
-      if (inside) onTilemapPointer?.("move", rawPixel, tilemapGestureRef.current.secondary);
+      onTilemapPointer?.("move", rawPixel, tilemapGestureRef.current.secondary);
       return;
     }
 
@@ -2152,8 +2302,8 @@ export function PixelCanvas({
       return;
     }
     if (tilemapGestureRef.current) {
-      const point = clampToDocument(snapPointToGrid(documentPoint(eventPoint(event))));
-      onTilemapPointer?.("end", point, tilemapGestureRef.current.secondary);
+      const raw = snapPointToGrid(documentPoint(eventPoint(event)));
+      onTilemapPointer?.("end", raw, tilemapGestureRef.current.secondary);
       tilemapGestureRef.current = null;
       return;
     }
@@ -2348,7 +2498,7 @@ export function PixelCanvas({
         onPointerMove={handlePointerMove}
         onPointerUp={finishPointer}
         onPointerCancel={finishPointer}
-        onPointerLeave={() => { onCursorChange(null); updateBrushCursor(null); if (!transformGestureRef.current) setTransformCursor(null); }}
+        onPointerLeave={() => { onCursorChange(null); onTilemapHover?.(null); updateBrushCursor(null); if (!transformGestureRef.current) setTransformCursor(null); }}
       />
       <canvas ref={cursorCanvasRef} className="pixel-cursor-canvas" style={canvasDisplayStyle} aria-hidden="true" />
     </div>

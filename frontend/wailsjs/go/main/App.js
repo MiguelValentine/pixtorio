@@ -46,6 +46,10 @@ export function OpenStartupProject() {
   return window['go']['main']['App']['OpenStartupProject']();
 }
 
+export function OpenTilemapData(arg1) {
+  return window['go']['main']['App']['OpenTilemapData'](arg1);
+}
+
 export function SaveGIF(arg1, arg2, arg3, arg4, arg5, arg6, arg7) {
   return window['go']['main']['App']['SaveGIF'](arg1, arg2, arg3, arg4, arg5, arg6, arg7);
 }
@@ -88,6 +92,10 @@ export function SaveSpriteSheet(arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8, 
 
 export function SaveSpriteSheetWithOptions(arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8, arg9, arg10, arg11, arg12, arg13) {
   return window['go']['main']['App']['SaveSpriteSheetWithOptions'](arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8, arg9, arg10, arg11, arg12, arg13);
+}
+
+export function SaveTilemapData(arg1, arg2, arg3, arg4) {
+  return window['go']['main']['App']['SaveTilemapData'](arg1, arg2, arg3, arg4);
 }
 
 export function SetMCPReady(arg1) {

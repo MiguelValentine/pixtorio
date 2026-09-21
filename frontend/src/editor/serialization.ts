@@ -16,11 +16,22 @@ import {
   type TilemapData,
   tileIndexMask,
 } from "./document";
+import {
+  recalculateTerrainCells,
+  terrainEmpty,
+  validateTerrainDefinitions,
+  type TerrainDefinition,
+  type TerrainMapData,
+} from "./terrain";
+import type {TileGridLayout} from "./tileGrid";
+import {tilemapPixelSize, tilesetGridLayout as positionedTilesetGridLayout} from "./tilemapGeometry";
+import {renderTilemapCel} from "./tilemap";
 
-type SerializedCel = Omit<Cel, "pixels" | "indexes" | "tilemap"> & {
+type SerializedCel = Omit<Cel, "pixels" | "indexes" | "tilemap" | "terrainmap"> & {
   pixels: string;
   indexes?: string;
   tilemap?: Omit<TilemapData, "tiles"> & {tiles: string};
+  terrainmap?: Omit<TerrainMapData, "terrains"> & {terrains: string};
 };
 
 type SerializedTileset = Omit<Tileset, "tiles"> & {
@@ -59,7 +70,14 @@ export function encodeProject(document: PixelDocument): string {
       tilemap: cel.tilemap ? {
         columns: cel.tilemap.columns,
         rows: cel.tilemap.rows,
+        ...(cel.tilemap.gridOffset ? {gridOffset: cel.tilemap.gridOffset} : {}),
         tiles: bytesToBase64(uint32ToBytesLE(cel.tilemap.tiles)),
+      } : undefined,
+      terrainmap: cel.terrainmap ? {
+        columns: cel.terrainmap.columns,
+        rows: cel.terrainmap.rows,
+        seed: cel.terrainmap.seed,
+        terrains: bytesToBase64(uint16ToBytesLE(cel.terrainmap.terrains)),
       } : undefined,
     })),
   };
@@ -95,7 +113,7 @@ export function decodeProject(payload: string): PixelDocument {
   }
   const colorProfile = decodeColorProfile(decoded.colorProfile);
   const pixelAspectRatio = decodePixelAspectRatio(decoded.pixelAspectRatio);
-  const tilesets = decodeTilesets(decoded.tilesets, decoded.colorMode);
+  const tilesets = decodeTilesets(decoded.tilesets, decoded.colorMode, decoded.palette.colors, decoded.palette.transparentIndex);
   const layers = decodeLayers(decoded.layers, tilesets);
   const frames = decodeFrames(decoded.frames);
   const tags = decodeTags(decoded.tags, frames);
@@ -112,7 +130,14 @@ export function decodeProject(payload: string): PixelDocument {
 
   const cels: PixelDocument["cels"] = {};
   const celIDs = new Set<string>();
-  const linkedCels = new Map<string, {width: number; height: number; pixels: Uint8ClampedArray; indexes?: Uint8Array; tilemap?: TilemapData}>();
+  const linkedCels = new Map<string, {
+    width: number;
+    height: number;
+    pixels: Uint8ClampedArray;
+    indexes?: Uint8Array;
+    tilemap?: TilemapData;
+    terrainmap?: TerrainMapData;
+  }>();
   for (const value of decoded.cels) {
     if (!isRecord(value)) throw new Error("Project cel pixels are invalid");
     const cel = value as SerializedCel;
@@ -137,24 +162,61 @@ export function decodeProject(payload: string): PixelDocument {
       throw new Error("Project indexed cel data is invalid");
     }
     if (decoded.colorMode !== "indexed" && indexes) throw new Error("Project indexed cel data is invalid");
+    if (indexes && !indexedPixelsMatch(pixels, pixelsFromIndexes(indexes, decoded.palette.colors, decoded.palette.transparentIndex))) {
+      throw new Error("Project indexed cel cache does not match its indexes");
+    }
     const layer = layers.find((candidate) => candidate.id === cel.layerId)!;
     if (layer.role === "background" && (cel.opacity !== 1 || cel.zIndex !== 0)) throw new Error("Project background cel properties are invalid");
     let tilemap: TilemapData | undefined;
+    let terrainmap: TerrainMapData | undefined;
     if (layer.kind === "tilemap") {
       if (!isRecord(cel.tilemap)
         || !validDimension(cel.tilemap.columns)
         || !validDimension(cel.tilemap.rows)
+        || !Object.keys(cel.tilemap).every((key) => ["columns", "rows", "gridOffset", "tiles"].includes(key))
         || typeof cel.tilemap.tiles !== "string") throw new Error("Project tilemap data is invalid");
       const tileset = tilesets.find((candidate) => candidate.id === layer.tilesetId)!;
-      const expectedColumns = Math.ceil(cel.width / tileset.tileWidth);
-      const expectedRows = Math.ceil(cel.height / tileset.tileHeight);
-      if (cel.tilemap.columns !== expectedColumns || cel.tilemap.rows !== expectedRows) throw new Error("Project tilemap dimensions are invalid");
+      const expectedColumns = cel.tilemap.columns;
+      const expectedRows = cel.tilemap.rows;
+      const gridOffset = decodeTilemapGridOffset(cel.tilemap.gridOffset, tileset);
+      const geometryTilemap: TilemapData = {
+        columns: expectedColumns,
+        rows: expectedRows,
+        ...(gridOffset ? {gridOffset} : {}),
+        tiles: new Uint32Array(expectedColumns * expectedRows),
+      };
+      if (tileset.grid.kind === "orthogonal") {
+        if (expectedColumns !== Math.ceil(cel.width / tileset.tileWidth)
+          || expectedRows !== Math.ceil(cel.height / tileset.tileHeight)) throw new Error("Project tilemap dimensions are invalid");
+      } else {
+        const pixelSize = tilemapPixelSize(tileset, geometryTilemap);
+        if (cel.width !== pixelSize.width || cel.height !== pixelSize.height) throw new Error("Project tilemap dimensions are invalid");
+      }
       const tileCells = base64ToUint32LE(cel.tilemap.tiles);
       if (tileCells.length !== expectedColumns * expectedRows) throw new Error("Project tilemap dimensions are invalid");
       const tileIDs = new Set(tileset.tiles.map((tile) => tile.id));
       if (tileCells.some((value) => (value & tileIndexMask) !== 0 && !tileIDs.has(value & tileIndexMask))) throw new Error("Project tilemap references an unknown tile");
-      tilemap = {columns: expectedColumns, rows: expectedRows, tiles: tileCells};
-    } else if (cel.tilemap !== undefined) {
+      tilemap = {columns: expectedColumns, rows: expectedRows, ...(gridOffset ? {gridOffset} : {}), tiles: tileCells};
+      if (cel.terrainmap !== undefined) {
+        if (!isRecord(cel.terrainmap)
+          || cel.terrainmap.columns !== expectedColumns
+          || cel.terrainmap.rows !== expectedRows
+          || !Number.isSafeInteger(cel.terrainmap.seed)
+          || typeof cel.terrainmap.terrains !== "string") throw new Error("Project terrain map data is invalid");
+        const terrainCells = base64ToUint16LE(cel.terrainmap.terrains);
+        if (terrainCells.length !== expectedColumns * expectedRows) throw new Error("Project terrain map dimensions are invalid");
+        const terrainIDs = new Set(tileset.terrains.map((terrain) => terrain.id));
+        if (terrainCells.some((value) => value !== 0 && value !== terrainEmpty && !terrainIDs.has(value))) {
+          throw new Error("Project terrain map references an unknown terrain");
+        }
+        terrainmap = {
+          columns: expectedColumns,
+          rows: expectedRows,
+          seed: cel.terrainmap.seed as number,
+          terrains: terrainCells,
+        };
+      }
+    } else if (cel.tilemap !== undefined || cel.terrainmap !== undefined) {
       throw new Error("Project tilemap data is invalid");
     }
     const key = `${cel.layerId}:${cel.frameId}`;
@@ -164,13 +226,20 @@ export function decodeProject(payload: string): PixelDocument {
       || existingCel.height !== cel.height
       || !bytesEqual(existingCel.pixels, pixels)
       || !optionalBytesEqual(existingCel.indexes, indexes)
-      || !optionalTilemapsEqual(existingCel.tilemap, tilemap))) {
+      || !optionalTilemapsEqual(existingCel.tilemap, tilemap)
+      || !optionalTerrainmapsEqual(existingCel.terrainmap, terrainmap))) {
       throw new Error("Linked cel pixels do not match");
     }
     const sharedPixels = existingCel?.pixels ?? pixels;
     const sharedIndexes = existingCel?.indexes ?? indexes;
-    if (!existingCel) linkedCels.set(cel.linkId, {width: cel.width, height: cel.height, pixels, indexes, tilemap});
-    cels[key] = {...cel, pixels: sharedPixels, indexes: sharedIndexes, tilemap: existingCel?.tilemap ?? tilemap};
+    if (!existingCel) linkedCels.set(cel.linkId, {width: cel.width, height: cel.height, pixels, indexes, tilemap, terrainmap});
+    cels[key] = {
+      ...cel,
+      pixels: sharedPixels,
+      indexes: sharedIndexes,
+      tilemap: existingCel?.tilemap ?? tilemap,
+      terrainmap: existingCel?.terrainmap ?? terrainmap,
+    };
     celIDs.add(cel.id);
   }
   const document: PixelDocument = {
@@ -193,8 +262,45 @@ export function decodeProject(payload: string): PixelDocument {
     activeLayerId: decoded.activeLayerId,
     activeFrameId: decoded.activeFrameId,
   };
+  for (const cel of Object.values(document.cels)) {
+    const layer = layers.find((candidate) => candidate.id === cel.layerId);
+    if (layer?.kind !== "tilemap" || !layer.tilesetId || !cel.tilemap) continue;
+    const tileset = tilesets.find((candidate) => candidate.id === layer.tilesetId)!;
+    if (cel.terrainmap) {
+      const expectedTiles = new Uint32Array(cel.tilemap.tiles.length);
+      recalculateTerrainCells(
+        cel.terrainmap,
+        tileset.terrains,
+        positionedTilesetGridLayout(tileset, cel.tilemap),
+        expectedTiles,
+        Array.from({length: expectedTiles.length}, (_, index) => ({
+          column: index % cel.tilemap!.columns,
+          row: Math.floor(index / cel.tilemap!.columns),
+        })),
+      );
+      if (expectedTiles.some((value, index) => value !== cel.tilemap!.tiles[index])) throw new Error("Project Terrain cache does not match its TerrainMap");
+    }
+    const rendered = renderTilemapCel(cel, tileset, {
+      palette: decoded.colorMode === "indexed" ? decoded.palette.colors : undefined,
+      transparentIndex: decoded.palette.transparentIndex,
+    });
+    if (!bytesEqual(rendered, cel.pixels)) throw new Error("Project tilemap cache does not match its cells");
+  }
   restoreLinkedCelBuffers(document);
   return document;
+}
+
+function decodeTilemapGridOffset(value: unknown, tileset: Tileset): TilemapData["gridOffset"] {
+  if (value === undefined) return undefined;
+  if (value !== "odd-r" && value !== "even-r" && value !== "odd-q" && value !== "even-q") {
+    throw new Error("Project tilemap grid offset is invalid");
+  }
+  if (tileset.grid.kind !== "hexagonal"
+    || (tileset.grid.orientation === "pointy" && !value.endsWith("-r"))
+    || (tileset.grid.orientation === "flat" && !value.endsWith("-q"))) {
+    throw new Error("Project tilemap grid offset does not match its Tileset");
+  }
+  return value;
 }
 
 function decodeLayers(value: unknown, tilesets: readonly Tileset[]): Layer[] {
@@ -274,7 +380,12 @@ function decodePixelAspectRatio(value: unknown): PixelDocument["pixelAspectRatio
   return {width: value.width as number, height: value.height as number};
 }
 
-function decodeTilesets(value: unknown, colorMode: PixelDocument["colorMode"]): Tileset[] {
+function decodeTilesets(
+  value: unknown,
+  colorMode: PixelDocument["colorMode"],
+  palette: readonly string[],
+  transparentIndex: number,
+): Tileset[] {
   if (!Array.isArray(value)) throw new Error("Project tilesets are invalid");
   const ids = new Set<string>();
   return value.map((candidate): Tileset => {
@@ -282,6 +393,8 @@ function decodeTilesets(value: unknown, colorMode: PixelDocument["colorMode"]): 
       || typeof candidate.id !== "string" || !validCelID(candidate.id) || ids.has(candidate.id)
       || typeof candidate.name !== "string" || !candidate.name.trim()
       || !validDimension(candidate.tileWidth) || !validDimension(candidate.tileHeight)
+      || !isTilesetGrid(candidate.grid, candidate.tileWidth, candidate.tileHeight)
+      || !Array.isArray(candidate.terrains)
       || !Array.isArray(candidate.tiles)) throw new Error("Project tilesets are invalid");
     ids.add(candidate.id);
     const tileIDs = new Set<number>();
@@ -296,17 +409,91 @@ function decodeTilesets(value: unknown, colorMode: PixelDocument["colorMode"]): 
       if (pixels.length !== expectedPixels
         || (colorMode === "indexed" && (!indexes || indexes.length !== expectedIndexes))
         || (colorMode !== "indexed" && indexes !== undefined)) throw new Error("Project tilesets are invalid");
+      if (indexes && !indexedPixelsMatch(pixels, pixelsFromIndexes(indexes, palette, transparentIndex))) {
+        throw new Error("Project indexed tile cache does not match its indexes");
+      }
       tileIDs.add(raw.id);
       return {id: raw.id, pixels, indexes};
     });
+    const grid = {...candidate.grid};
+    let terrains: TerrainDefinition[];
+    try {
+      terrains = candidate.terrains.map((terrain) => cloneSerializedTerrainDefinition(terrain));
+      validateTerrainDefinitions(terrains, tilesetGridLayout(candidate.tileWidth, candidate.tileHeight, grid));
+    } catch {
+      throw new Error("Project terrains are invalid");
+    }
+    if (terrains.some((terrain) => !validColor(terrain.color)
+      || terrain.rules.some((rule) => rule.candidates.some((candidate) => !tileIDs.has(candidate.tileId))))) {
+      throw new Error("Project terrains are invalid");
+    }
     return {
       id: candidate.id,
       name: candidate.name.trim(),
       tileWidth: candidate.tileWidth,
       tileHeight: candidate.tileHeight,
+      grid,
+      terrains,
       tiles,
     };
   });
+}
+
+function cloneSerializedTerrainDefinition(value: unknown): TerrainDefinition {
+  if (!isRecord(value) || !Array.isArray(value.rules)) throw new Error("Project terrain is invalid");
+  return {
+    id: value.id as number,
+    name: value.name as string,
+    color: value.color as string,
+    neighborMode: value.neighborMode as TerrainDefinition["neighborMode"],
+    boundary: value.boundary as TerrainDefinition["boundary"],
+    rules: value.rules.map((rule) => {
+      if (!isRecord(rule) || !Array.isArray(rule.candidates)) throw new Error("Project terrain rule is invalid");
+      return {
+        mask: rule.mask as number,
+        candidates: rule.candidates.map((candidate) => {
+          if (!isRecord(candidate)) throw new Error("Project terrain candidate is invalid");
+          return {
+            tileId: candidate.tileId as number,
+            flags: candidate.flags as number,
+            weight: candidate.weight as number,
+          };
+        }),
+      };
+    }),
+  };
+}
+
+function tilesetGridLayout(
+  tileWidth: number,
+  tileHeight: number,
+  grid: Tileset["grid"],
+): TileGridLayout {
+  return grid.kind === "hexagonal"
+    ? {kind: grid.kind, tileWidth, tileHeight, orientation: grid.orientation, offset: grid.offset}
+    : grid.kind === "isometric"
+      ? {kind: grid.kind, tileWidth: grid.cellWidth, tileHeight: grid.cellHeight}
+      : {kind: grid.kind, tileWidth, tileHeight};
+}
+
+function isTilesetGrid(value: unknown, tileWidth: number, tileHeight: number): value is Tileset["grid"] {
+  if (!isRecord(value)) return false;
+  if (value.kind === "orthogonal") {
+    return Object.keys(value).length === 1;
+  }
+  if (value.kind === "isometric") {
+    return Number.isSafeInteger(value.cellWidth) && (value.cellWidth as number) > 0 && (value.cellWidth as number) <= 4096
+      && Number.isSafeInteger(value.cellHeight) && (value.cellHeight as number) > 0 && (value.cellHeight as number) <= 4096
+      && Number.isSafeInteger(value.anchorX) && (value.anchorX as number) >= 0 && (value.anchorX as number) <= tileWidth
+      && Number.isSafeInteger(value.anchorY) && (value.anchorY as number) >= 0 && (value.anchorY as number) <= tileHeight
+      && Object.keys(value).every((key) => ["kind", "cellWidth", "cellHeight", "anchorX", "anchorY"].includes(key));
+  }
+  if (value.kind !== "hexagonal"
+    || (value.orientation !== "pointy" && value.orientation !== "flat")
+    || (value.offset !== "odd-r" && value.offset !== "even-r" && value.offset !== "odd-q" && value.offset !== "even-q")) return false;
+  return Object.keys(value).every((key) => ["kind", "orientation", "offset"].includes(key))
+    && ((value.orientation === "pointy" && (value.offset === "odd-r" || value.offset === "even-r"))
+      || (value.orientation === "flat" && (value.offset === "odd-q" || value.offset === "even-q")));
 }
 
 function decodeFrames(value: unknown): Frame[] {
@@ -427,12 +614,28 @@ function uint32ToBytesLE(values: Uint32Array) {
   return bytes;
 }
 
+function uint16ToBytesLE(values: Uint16Array) {
+  const bytes = new Uint8Array(values.length * 2);
+  const view = new DataView(bytes.buffer);
+  values.forEach((value, index) => view.setUint16(index * 2, value, true));
+  return bytes;
+}
+
 function base64ToUint32LE(value: string) {
   const bytes = base64ToBytes(value);
   if (bytes.length % 4 !== 0) throw new Error("Project tilemap data is invalid");
   const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
   const values = new Uint32Array(bytes.length / 4);
   for (let index = 0; index < values.length; index += 1) values[index] = view.getUint32(index * 4, true);
+  return values;
+}
+
+function base64ToUint16LE(value: string) {
+  const bytes = base64ToBytes(value);
+  if (bytes.length % 2 !== 0) throw new Error("Project terrain map data is invalid");
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  const values = new Uint16Array(bytes.length / 2);
+  for (let index = 0; index < values.length; index += 1) values[index] = view.getUint16(index * 2, true);
   return values;
 }
 
@@ -492,6 +695,33 @@ function bytesEqual(left: Uint8ClampedArray, right: Uint8ClampedArray) {
   return true;
 }
 
+function pixelsFromIndexes(indexes: Uint8Array, palette: readonly string[], transparentIndex: number) {
+  const pixels = new Uint8ClampedArray(indexes.length * 4);
+  for (let index = 0; index < indexes.length; index += 1) {
+    if (indexes[index] >= palette.length) throw new Error("Project indexed data references an unknown palette color");
+    const match = /^#([0-9a-f]{6})([0-9a-f]{2})?$/i.exec(palette[indexes[index]]);
+    if (!match) throw new Error("Project palette is invalid");
+    const offset = index * 4;
+    pixels[offset] = Number.parseInt(match[1].slice(0, 2), 16);
+    pixels[offset + 1] = Number.parseInt(match[1].slice(2, 4), 16);
+    pixels[offset + 2] = Number.parseInt(match[1].slice(4, 6), 16);
+    pixels[offset + 3] = indexes[index] === transparentIndex ? 0 : match[2] ? Number.parseInt(match[2], 16) : 255;
+  }
+  return pixels;
+}
+
+function indexedPixelsMatch(pixels: Uint8ClampedArray, expected: Uint8ClampedArray) {
+  if (pixels.length !== expected.length) return false;
+  for (let offset = 0; offset < pixels.length; offset += 4) {
+    if (pixels[offset + 3] !== expected[offset + 3]) return false;
+    if (expected[offset + 3] !== 0
+      && (pixels[offset] !== expected[offset]
+        || pixels[offset + 1] !== expected[offset + 1]
+        || pixels[offset + 2] !== expected[offset + 2])) return false;
+  }
+  return true;
+}
+
 function optionalBytesEqual(left?: Uint8Array, right?: Uint8Array) {
   if (!left || !right) return left === right;
   if (left.length !== right.length) return false;
@@ -500,6 +730,14 @@ function optionalBytesEqual(left?: Uint8Array, right?: Uint8Array) {
 
 function optionalTilemapsEqual(left?: TilemapData, right?: TilemapData) {
   if (!left || !right) return left === right;
-  if (left.columns !== right.columns || left.rows !== right.rows || left.tiles.length !== right.tiles.length) return false;
+  if (left.columns !== right.columns || left.rows !== right.rows || left.gridOffset !== right.gridOffset
+    || left.tiles.length !== right.tiles.length) return false;
   return left.tiles.every((value, index) => value === right.tiles[index]);
+}
+
+function optionalTerrainmapsEqual(left?: TerrainMapData, right?: TerrainMapData) {
+  if (!left || !right) return left === right;
+  if (left.columns !== right.columns || left.rows !== right.rows || left.seed !== right.seed
+    || left.terrains.length !== right.terrains.length) return false;
+  return left.terrains.every((value, index) => value === right.terrains[index]);
 }

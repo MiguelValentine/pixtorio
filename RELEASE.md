@@ -7,6 +7,7 @@ Run the consolidated release checks from the project root after all implementati
 ~~~powershell
 npm --prefix frontend run check
 npm --prefix frontend test
+npm --prefix frontend run test:e2e
 npm --prefix frontend run build
 go test ./...
 go run github.com/wailsapp/wails/v2/cmd/wails@v2.15.0 build
@@ -18,10 +19,10 @@ The Windows executable is written to `build/bin/Pixtorio.exe`. The release conta
 
 - Verify `Pixtorio.exe` starts on Windows with WebView2 available and opens with no document until New or Open is chosen.
 - Verify a new document defaults to 64x64 and rejects dimensions above 2048x2048.
-- Verify a strict v4 `.pixio` project opens, saves and round-trips canvas settings, pixel aspect ratio, RGBA/grayscale/indexed data, palette indexes/alpha, sparse/partial/linked Cels, nested groups, roles, all blend modes, frame tags, tilesets, tilemaps, slices, guides, color-profile metadata and editor settings.
-- Verify v1, v2 and v3 projects are rejected with an unsupported-format error. Do not add migration fixtures or compatibility code.
+- Verify a strict v5 `.pixio` project opens, saves and round-trips canvas settings, pixel aspect ratio, RGBA/grayscale/indexed data, palette indexes/alpha, sparse/partial/linked Cels, nested groups, roles, all blend modes, frame tags, tilesets, tilemaps, slices, guides, color-profile metadata and editor settings.
+- Verify v1, v2, v3 and v4 projects are rejected with an unsupported-format error. Do not add migration fixtures or compatibility code.
 - Verify tiled drawing, soft selections, text placement, brush dynamics, effects/adjustments, outline/shading, pivot/rotation transforms, document rotate/flip/trim, sprite resize, all 19 blend modes, batch layer merge/flatten, undo/redo, history-state jumps, dirty-state tracking, frame editing, linked Cels, tags, loop ranges, FPS playback and onion skin.
-- Verify tilemap conversion, tileset editing, tile-cell/pixel editing, flip/rotation flags and tilemap cache regeneration.
+- Verify orthogonal, isometric and hexagonal tilemaps; Terrain rules/maps; tileset editing; tile-cell/pixel/Terrain editing; flip/rotation flags; and tilemap cache regeneration.
 - Verify PNG import/export, image-sequence import/export, transparent animated GIF export, regular and packed sprite-sheet export, frame range/direction controls, atlas JSON, tag/layer split export, palette import/export and sprite-sheet import.
 - Verify RGBA/HSLA color editing, embedded profile assignment, known sRGB/Display P3 conversion and pixel aspect-ratio persistence.
 - Verify both dark and light themes, English and Chinese labels, browser import/export downloads and desktop native dialogs.
@@ -43,4 +44,4 @@ The project is currently at a parity review checkpoint, not a parity-complete re
 
 ## Format And Scope
 
-Pixtorio projects are local strict `.pixio v4` files. Older versions are intentionally rejected. Releases do not include automation or CLI interfaces, scripting/plugins/extensions, cloud synchronization, an installer or `.aseprite` compatibility. These are explicit product exclusions, not pending parity work. The live MCP bridge is a desktop integration surface, not a general scripting API.
+Pixtorio projects are local strict `.pixio v5` files. Older versions are intentionally rejected. Releases do not include automation or CLI interfaces, scripting/plugins/extensions, cloud synchronization, an installer or `.aseprite` compatibility. These are explicit product exclusions, not pending parity work. The live MCP bridge is a desktop integration surface, not a general scripting API.

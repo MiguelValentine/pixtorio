@@ -5,6 +5,7 @@ import {
   type Slice,
   type TilemapData,
 } from "./document";
+import type {TerrainMapData} from "./terrain";
 
 export interface CrossDocumentCopyResult {
   frameIds: string[];
@@ -87,6 +88,8 @@ export function copyFramesToDocument(
     .map((tileset) => ({
       ...tileset,
       id: maps.tileset.get(tileset.id)!,
+      grid: {...tileset.grid},
+      terrains: cloneTerrainDefinitions(tileset.terrains),
       tiles: tileset.tiles.map((tile) => ({
         ...tile,
         pixels: tile.pixels.slice(),
@@ -113,6 +116,7 @@ export function copyFramesToDocument(
   const linkedPixels = new Map<string, Uint8ClampedArray>();
   const linkedIndexes = new Map<string, Uint8Array>();
   const linkedTilemaps = new Map<string, TilemapData>();
+  const linkedTerrainmaps = new Map<string, TerrainMapData>();
   const importedCels: Cel[] = [];
   for (const sourceCel of Object.values(source.cels)) {
     const frameId = maps.frame.get(sourceCel.frameId);
@@ -135,6 +139,10 @@ export function copyFramesToDocument(
       ? linkedTilemaps.get(sourceCel.linkId) ?? cloneTilemap(sourceCel.tilemap)!
       : undefined;
     if (tilemap) linkedTilemaps.set(sourceCel.linkId, tilemap);
+    const terrainmap = sourceCel.terrainmap
+      ? linkedTerrainmaps.get(sourceCel.linkId) ?? cloneTerrainmap(sourceCel.terrainmap)!
+      : undefined;
+    if (terrainmap) linkedTerrainmaps.set(sourceCel.linkId, terrainmap);
     importedCels.push({
       ...sourceCel,
       id: createID("cel"),
@@ -144,6 +152,7 @@ export function copyFramesToDocument(
       pixels,
       indexes,
       tilemap,
+      terrainmap,
     });
   }
 
@@ -247,6 +256,8 @@ export function copyLayersToDocument(
     .map((tileset) => ({
       ...tileset,
       id: tilesetIDs.get(tileset.id)!,
+      grid: {...tileset.grid},
+      terrains: cloneTerrainDefinitions(tileset.terrains),
       tiles: tileset.tiles.map((tile) => ({
         ...tile,
         pixels: tile.pixels.slice(),
@@ -258,6 +269,7 @@ export function copyLayersToDocument(
   const linkedPixels = new Map<string, Uint8ClampedArray>();
   const linkedIndexes = new Map<string, Uint8Array>();
   const linkedTilemaps = new Map<string, TilemapData>();
+  const linkedTerrainmaps = new Map<string, TerrainMapData>();
   const importedCels: Cel[] = [];
   for (const sourceCel of Object.values(source.cels)) {
     if (!includedIDs.has(sourceCel.layerId)) continue;
@@ -293,6 +305,14 @@ export function copyLayersToDocument(
         linkedTilemaps.set(sourceCel.linkId, tilemap!);
       }
     }
+    let terrainmap: TerrainMapData | undefined;
+    if (sourceCel.terrainmap) {
+      terrainmap = linkedTerrainmaps.get(sourceCel.linkId);
+      if (!terrainmap) {
+        terrainmap = cloneTerrainmap(sourceCel.terrainmap);
+        linkedTerrainmaps.set(sourceCel.linkId, terrainmap!);
+      }
+    }
     importedCels.push({
       ...sourceCel,
       id: createID("cel"),
@@ -302,6 +322,7 @@ export function copyLayersToDocument(
       pixels,
       indexes,
       tilemap,
+      terrainmap,
     });
   }
 
@@ -398,6 +419,20 @@ function copySlices(source: PixelDocument, selectedFrameIds: readonly string[], 
 
 function cloneTilemap(tilemap: TilemapData | undefined) {
   return tilemap ? {...tilemap, tiles: tilemap.tiles.slice()} : undefined;
+}
+
+function cloneTerrainmap(terrainmap: TerrainMapData | undefined) {
+  return terrainmap ? {...terrainmap, terrains: terrainmap.terrains.slice()} : undefined;
+}
+
+function cloneTerrainDefinitions(definitions: PixelDocument["tilesets"][number]["terrains"]) {
+  return definitions.map((terrain) => ({
+    ...terrain,
+    rules: terrain.rules.map((rule) => ({
+      ...rule,
+      candidates: rule.candidates.map((candidate) => ({...candidate})),
+    })),
+  }));
 }
 
 function orderedUnique(order: readonly string[], requested: readonly string[]) {

@@ -63,7 +63,7 @@ describe("slice key properties", () => {
     expect(getSliceKey(document, slice.id, duplicated[0])).toBeNull();
   });
 
-  it("keeps slice properties in strict v4 round trips and rejects duplicate frame keys", () => {
+  it("keeps slice properties in strict v5 round trips and rejects duplicate frame keys", () => {
     const document = createDocument({width: 8, height: 6});
     const slice = addSlice(document, "Button", {
       x: 1,

@@ -160,10 +160,62 @@ func TestEditSchemaAdvertisesPixioV4Operations(t *testing.T) {
 		t.Fatal(err)
 	}
 	schema := string(encoded)
-	for _, expected := range []string{"color-burn", "soft-light", "alphaLock", "set_indexes", "set_cel_properties", "update_settings", "add_tag", "add_slice", "add_guide"} {
+	for _, expected := range []string{"color-burn", "soft-light", "alphaLock", "set_indexes", "set_cel_properties", "update_settings", "add_tag", "add_slice", "add_guide", "detachTerrain"} {
 		if !strings.Contains(schema, expected) {
 			t.Errorf("edit schema does not advertise %q: %s", expected, schema)
 		}
+	}
+	var schemaObject map[string]any
+	if err := json.Unmarshal(encoded, &schemaObject); err != nil {
+		t.Fatalf("decode edit schema: %v", err)
+	}
+	properties, ok := schemaObject["properties"].(map[string]any)
+	if !ok {
+		t.Fatalf("edit schema properties = %#v", schemaObject["properties"])
+	}
+	operations, ok := properties["operations"].(map[string]any)
+	if !ok {
+		t.Fatalf("edit operations schema = %#v", properties["operations"])
+	}
+	items, ok := operations["items"].(map[string]any)
+	if !ok {
+		t.Fatalf("edit operation items schema = %#v", operations["items"])
+	}
+	oneOf, ok := items["oneOf"].([]any)
+	if !ok {
+		t.Fatalf("edit operation union schema = %#v", items["oneOf"])
+	}
+	var foundDetachTerrain bool
+	for _, candidate := range oneOf {
+		operation, ok := candidate.(map[string]any)
+		if !ok {
+			continue
+		}
+		operationProperties, ok := operation["properties"].(map[string]any)
+		if !ok {
+			continue
+		}
+		typeSchema, ok := operationProperties["type"].(map[string]any)
+		if !ok || typeSchema["const"] != "set_tile_cells" {
+			continue
+		}
+		detachTerrain, ok := operationProperties["detachTerrain"].(map[string]any)
+		if !ok || detachTerrain["type"] != "boolean" {
+			t.Errorf("set_tile_cells detachTerrain schema = %#v", operationProperties["detachTerrain"])
+		}
+		required, ok := operation["required"].([]any)
+		if !ok {
+			t.Fatalf("set_tile_cells required schema = %#v", operation["required"])
+		}
+		for _, field := range required {
+			if field == "detachTerrain" {
+				t.Errorf("set_tile_cells detachTerrain must be optional: required = %#v", required)
+			}
+		}
+		foundDetachTerrain = true
+	}
+	if !foundDetachTerrain {
+		t.Errorf("edit schema is missing set_tile_cells detachTerrain: %s", schema)
 	}
 	if !strings.Contains(schema, `"zIndex"`) || !strings.Contains(schema, `"minimum":-32768`) || !strings.Contains(schema, `"maximum":32767`) {
 		t.Errorf("edit schema does not advertise bounded Cel zIndex: %s", schema)
@@ -258,6 +310,11 @@ func TestSchemaDefaultsAndEditUnion(t *testing.T) {
 						"x": 1, "y": 2, "color": "#AABBCC80",
 					}},
 				},
+				map[string]any{
+					"type":          "set_tile_cells",
+					"detachTerrain": true,
+					"cells":         []any{map[string]any{"x": 0, "y": 0, "value": 1}},
+				},
 				map[string]any{"type": "rename_document", "name": "Updated"},
 			},
 		},
@@ -267,6 +324,14 @@ func TestSchemaDefaultsAndEditUnion(t *testing.T) {
 	}
 	if len(calls) != 2 || calls[1].command != "edit_document" {
 		t.Fatalf("edit dispatches = %#v", calls)
+	}
+	operations, ok := calls[1].args["operations"].([]any)
+	if !ok || len(operations) != 3 {
+		t.Fatalf("edit operations = %#v", calls[1].args["operations"])
+	}
+	detachOperation, ok := operations[1].(map[string]any)
+	if !ok || detachOperation["detachTerrain"] != true {
+		t.Fatalf("detachTerrain dispatch = %#v", operations[1])
 	}
 
 	invalid, err := clientSession.CallTool(ctx, &mcp.CallToolParams{

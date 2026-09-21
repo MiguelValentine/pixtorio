@@ -2,11 +2,14 @@ import {
   cloneDocument,
   estimateDocumentBytes,
   getCelByID,
+  getLayerByID,
   replaceDocument,
   type PixelDocument,
 } from "./document";
 import {applyPatch, type PixelPatch} from "./pixels";
-import {syncIndexedCel} from "./colorModes";
+import {refreshTilemapCaches, syncIndexedCel} from "./colorModes";
+import {recalculateTerrainCells} from "./terrain";
+import {tilesetGridLayout} from "./tilemap";
 
 export interface HistoryCommand<T> {
   readonly label: string;
@@ -199,6 +202,126 @@ export class PixelEditCommand implements HistoryCommand<PixelDocument> {
     if (!cel) throw new Error(`Cannot apply history command: cel ${this.celId} does not exist`);
     applyPatch(cel.pixels, cel.width, this.patch, direction);
     syncIndexedCel(document, cel);
+  }
+}
+
+export interface TilemapCellChange {
+  index: number;
+  before: number;
+  after: number;
+}
+
+export class TilemapCellsCommand implements HistoryCommand<PixelDocument> {
+  readonly byteSize: number;
+  readonly changes: readonly TilemapCellChange[];
+
+  constructor(
+    readonly celId: string,
+    changes: readonly TilemapCellChange[],
+    readonly label: string,
+  ) {
+    const indexes = new Set<number>();
+    this.changes = changes.map((change) => {
+      if (!Number.isSafeInteger(change.index) || change.index < 0
+        || !Number.isInteger(change.before) || change.before < -0x80000000 || change.before > 0xffffffff
+        || !Number.isInteger(change.after) || change.after < -0x80000000 || change.after > 0xffffffff
+        || indexes.has(change.index)) {
+        throw new Error("Tilemap history changes are invalid");
+      }
+      indexes.add(change.index);
+      return {index: change.index, before: change.before >>> 0, after: change.after >>> 0};
+    });
+    this.byteSize = this.changes.length * 12 + 64;
+  }
+
+  undo(document: PixelDocument) {
+    this.apply(document, "before");
+  }
+
+  redo(document: PixelDocument) {
+    this.apply(document, "after");
+  }
+
+  private apply(document: PixelDocument, direction: "before" | "after") {
+    const cel = getCelByID(document, this.celId);
+    if (!cel?.tilemap) throw new Error(`Cannot apply tilemap history command: cel ${this.celId} does not exist`);
+    for (const change of this.changes) {
+      if (change.index >= cel.tilemap.tiles.length) throw new Error("Cannot apply tilemap history command: cell is outside the tilemap");
+    }
+    for (const change of this.changes) {
+      cel.tilemap.tiles[change.index] = change[direction];
+    }
+    refreshTilemapCaches(document);
+  }
+}
+
+export interface TerrainCellChange {
+  index: number;
+  before: number;
+  after: number;
+}
+
+export class TerrainCellsCommand implements HistoryCommand<PixelDocument> {
+  readonly byteSize: number;
+  readonly changes: readonly TerrainCellChange[];
+
+  constructor(
+    readonly celId: string,
+    changes: readonly TerrainCellChange[],
+    readonly label: string,
+  ) {
+    const indexes = new Set<number>();
+    this.changes = changes.map((change) => {
+      if (!Number.isSafeInteger(change.index) || change.index < 0
+        || !Number.isInteger(change.before) || change.before < 0 || change.before > 0xffff
+        || !Number.isInteger(change.after) || change.after < 0 || change.after > 0xffff
+        || indexes.has(change.index)) {
+        throw new Error("Terrain history changes are invalid");
+      }
+      indexes.add(change.index);
+      return {...change};
+    });
+    this.byteSize = this.changes.length * 8 + 64;
+  }
+
+  undo(document: PixelDocument) {
+    this.apply(document, "before");
+  }
+
+  redo(document: PixelDocument) {
+    this.apply(document, "after");
+  }
+
+  private apply(document: PixelDocument, direction: "before" | "after") {
+    const cel = getCelByID(document, this.celId);
+    if (!cel?.tilemap || !cel.terrainmap) {
+      throw new Error(`Cannot apply Terrain history command: cel ${this.celId} does not exist`);
+    }
+    const layer = getLayerByID(document, cel.layerId);
+    const tileset = layer?.tilesetId
+      ? document.tilesets.find((candidate) => candidate.id === layer.tilesetId)
+      : undefined;
+    if (!layer || layer.kind !== "tilemap" || !tileset) {
+      throw new Error("Cannot apply Terrain history command: tileset does not exist");
+    }
+    for (const change of this.changes) {
+      if (change.index >= cel.terrainmap.terrains.length) {
+        throw new Error("Cannot apply Terrain history command: cell is outside the terrain map");
+      }
+    }
+    const changedCells = this.changes.map((change) => ({
+      column: change.index % cel.terrainmap!.columns,
+      row: Math.floor(change.index / cel.terrainmap!.columns),
+    }));
+    for (const change of this.changes) cel.terrainmap.terrains[change.index] = change[direction];
+    recalculateTerrainCells(
+      cel.terrainmap,
+      tileset.terrains,
+      tilesetGridLayout(tileset, cel.tilemap),
+      cel.tilemap.tiles,
+      changedCells,
+    );
+    refreshTilemapCaches(document);
   }
 }
 

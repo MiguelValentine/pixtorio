@@ -1,11 +1,16 @@
 import {
   cropDocument,
-  rebuildTilemapData,
+  isTilemapLayer,
   type Cel,
   type Guide,
   type PixelDocument,
   type SliceKey,
 } from "./document";
+import {refreshTilemapCaches} from "./colorModes";
+import {transformTilemapGrid, type TilemapTransformOperation} from "./tilemapTransforms";
+import {recalculateTerrainCells} from "./terrain";
+import {tilemapPixelSize, tilesetGridLayout} from "./tilemapGeometry";
+import {scaleTileset} from "./tilemapScale";
 
 export type DocumentRotation = "cw" | "ccw" | "180";
 export type DocumentFlipAxis = "horizontal" | "vertical";
@@ -35,6 +40,7 @@ interface RasterOperation {
 export function rotateDocument(document: PixelDocument, rotation: DocumentRotation): boolean {
   if (rotation !== "cw" && rotation !== "ccw" && rotation !== "180") return false;
   const operation = createRasterOperation(document.width, document.height, rotation);
+  if (!transformDocumentTilemaps(document, operation, rotation)) return false;
   transformDocumentRaster(document, operation);
   transformMetadata(document, operation, true);
   document.width = operation.outputWidth;
@@ -45,7 +51,7 @@ export function rotateDocument(document: PixelDocument, rotation: DocumentRotati
       document.pixelAspectRatio.width,
     ];
   }
-  rebuildTilemapData(document);
+  refreshTilemapCaches(document);
   return true;
 }
 
@@ -53,9 +59,10 @@ export function rotateDocument(document: PixelDocument, rotation: DocumentRotati
 export function flipDocument(document: PixelDocument, axis: DocumentFlipAxis): boolean {
   if (axis !== "horizontal" && axis !== "vertical") return false;
   const operation = createRasterOperation(document.width, document.height, axis);
+  if (!transformDocumentTilemaps(document, operation, axis)) return false;
   transformDocumentRaster(document, operation);
   transformMetadata(document, operation, false);
-  rebuildTilemapData(document);
+  refreshTilemapCaches(document);
   return true;
 }
 
@@ -109,11 +116,11 @@ export function resizeSpriteContent(document: PixelDocument, width: number, heig
   if (!validDimension(width) || !validDimension(height)) return false;
   if (width === document.width && height === document.height) return false;
   const operation = createScaleOperation(document.width, document.height, width, height, document.palette.transparentIndex);
+  if (!scaleDocumentTilemaps(document, width / document.width, height / document.height)) return false;
   transformDocumentRaster(document, operation);
   transformMetadata(document, operation, false);
   document.width = width;
   document.height = height;
-  rebuildTilemapData(document);
   return true;
 }
 
@@ -123,9 +130,53 @@ export const resizeSprite = resizeSpriteContent;
 /** Alias for callers that use the canvas terminology for the same operation. */
 export const flipCanvas = flipDocument;
 
+function scaleDocumentTilemaps(document: PixelDocument, scaleX: number, scaleY: number): boolean {
+  // Prepare all tile images, references and caches before changing live data.
+  // A rejected size must not leave half of a shared tileset resized.
+  try {
+    const scaled = new Map(document.tilesets.map((tileset) => [tileset.id, scaleTileset(tileset, scaleX, scaleY)]));
+    const layerByID = new Map(document.layers.map((layer) => [layer.id, layer]));
+    const linkedMaps = new Map<string, NonNullable<Cel["tilemap"]>>();
+    const nextCels: PixelDocument["cels"] = {};
+    for (const [key, cel] of Object.entries(document.cels)) {
+      const layer = layerByID.get(cel.layerId);
+      if (!layer || !isTilemapLayer(layer) || !cel.tilemap) continue;
+      const result = layer.tilesetId ? scaled.get(layer.tilesetId) : undefined;
+      if (!result) return false;
+      let tilemap = linkedMaps.get(cel.linkId);
+      if (!tilemap) {
+        tilemap = {...cel.tilemap, tiles: cel.tilemap.tiles.map(result.remapValue)};
+        linkedMaps.set(cel.linkId, tilemap);
+      }
+      const {tileset} = result;
+      const size = tilemapPixelSize(tileset, tilemap);
+      if (tileset.grid.kind === "orthogonal") {
+        size.width = Math.max((tilemap.columns - 1) * tileset.tileWidth + 1,
+          Math.min(size.width, Math.round(cel.width * scaleX)));
+        size.height = Math.max((tilemap.rows - 1) * tileset.tileHeight + 1,
+          Math.min(size.height, Math.round(cel.height * scaleY)));
+      }
+      if (!validDimension(size.width) || !validDimension(size.height)) return false;
+      nextCels[key] = {...cel, ...size, tilemap,
+        x: Math.round(cel.x * scaleX), y: Math.round(cel.y * scaleY)};
+    }
+    const nextTilesets = document.tilesets.map((tileset) => scaled.get(tileset.id)!.tileset);
+    refreshTilemapCaches({...document, tilesets: nextTilesets, cels: nextCels});
+    for (let index = 0; index < document.tilesets.length; index += 1) {
+      Object.assign(document.tilesets[index], nextTilesets[index]);
+    }
+    for (const [key, cel] of Object.entries(nextCels)) Object.assign(document.cels[key], cel);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function transformDocumentRaster(document: PixelDocument, operation: RasterOperation) {
+  const tilemapLayerIDs = new Set(document.layers.filter(isTilemapLayer).map((layer) => layer.id));
   const groups = new Map<string, Cel[]>();
   for (const cel of Object.values(document.cels)) {
+    if (tilemapLayerIDs.has(cel.layerId) && cel.tilemap) continue;
     const group = groups.get(cel.linkId) ?? [];
     group.push(cel);
     groups.set(cel.linkId, group);
@@ -159,13 +210,85 @@ function transformDocumentRaster(document: PixelDocument, operation: RasterOpera
         cel.height = nextRect.height;
         cel.pixels = nextPixels;
         cel.indexes = nextIndexes;
-        // Tilemap cells are rebuilt from the transformed RGBA/index cache once
-        // all document-space operations have completed.
-        cel.tilemap = undefined;
       }
       partitionIndex += 1;
     }
   }
+}
+
+function transformDocumentTilemaps(
+  document: PixelDocument,
+  operation: RasterOperation,
+  transform: TilemapTransformOperation,
+) {
+  const tilesetByID = new Map(document.tilesets.map((tileset) => [tileset.id, tileset]));
+  const layerByID = new Map(document.layers.map((layer) => [layer.id, layer]));
+  const transformedByLink = new Map<string, ReturnType<typeof transformTilemapGrid>>();
+  const transformedTilesets = new Map<string, NonNullable<ReturnType<typeof transformTilemapGrid>["tileset"]>>();
+  try {
+    for (const cel of Object.values(document.cels)) {
+      const layer = layerByID.get(cel.layerId);
+      if (!layer || !isTilemapLayer(layer) || !layer.tilesetId || !cel.tilemap || transformedByLink.has(cel.linkId)) continue;
+      const tileset = tilesetByID.get(layer.tilesetId);
+      if (!tileset) return false;
+      const result = transformTilemapGrid(cel.tilemap, cel.terrainmap, tileset, transform);
+      if (result.terrainmap && result.tileset) {
+        const {columns, rows} = result.terrainmap;
+        recalculateTerrainCells(
+          result.terrainmap,
+          result.tileset.terrains,
+          tilesetGridLayout(result.tileset, result.tilemap),
+          result.tilemap.tiles,
+          Array.from({length: columns * rows}, (_, index) => ({
+            column: index % columns,
+            row: Math.floor(index / columns),
+          })),
+        );
+      }
+      transformedByLink.set(cel.linkId, result);
+      if (result.tileset && !transformedTilesets.has(tileset.id)) transformedTilesets.set(tileset.id, result.tileset);
+    }
+  } catch {
+    return false;
+  }
+  for (const cel of Object.values(document.cels)) {
+    const layer = layerByID.get(cel.layerId);
+    const result = transformedByLink.get(cel.linkId);
+    if (!layer || !isTilemapLayer(layer) || !layer.tilesetId || !result) continue;
+    const canonical = transformedTilesets.get(layer.tilesetId);
+    if (!canonical || canonical.grid.kind !== "hexagonal" || result.grid.kind !== "hexagonal") {
+      delete result.tilemap.gridOffset;
+      continue;
+    }
+    if (result.grid.offset === canonical.grid.offset) delete result.tilemap.gridOffset;
+    else result.tilemap.gridOffset = result.grid.offset;
+  }
+  for (const [tilesetID, transformed] of transformedTilesets) {
+    const tileset = tilesetByID.get(tilesetID)!;
+    tileset.grid = {...transformed.grid};
+    tileset.tileWidth = transformed.tileWidth;
+    tileset.tileHeight = transformed.tileHeight;
+    tileset.tiles = transformed.tiles;
+    tileset.terrains = transformed.terrains.map((terrain) => ({
+      ...terrain,
+      rules: terrain.rules.map((rule) => ({
+        ...rule,
+        candidates: rule.candidates.map((candidate) => ({...candidate})),
+      })),
+    }));
+  }
+  for (const cel of Object.values(document.cels)) {
+    const result = transformedByLink.get(cel.linkId);
+    if (!result) continue;
+    const bounds = operation.mapRect(cel);
+    cel.x = bounds.x;
+    cel.y = bounds.y;
+    cel.width = result.geometry.pixelSize?.width ?? bounds.width;
+    cel.height = result.geometry.pixelSize?.height ?? bounds.height;
+    cel.tilemap = result.tilemap;
+    cel.terrainmap = result.terrainmap;
+  }
+  return true;
 }
 
 function transformMetadata(document: PixelDocument, operation: RasterOperation, rotateAspect: boolean) {

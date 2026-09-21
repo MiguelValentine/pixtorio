@@ -11,10 +11,11 @@ The project has a broad Aseprite-inspired raster, animation, interchange, histor
 - Use Wails for the desktop shell and the Go-to-web bridge.
 - Keep high-frequency pointer movement, stroke previews, zooming, panning and selection work in the frontend. Do not send every pointer event through Wails.
 - Use Go for filesystem access, project persistence, image encoding, autosave, recovery, native dialogs and desktop integration.
-- `.pixio` is the only editable project format. The current format is strict `.pixio` v4. Older versions are rejected; there is no migration or compatibility path.
-- `.pixio` v4 supports RGBA, grayscale and indexed documents. Cel RGBA pixels are render caches; indexed documents also persist authoritative palette indexes in `.idx` entries.
-- v4 supports sparse or missing Cels, integer Cel offsets, partial Cel geometry and linked Cel buffers. Editor-created Cels may start as full-canvas buffers when a tool first needs them.
-- Each Cel requires `opacity` (0–1, default 1) and integer `zIndex` (-32768–32767, default 0). These are per-instance properties, never shared link data. Z-index offsets sibling stacking order inside the current group; ties sort by z-index then original order. Background Cels are fixed at opacity 1 and z-index 0. Missing fields are rejected in strict v4.
+- `.pixio` is the only editable project format. The current format is strict `.pixio` v5. Older versions are rejected; there is no migration or compatibility path.
+- `.pixio` v5 supports RGBA, grayscale and indexed documents. Cel RGBA pixels are render caches; indexed documents also persist authoritative palette indexes in `.idx` entries.
+- v5 supports sparse or missing Cels, integer Cel offsets, partial Cel geometry and linked Cel buffers. Editor-created Cels may start as full-canvas buffers when a tool first needs them.
+- Hexagonal TilemapData may persist an optional local grid offset (`odd-r`, `even-r`, `odd-q` or `even-q`) when differently sized Cels sharing one Tileset require different parity layouts after a transform. Omission inherits the Tileset offset. The override must match the Tileset orientation, does not change logical dimensions and must agree across linked Cels.
+- Each Cel requires `opacity` (0–1, default 1) and integer `zIndex` (-32768–32767, default 0). These are per-instance properties, never shared link data. Z-index offsets sibling stacking order inside the current group; ties sort by z-index then original order. Background Cels are fixed at opacity 1 and z-index 0. Missing fields are rejected in strict v5.
 - Layers support image, group and tilemap kinds; nested parents; standard, background and reference roles; continuous Cels; alpha lock; opacity; and all 19 Aseprite raster blend modes.
 - PNG, GIF, sprite sheets, packed atlas metadata, image sequences, GPL and JASC-PAL are interchange or palette formats, never project formats.
 - Both the Wails desktop build and the Vite browser build expose project and raster import/export. Browser project saving downloads a `.pixio` file; desktop saving uses native dialogs and atomic replacement.
@@ -23,11 +24,15 @@ The project has a broad Aseprite-inspired raster, animation, interchange, histor
 
 ## Core Model
 
-The editor model consists of `Document`, `Layer`, `Frame`, `Cel`, `Palette`, `Tileset`, `TilemapData`, `Slice`, `Guide` and document `Settings` entities. Pixel buffers are authoritative document data; HTML canvases are rendering surfaces. Coordinates are integer document coordinates and display uses nearest-neighbor sampling.
+The editor model consists of `Document`, `Layer`, `Frame`, `Cel`, `Palette`, `Tileset`, `TilemapData`, `TerrainDefinition`, `TerrainMapData`, `Slice`, `Guide` and document `Settings` entities. Pixel buffers are authoritative document data; HTML canvases are rendering surfaces. Coordinates are integer document coordinates and display uses nearest-neighbor sampling.
 
 Pixel payloads remain RGBA8. Indexed editing constrains writes to the active palette and keeps the index buffer synchronized with its RGBA render cache. Tilemap cell values and tilesets are authoritative for tilemap layers; rendered RGBA pixels are the tilemap Cel cache. Editing operations use reversible commands. Pixel commands retain bounded before/after dirty-region data; structural changes use document-state commands. The frontend history engine has a configurable 16-2048 MiB limit, defaults to 128 MiB, tracks saved/dirty state and exposes a history list with non-linear state jumps.
 
-## `.pixio v4` Format
+Terrain definition IDs use `1..65534`. In authoritative `TerrainMapData`, `0` means unspecified, `65535` means an explicit empty cell, and all other values reference a Terrain definition. Both unspecified and explicit empty render without a tile, but tools, stamps, fills and interchange preserve the distinction.
+
+Orthogonal `blob8` uses 47 canonical masks with clockwise bits N, NE, E, SE, S, SW, W, NW. Diagonal connections require both adjacent cardinal connections. Neighbor sampling removes unsupported corners; strict rule validation rejects noncanonical masks without migration or read-time repair.
+
+## `.pixio v5` Format
 
 The project is a strict ZIP container:
 
@@ -44,11 +49,13 @@ project.pixio
 |       `-- <tile-id>.idx   # indexed documents only
 |-- tilemaps/
 |   `-- <cel-id>.bin
+|-- terrainmaps/
+|   `-- <cel-id>.bin
 `-- profiles/
     `-- profile.icc         # when an embedded profile is assigned
 ~~~
 
-`manifest.json` stores `formatVersion: 4`, canvas dimensions, color mode, palette and transparent index, layers and hierarchy, frames and tags, Cel geometry and links, tilesets and tilemap references, slices, guides, pixel aspect ratio, color profile metadata, settings and active IDs. Go owns decoding, validation, temporary-file writes and atomic replacement. The reader and writer accept v4 only and must not silently repair, migrate, downgrade or open v1-v3 projects.
+`manifest.json` stores `formatVersion: 5`, canvas dimensions, color mode, palette and transparent index, layers and hierarchy, frames and tags, Cel geometry and links, tilesets, grid layouts, Terrain definitions, tilemap and TerrainMap references, slices, guides, pixel aspect ratio, color profile metadata, settings and active IDs. Go owns decoding, validation, temporary-file writes and atomic replacement. The reader and writer accept v5 only and must not silently repair, migrate, downgrade or open v1-v4 projects.
 
 Color configuration supports RGBA/HSLA editing, embedded profile assignment and persistence, and matrix conversion between the supported sRGB and Display P3 profiles. An arbitrary embedded ICC file can be retained and assigned, but conversion is only offered for profiles with a known conversion matrix.
 
@@ -68,7 +75,7 @@ Color configuration supports RGBA/HSLA editing, embedded profile assignment and 
 - Tilemap authoring with shared tilesets, image-to-tilemap conversion, tile selection, add/delete, pixel and tile-cell editing, flip/rotation flags, linked cache refresh and strict tileset/tilemap validation.
 - Text Tool layout with multiline text, built-in and runtime-loaded TTF/OTF/WOFF/WOFF2 fonts, none/slight/full pixel hinting, ligature control, font family/size, line height, bold/italic, alignment, antialias toggle, alpha compositing and selection clipping. External fonts are rasterized at placement and are not project dependencies.
 - Effects and adjustments including brightness/contrast, HSL, invert, convolution presets, median/despeckle, curves, HSV/HSL relative or absolute modes, channel masks, outline and shading effects, all with active/selected/all-Cel scope and history commands.
-- Strict v4 project load/save, thumbnails, sparse/indexed Cel persistence, tilesets, tilemaps, embedded color profiles, pixel aspect ratio, atomic replacement, cross-tab Cel clipboard operations and native Windows/browser bitmap clipboard interchange.
+- Strict v5 project load/save, thumbnails, sparse/indexed Cel persistence, tilesets, tilemaps, embedded color profiles, pixel aspect ratio, atomic replacement, cross-tab Cel clipboard operations and native Windows/browser bitmap clipboard interchange.
 - PNG import/export, animated GIF export with transparency and loop controls, sprite-sheet layouts and padding, packed atlas export, tag/layer split export, atlas JSON, sprite-sheet import with offsets and padding, image-sequence import/export, and selectable all/selected/loop frame ranges with forward/reverse/ping-pong direction.
 - Preferences for theme, language, autosave interval, pixel grid, default pixel-perfect drawing, pressure and brush dynamics, history memory limit, panel dimensions and tool/command shortcuts. Shortcut capture normalizes Ctrl/Meta/Alt/Shift modifiers, removes conflicts and dispatches New/Open/Save/Save As, Undo/Redo, Select All/Deselect, Copy/Cut/Paste and Delete.
 - Reversible pixel/document history engine, dirty-state tracking, saved-state tracking, bounded memory eviction, history dialog, non-linear history-state restore, dirty-region repair, 64 MiB per-tab composite LRU caches, retained source image data, offscreen-canvas fallbacks, thumbnail caches and benchmark coverage for measured workloads.
@@ -92,15 +99,17 @@ The feature checkpoint records the following implemented workflows in addition t
 - Color selectors include saturation/value spectrum, hue/saturation wheel with value strip, and tint/tone/shade variants. Pointer and keyboard editing target foreground/background independently without changing Alpha, in a collapsible bilingual panel for both themes.
 - Sprite/Edit/Layer/Cel commands include sprite duplication, cross-document frame/layer copy, full/empty/background frames, continuous/linked workflows, normal/linked Cel duplication, Tilemap Cel clipboard/delete, timeline drag move/copy/append, layer/Cel properties, opaque-content selection and multi-slice transforms. Slice overlays support selection-derived creation, direct movement, eight-handle resizing, pivots, nine-patch metadata and strict SliceKey handling. Animation supports tag focus; Tilemap Auto performs cleanup.
 - Sprite-sheet import uses Horizontal/Vertical/Matrix layouts, dimensions, offsets and padding with shared browser/desktop slicing and preserved frame order/geometry. PNG sequence import places frames using maximum dimensions; sequence export uses numbered filenames and playback direction. Export supports pixel aspect ratio and cross-platform PNG limits. Atlas sidecars use documented `pixtorio-atlas-v1`, not byte-compatible Aseprite JSON.
+- Tileset PNG plus `pixtorio-tilemap-v1` sidecar import is transactional: filename, dimensions, exact Tile ID rectangles, shared references, all affected Cel geometry, Terrain recalculation and RGBA/index caches are validated on a cloned document before the live document is replaced. Failure must leave the document unchanged.
+- Tile-cell selection transforms on Terrain-managed Cels transform the authoritative three-state Terrain IDs and rebuild the complete linked group; they do not detach Terrain. Terrain stamps can be captured from tile-cell or pixel selections and preserve unspecified versus explicit-empty cells.
 - Complete Preferences use strict versioned storage and 13 bilingual groups: general, file/recovery, color defaults, alerts, editor, selection, timeline, cursor, background, grid, guides/slices, undo and drawing. Runtime settings cover UI scale, hover menu switching, palette separators, autosave enable/interval, recent limits, unsaved/delete/conversion alerts, document color/profile/grid/background defaults, wheel/center zoom, fit-on-open, Shift-line preview, eyedropper brush reset, selection retention/edges/transform scope, frame numbering/rewind/selection retention, checker/grid/guide colors, cursor preview, history memory/focus/non-linear jumps/tooltips and drawing defaults. Timeline auto-show, selection-derived/paste-special defaults and Alpha percent/byte display are included.
 - Workspace commands support persisted named inspector/timeline dimension presets with save/update/apply/delete/reset, panel visibility, pixel-grid/onion toggles, canvas-only mode with Tab/Escape exit, Show All Panels recovery, Wails/browser fullscreen, detached animation preview and complete workspace reset.
 - All 149 user-facing command IDs have unique normalized defaults, bilingual labels, editable/resettable persisted assignments, conflict removal, platform-aware display and editable-target protection. Dispatch uses an exhaustive TypeScript switch; top-level File/Edit/Sprite/View menus share dispatch and show current assignments. Parameterized commands open their own dialogs. Coverage tests verify registry, defaults, labels, dispatch, preference editor, menus, normalization, uniqueness, formatting and conflicts.
 
-The recorded official Aseprite-document audit and regression checkpoint covered animation, timeline, slices, tilemaps, import/export and color management, plus strict-v4 serialization, compositing and history. Browser checks covered both languages/themes, preferences/workspace persistence and canvas-only behavior. The recorded Apple Silicon Wails build launched, passed code-sign verification and live MCP smoke testing. These are historical verification results, not a substitute for the Windows release gate below; native Aseprite docking and scripting are outside the product scope.
+The recorded official Aseprite-document audit and regression checkpoint covered animation, timeline, slices, tilemaps, import/export and color management, plus strict-v5 serialization, compositing and history. Browser checks covered both languages/themes, preferences/workspace persistence and canvas-only behavior. The recorded Apple Silicon Wails build launched, passed code-sign verification and live MCP smoke testing. These are historical verification results, not a substitute for the Windows release gate below; native Aseprite docking and scripting are outside the product scope.
 
 Do not declare a workflow complete until its user-facing behavior, reversible history, applicable document serialization, compositor/export behavior and tests agree.
 
-`.pixio v4` remains intentionally breaking and strict. Do not add migrations, backward-compatibility readers or compatibility tests.
+`.pixio v5` remains intentionally breaking and strict. Do not add migrations, backward-compatibility readers or compatibility tests.
 
 ## Verification Gates
 
@@ -109,12 +118,13 @@ Before a release, run the consolidated gate once after all changes:
 ~~~powershell
 npm --prefix frontend run check
 npm --prefix frontend test
+npm --prefix frontend run test:e2e
 npm --prefix frontend run build
 go test ./...
 go run github.com/wailsapp/wails/v2/cmd/wails@v2.15.0 build
 ~~~
 
-Verify the resulting `build/bin/Pixtorio.exe`, strict v4 round trips, rejection of v1-v3 projects, RGBA/grayscale/indexed edits, sparse/partial/linked Cels, tilesets and tilemaps, color profiles and pixel aspect ratio, history and non-linear restore, compositing and all blend modes, selection/Cel/document transforms, animation and onion skin, text/effects/dynamics, browser and desktop import/export, sequence workflows, export ranges/directions, preferences, shortcuts, clipboard, recovery and MCP smoke behavior. Also check both themes, both languages and the startup state with no document open.
+Verify the resulting `build/bin/Pixtorio.exe`, strict v5 round trips, rejection of v1-v4 projects, RGBA/grayscale/indexed edits, sparse/partial/linked Cels, tilesets and tilemaps, color profiles and pixel aspect ratio, history and non-linear restore, compositing and all blend modes, selection/Cel/document transforms, animation and onion skin, text/effects/dynamics, browser and desktop import/export, sequence workflows, export ranges/directions, preferences, shortcuts, clipboard, recovery and MCP smoke behavior. Also check both themes, both languages and the startup state with no document open.
 
 ## Explicit Scope Exclusions
 

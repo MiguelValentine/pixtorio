@@ -23,6 +23,7 @@ import {
 import {CommandHistory, DocumentStateCommand} from "./history";
 import {setPixel} from "./pixels";
 import {createTileset, renderTilemapCel, tileFlipX} from "./tilemap";
+import {createTerrainMapData} from "./terrain";
 
 function address(layerId: string, frameId: string): CelAddress {
   return {layerId, frameId};
@@ -137,6 +138,14 @@ describe("cel clipboard model", () => {
       name: "Source tiles",
       tileWidth: 1,
       tileHeight: 1,
+      terrains: [{
+        id: 4,
+        name: "Ground",
+        color: "#00ff00ff",
+        neighborMode: "edge4",
+        boundary: "empty",
+        rules: [{mask: 0, candidates: [{tileId: 7, flags: 0, weight: 1}]}],
+      }],
       tiles: [{id: 7, pixels: new Uint8ClampedArray([255, 0, 0, 255]), indexes: new Uint8Array([1])}],
     });
     source.tilesets.push(sourceTileset);
@@ -144,11 +153,14 @@ describe("cel clipboard model", () => {
     const sourceFrame1 = source.activeFrameId;
     const sourceCel = getCel(source, sourceLayer.id, sourceFrame1)!;
     sourceCel.tilemap = {columns: 2, rows: 2, tiles: new Uint32Array([7 | tileFlipX, 0, 0, 7])};
+    sourceCel.terrainmap = createTerrainMapData(2, 2, 91);
+    sourceCel.terrainmap.terrains.set([4, 0, 0, 4]);
     sourceCel.pixels = renderTilemapCel(sourceCel, sourceTileset, {palette, transparentIndex: 0});
     sourceCel.indexes = new Uint8Array([1, 0, 0, 1]);
     const sourceFrame2 = addFrame(source);
     const sourceCel2 = ensureCel(source, sourceLayer.id, sourceFrame2.id)!;
     sourceCel2.tilemap = {...sourceCel.tilemap, tiles: sourceCel.tilemap.tiles.slice()};
+    sourceCel2.terrainmap = {...sourceCel.terrainmap, terrains: sourceCel.terrainmap.terrains.slice()};
     sourceCel2.pixels = sourceCel.pixels.slice();
     sourceCel2.indexes = sourceCel.indexes?.slice();
     expect(linkCels(source, sourceLayer.id, [sourceFrame1, sourceFrame2.id], sourceFrame1)).toBe(true);
@@ -175,19 +187,31 @@ describe("cel clipboard model", () => {
 
     expect(clipboard.cells[0].kind).toBe("tilemap");
     expect(clipboard.cells[0].tilemap?.tiles).not.toBe(sourceCel.tilemap.tiles);
+    expect(clipboard.cells[0].terrainmap?.terrains).not.toBe(sourceCel.terrainmap.terrains);
     expect(clipboard.cells[0].tileset?.tiles[0].pixels).not.toBe(sourceTileset.tiles[0].pixels);
     expect(pasteCelSelection(target, clipboard, targetAddress, [targetLayer.id])).toHaveLength(2);
 
     const pasted = getCel(target, targetLayer.id, target.frames[0].id)!;
     expect(pasted.tilemap?.tiles).toEqual(new Uint32Array([1 | tileFlipX, 0, 0, 1]));
     expect(pasted.tilemap?.tiles).not.toBe(sourceCel.tilemap.tiles);
+    expect(pasted.terrainmap).toMatchObject({columns: 2, rows: 2, seed: 91});
+    expect([...pasted.terrainmap!.terrains]).toEqual([1, 0, 0, 1]);
     expect(pasted.indexes).toEqual(new Uint8Array([1, 0, 0, 1]));
     expect(pasted.pixels).toEqual(sourceCel.pixels);
     expect(target.tilesets[0].tiles).toHaveLength(2);
+    expect(target.tilesets[0].terrains).toEqual([{
+      id: 1,
+      name: "Ground",
+      color: "#00ff00ff",
+      neighborMode: "edge4",
+      boundary: "empty",
+      rules: [{mask: 0, candidates: [{tileId: 1, flags: 0, weight: 1}]}],
+    }]);
     expect(target.tilesets[0].tiles[1].pixels).not.toBe(sourceTileset.tiles[0].pixels);
     const pastedSecond = getCel(target, targetLayer.id, targetFrame2.id)!;
     expect(pastedSecond.linkId).toBe(pasted.linkId);
     expect(pastedSecond.tilemap).toBe(pasted.tilemap);
+    expect(pastedSecond.terrainmap).toBe(pasted.terrainmap);
     expect(pastedSecond.pixels).toBe(pasted.pixels);
   });
 

@@ -8,6 +8,7 @@
     "build": "tsc && vite build",
     "check": "tsc --noEmit",
     "test": "vitest run",
+    "test:e2e": "playwright test",
     "benchmark": "vitest bench --reporter=verbose",
     "preview": "vite preview"
   },
@@ -18,6 +19,7 @@
     "react-dom": "^19.1.0"
   },
   "devDependencies": {
+    "@playwright/test": "^1.63.0",
     "@types/react": "^19.1.0",
     "@types/react-dom": "^19.1.0",
     "@vitejs/plugin-react": "^5.0.0",

@@ -38,6 +38,13 @@ import {
 } from "./document";
 import {constrainColorToMode, parseHexColor, renderIndexedPixels, syncIndexedCel} from "./colorModes";
 import {
+  recalculateTerrainCells,
+  terrainEmpty,
+  validateTerrainDefinitions,
+  type TerrainDefinition,
+  type TerrainMapData,
+} from "./terrain";
+import {
   addTile,
   deleteTile,
   findTile,
@@ -49,9 +56,12 @@ import {
   tileIndexMask,
   tileValueFlags,
   tileValueIndex,
+  tilesetGridLayout,
   validateTilemapData,
+  validateTilemapGridOffset,
   validateTileset,
 } from "./tilemap";
+import {replaceCelTerrainAuthority} from "./tilemapAuthority";
 import {
   DocumentStateCommand,
   PixelEditCommand,
@@ -75,10 +85,14 @@ const operationTypes = [
   "add_tileset",
   "update_tileset",
   "delete_tileset",
+  "add_terrain",
+  "update_terrain",
+  "delete_terrain",
   "add_tile",
   "update_tile",
   "delete_tile",
   "set_tile_cells",
+  "set_terrainmap",
   "add_layer",
   "update_layer",
   "delete_layer",
@@ -104,7 +118,7 @@ const operationTypes = [
 ] as const;
 
 export interface MCPDocumentSummary {
-  formatVersion: 4;
+  formatVersion: PixelDocument["formatVersion"];
   name: string;
   width: number;
   height: number;
@@ -122,6 +136,8 @@ export interface MCPDocumentSummary {
     name: string;
     tileWidth: number;
     tileHeight: number;
+    grid: Tileset["grid"];
+    terrains: TerrainDefinition[];
     tileCount: number;
   }>;
   layers: Array<{
@@ -152,7 +168,7 @@ export interface MCPDocumentSummary {
     width: number;
     height: number;
     indexed: boolean;
-    tilemap?: {columns: number; rows: number};
+    tilemap?: {columns: number; rows: number; gridOffset?: TilemapData["gridOffset"]};
   }>;
   slices: PixelDocument["slices"];
   guides: PixelDocument["guides"];
@@ -182,6 +198,8 @@ export interface MCPReadTileset {
   name: string;
   tileWidth: number;
   tileHeight: number;
+  grid: Tileset["grid"];
+  terrains: TerrainDefinition[];
   tiles: MCPReadTile[];
 }
 
@@ -196,8 +214,10 @@ export interface MCPReadTilemap {
   height: number;
   columns: number;
   rows: number;
+  gridOffset?: TilemapData["gridOffset"];
   /** Row-major tile values, including the X/Y/diagonal flip flags. */
   tiles: number[];
+  terrainmap?: {seed: number; terrains: number[]};
 }
 
 export interface ReadMCPPixelsArgs {
@@ -252,6 +272,7 @@ export interface MCPAddTilesetOperation {
   name: string;
   tileWidth: number;
   tileHeight: number;
+  grid?: Tileset["grid"];
 }
 
 export interface MCPUpdateTilesetOperation {
@@ -263,6 +284,25 @@ export interface MCPUpdateTilesetOperation {
 export interface MCPDeleteTilesetOperation {
   type: "delete_tileset";
   tilesetId: string;
+}
+
+export interface MCPAddTerrainOperation {
+  type: "add_terrain";
+  tilesetId: string;
+  terrain: TerrainDefinition;
+}
+
+export interface MCPUpdateTerrainOperation {
+  type: "update_terrain";
+  tilesetId: string;
+  terrainId: number;
+  patch: Partial<Omit<TerrainDefinition, "id">>;
+}
+
+export interface MCPDeleteTerrainOperation {
+  type: "delete_terrain";
+  tilesetId: string;
+  terrainId: number;
 }
 
 export interface MCPAddTileOperation {
@@ -291,7 +331,16 @@ export interface MCPSetTileCellsOperation {
   type: "set_tile_cells";
   layerId?: string;
   frameId?: string;
+  detachTerrain?: boolean;
   cells: Array<{x: number; y: number; value: number}>;
+}
+
+export interface MCPSetTerrainmapOperation {
+  type: "set_terrainmap";
+  layerId?: string;
+  frameId?: string;
+  seed?: number;
+  cells: number[];
 }
 
 export interface MCPAddLayerOperation {
@@ -426,10 +475,14 @@ export type MCPEditOperation =
   | MCPAddTilesetOperation
   | MCPUpdateTilesetOperation
   | MCPDeleteTilesetOperation
+  | MCPAddTerrainOperation
+  | MCPUpdateTerrainOperation
+  | MCPDeleteTerrainOperation
   | MCPAddTileOperation
   | MCPUpdateTileOperation
   | MCPDeleteTileOperation
   | MCPSetTileCellsOperation
+  | MCPSetTerrainmapOperation
   | MCPAddLayerOperation
   | MCPUpdateLayerOperation
   | MCPDeleteLayerOperation
@@ -460,10 +513,14 @@ type ValidatedOperation =
   | MCPAddTilesetOperation
   | MCPUpdateTilesetOperation
   | MCPDeleteTilesetOperation
+  | MCPAddTerrainOperation
+  | MCPUpdateTerrainOperation
+  | MCPDeleteTerrainOperation
   | MCPAddTileOperation
   | MCPUpdateTileOperation
   | MCPDeleteTileOperation
   | MCPSetTileCellsOperation
+  | MCPSetTerrainmapOperation
   | MCPAddLayerOperation
   | MCPUpdateLayerOperation
   | MCPDeleteLayerOperation
@@ -552,13 +609,18 @@ export function summarizeMCPDocument(document: PixelDocument): MCPDocumentSummar
       colors: [...document.palette.colors],
       transparentIndex: document.palette.transparentIndex,
     },
-    tilesets: document.tilesets.map((tileset) => ({
-      id: tileset.id,
-      name: tileset.name,
-      tileWidth: tileset.tileWidth,
-      tileHeight: tileset.tileHeight,
-      tileCount: tileset.tiles.length,
-    })),
+    tilesets: document.tilesets.map((tileset) => {
+      validateMcpTilesetTerrains(tileset);
+      return {
+        id: tileset.id,
+        name: tileset.name,
+        tileWidth: tileset.tileWidth,
+        tileHeight: tileset.tileHeight,
+        grid: {...tileset.grid},
+        terrains: tileset.terrains.map(cloneMcpTerrainDefinition),
+        tileCount: tileset.tiles.length,
+      };
+    }),
     layers: document.layers.map((layer) => ({
       id: layer.id,
       name: layer.name,
@@ -587,7 +649,11 @@ export function summarizeMCPDocument(document: PixelDocument): MCPDocumentSummar
       width: cel.width,
       height: cel.height,
       indexed: Boolean(cel.indexes),
-      ...(cel.tilemap ? {tilemap: {columns: cel.tilemap.columns, rows: cel.tilemap.rows}} : {}),
+      ...(cel.tilemap ? {tilemap: {
+        columns: cel.tilemap.columns,
+        rows: cel.tilemap.rows,
+        ...(cel.tilemap.gridOffset ? {gridOffset: cel.tilemap.gridOffset} : {}),
+      }} : {}),
     })),
     slices: document.slices.map((slice) => ({
       ...slice,
@@ -663,6 +729,7 @@ export function readMCPTileset(document: PixelDocument, args: ReadMCPTilesetArgs
   }
   const tileset = document.tilesets.find((candidate) => candidate.id === args.tilesetId);
   if (!tileset) throw new Error(`MCP read tileset ${args.tilesetId} does not exist`);
+  validateMcpTilesetTerrains(tileset);
   if (args.tileId !== undefined && (!Number.isSafeInteger(args.tileId) || args.tileId <= 0)) {
     throw new Error("MCP tileId must be a positive integer");
   }
@@ -677,6 +744,8 @@ export function readMCPTileset(document: PixelDocument, args: ReadMCPTilesetArgs
     name: tileset.name,
     tileWidth: tileset.tileWidth,
     tileHeight: tileset.tileHeight,
+    grid: {...tileset.grid},
+    terrains: tileset.terrains.map(cloneMcpTerrainDefinition),
     tiles: tiles.map((tile) => ({
       id: tile.id,
       pixels: rgbaBufferToHex(tile.pixels),
@@ -698,6 +767,12 @@ export function readMCPTilemap(document: PixelDocument, args: ReadMCPTilemapArgs
   validateTilemapData(cel.tilemap);
   const tileset = document.tilesets.find((candidate) => candidate.id === layer.tilesetId);
   if (!tileset) throw new Error(`MCP tilemap tileset ${layer.tilesetId} does not exist`);
+  validateTilemapGridOffset(cel.tilemap, tileset);
+  validateMcpTilesetTerrains(tileset);
+  if (cel.terrainmap) {
+    validateMcpTerrainmap(cel.terrainmap, cel.tilemap.columns, cel.tilemap.rows);
+    for (const terrainId of cel.terrainmap.terrains) validateMcpTerrainCell(terrainId, tileset);
+  }
   return {
     layerId,
     frameId,
@@ -709,7 +784,14 @@ export function readMCPTilemap(document: PixelDocument, args: ReadMCPTilemapArgs
     height: cel.height,
     columns: cel.tilemap.columns,
     rows: cel.tilemap.rows,
+    ...(cel.tilemap.gridOffset ? {gridOffset: cel.tilemap.gridOffset} : {}),
     tiles: Array.from(cel.tilemap.tiles, (value) => value >>> 0),
+    ...(cel.terrainmap ? {
+      terrainmap: {
+        seed: cel.terrainmap.seed,
+        terrains: Array.from(cel.terrainmap.terrains),
+      },
+    } : {}),
   };
 }
 
@@ -769,6 +851,12 @@ function applyOperation(document: PixelDocument, operation: ValidatedOperation) 
       return applyUpdateTileset(document, operation);
     case "delete_tileset":
       return applyDeleteTileset(document, operation);
+    case "add_terrain":
+      return applyAddTerrain(document, operation);
+    case "update_terrain":
+      return applyUpdateTerrain(document, operation);
+    case "delete_terrain":
+      return applyDeleteTerrain(document, operation);
     case "add_tile":
       return applyAddTile(document, operation);
     case "update_tile":
@@ -777,6 +865,8 @@ function applyOperation(document: PixelDocument, operation: ValidatedOperation) 
       return applyDeleteTile(document, operation);
     case "set_tile_cells":
       return applySetTileCells(document, operation);
+    case "set_terrainmap":
+      return applySetTerrainmap(document, operation);
     case "add_layer":
       addMcpLayer(document, operation);
       return true;
@@ -1022,6 +1112,8 @@ function applyAddTileset(document: PixelDocument, operation: MCPAddTilesetOperat
     name: operation.name,
     tileWidth: operation.tileWidth,
     tileHeight: operation.tileHeight,
+    grid: operation.grid ? {...operation.grid} : {kind: "orthogonal"},
+    terrains: [],
     tiles: [],
   };
   validateTileset(tileset);
@@ -1043,6 +1135,59 @@ function applyDeleteTileset(document: PixelDocument, operation: MCPDeleteTileset
     throw new Error(`MCP tileset ${operation.tilesetId} is used by a tilemap layer`);
   }
   document.tilesets.splice(index, 1);
+  return true;
+}
+
+function applyAddTerrain(document: PixelDocument, operation: MCPAddTerrainOperation) {
+  const tileset = findMcpTileset(document, operation.tilesetId);
+  validateMcpTilesetTerrains(tileset);
+  if (tileset.terrains.some((terrain) => terrain.id === operation.terrain.id)) {
+    throw new Error(`MCP terrain ${operation.terrain.id} already exists in tileset ${operation.tilesetId}`);
+  }
+  const next = [...tileset.terrains, cloneMcpTerrainDefinition(operation.terrain)];
+  validateMcpTilesetTerrains(tileset, next);
+  tileset.terrains.push(cloneMcpTerrainDefinition(operation.terrain));
+  refreshMcpTerrainMaps(document, operation.tilesetId);
+  return true;
+}
+
+function applyUpdateTerrain(document: PixelDocument, operation: MCPUpdateTerrainOperation) {
+  const tileset = findMcpTileset(document, operation.tilesetId);
+  const index = tileset.terrains.findIndex((terrain) => terrain.id === operation.terrainId);
+  if (index < 0) throw new Error(`MCP terrain ${operation.terrainId} does not exist in tileset ${operation.tilesetId}`);
+  const current = tileset.terrains[index];
+  const next: TerrainDefinition = {
+    ...current,
+    ...operation.patch,
+    rules: operation.patch.rules
+      ? operation.patch.rules.map((rule) => ({
+        ...rule,
+        candidates: rule.candidates.map((candidate) => ({...candidate})),
+      }))
+      : current.rules.map((rule) => ({
+        ...rule,
+        candidates: rule.candidates.map((candidate) => ({...candidate})),
+      })),
+  };
+  validateMcpTilesetTerrains(tileset, [...tileset.terrains.slice(0, index), next, ...tileset.terrains.slice(index + 1)]);
+  if (terrainDefinitionsEqual(current, next)) return false;
+  tileset.terrains[index] = next;
+  refreshMcpTerrainMaps(document, operation.tilesetId);
+  return true;
+}
+
+function applyDeleteTerrain(document: PixelDocument, operation: MCPDeleteTerrainOperation) {
+  const tileset = findMcpTileset(document, operation.tilesetId);
+  const index = tileset.terrains.findIndex((terrain) => terrain.id === operation.terrainId);
+  if (index < 0) throw new Error(`MCP terrain ${operation.terrainId} does not exist in tileset ${operation.tilesetId}`);
+  for (const cel of Object.values(document.cels)) {
+    const layer = getLayerByID(document, cel.layerId);
+    if (!layer || !isTilemapLayer(layer) || layer.tilesetId !== operation.tilesetId) continue;
+    if (cel.terrainmap?.terrains.some((terrainId) => terrainId === operation.terrainId)) {
+      throw new Error(`MCP terrain ${operation.terrainId} is referenced by a terrainmap`);
+    }
+  }
+  tileset.terrains.splice(index, 1);
   return true;
 }
 
@@ -1088,6 +1233,9 @@ function applyUpdateTile(document: PixelDocument, operation: MCPUpdateTileOperat
 function applyDeleteTile(document: PixelDocument, operation: MCPDeleteTileOperation) {
   const tileset = findMcpTileset(document, operation.tilesetId);
   if (operation.tileId <= 0 || !Number.isSafeInteger(operation.tileId)) throw new Error("MCP tileId must be a positive integer");
+  if (tileset.terrains.some((terrain) => terrain.rules.some((rule) => rule.candidates.some((candidate) => candidate.tileId === operation.tileId)))) {
+    throw new Error(`MCP tile ${operation.tileId} is referenced by a terrain in tileset ${operation.tilesetId}`);
+  }
   const tilemaps: TilemapData[] = [];
   const seen = new Set<TilemapData>();
   for (const layer of document.layers) {
@@ -1124,17 +1272,83 @@ function applySetTileCells(document: PixelDocument, operation: MCPSetTileCellsOp
     }
     validateMcpTileValue(cell.value, tileset);
   }
-  let changed = false;
+  const nextValues = new Map<number, number>();
   for (const cell of operation.cells) {
     const offset = cell.y * cel.tilemap.columns + cell.x;
     const value = cell.value >>> 0;
-    if (cel.tilemap.tiles[offset] === value) continue;
-    cel.tilemap.tiles[offset] = value;
-    changed = true;
+    nextValues.set(offset, value);
   }
+  const changed = [...nextValues].some(([offset, value]) => cel.tilemap!.tiles[offset] !== value);
   if (!changed) return false;
+  const hasTerrainAuthority = Object.values(document.cels).some((candidate) =>
+    candidate.linkId === cel.linkId && candidate.terrainmap !== undefined);
+  if (hasTerrainAuthority) {
+    if (!operation.detachTerrain) {
+      throw new Error("MCP set_tile_cells cannot change a Terrain-managed Cel; set detachTerrain to true to detach Terrain authority");
+    }
+    replaceCelTerrainAuthority(document, cel, undefined);
+  }
+  for (const [offset, value] of nextValues) cel.tilemap.tiles[offset] = value;
   refreshMcpTilemapCaches(document, layer.tilesetId);
   return true;
+}
+
+function applySetTerrainmap(document: PixelDocument, operation: MCPSetTerrainmapOperation) {
+  const layerId = operation.layerId ?? document.activeLayerId;
+  const frameId = operation.frameId ?? document.activeFrameId;
+  const layer = getLayerByID(document, layerId);
+  if (!layer) throw new Error(`MCP set_terrainmap layer ${layerId} does not exist`);
+  if (!isTilemapLayer(layer) || !layer.tilesetId) throw new Error(`MCP set_terrainmap layer ${layerId} is not a tilemap layer`);
+  if (isLayerEffectivelyLocked(document, layer) || layer.role === "reference") throw new Error(`MCP set_terrainmap layer ${layerId} is locked or reference-only`);
+  if (!document.frames.some((frame) => frame.id === frameId)) throw new Error(`MCP set_terrainmap frame ${frameId} does not exist`);
+
+  const tileset = findMcpTileset(document, layer.tilesetId);
+  validateMcpTilesetTerrains(tileset);
+  const cel = ensureCel(document, layerId, frameId);
+  if (!cel?.tilemap) throw new Error(`MCP tilemap Cel for ${layerId} and ${frameId} cannot be created`);
+  const expected = cel.tilemap.columns * cel.tilemap.rows;
+  if (operation.cells.length !== expected) {
+    throw new Error(`MCP terrainmap cells must contain exactly ${expected} row-major values`);
+  }
+  for (const terrainId of operation.cells) validateMcpTerrainCell(terrainId, tileset);
+  const seed = operation.seed ?? cel.terrainmap?.seed ?? 0;
+  const terrainmap: TerrainMapData = {
+    columns: cel.tilemap.columns,
+    rows: cel.tilemap.rows,
+    seed,
+    terrains: Uint16Array.from(operation.cells),
+  };
+  validateMcpTerrainmap(terrainmap, cel.tilemap.columns, cel.tilemap.rows);
+
+  const linkedCels = Object.values(document.cels).filter((candidate) => candidate.linkId === cel.linkId);
+  let mapChanged = linkedCels.some((candidate) => {
+    if (!candidate.terrainmap) return true;
+    return candidate.terrainmap.seed !== terrainmap.seed
+      || !bytesEqual(candidate.terrainmap.terrains, terrainmap.terrains);
+  });
+  for (const linkedCel of linkedCels) {
+    if (linkedCel.tilemap
+      && (linkedCel.tilemap.columns !== terrainmap.columns || linkedCel.tilemap.rows !== terrainmap.rows)) {
+      throw new Error("MCP terrainmap dimensions do not match linked tilemap Cels");
+    }
+    linkedCel.terrainmap = terrainmap;
+  }
+
+  const recalculatedTilemaps = new Set<TilemapData>();
+  for (const linkedCel of linkedCels) {
+    if (!linkedCel.tilemap || recalculatedTilemaps.has(linkedCel.tilemap)) continue;
+    recalculatedTilemaps.add(linkedCel.tilemap);
+    const changedCells = recalculateTerrainCells(
+      terrainmap,
+      tileset.terrains,
+      tilesetGridLayout(tileset, linkedCel.tilemap),
+      linkedCel.tilemap.tiles,
+      allTerrainCells(terrainmap.columns, terrainmap.rows),
+    );
+    if (changedCells.length > 0) mapChanged = true;
+  }
+  refreshMcpTilemapCaches(document, layer.tilesetId);
+  return mapChanged;
 }
 
 function findMcpTileset(document: PixelDocument, tilesetId: string) {
@@ -1206,6 +1420,95 @@ function refreshMcpTilemapCaches(document: PixelDocument, tilesetId: string) {
       renderedLinks.set(cel.linkId, {pixels: cel.pixels, indexes: cel.indexes});
     }
   }
+}
+
+function refreshMcpTerrainMaps(document: PixelDocument, tilesetId: string) {
+  const tileset = findMcpTileset(document, tilesetId);
+  validateMcpTilesetTerrains(tileset);
+  const recalculatedTilemaps = new Set<TilemapData>();
+  for (const layer of document.layers) {
+    if (!isTilemapLayer(layer) || layer.tilesetId !== tilesetId) continue;
+    for (const cel of Object.values(document.cels)) {
+      if (cel.layerId !== layer.id || !cel.tilemap || !cel.terrainmap || recalculatedTilemaps.has(cel.tilemap)) continue;
+      validateMcpTerrainmap(cel.terrainmap, cel.tilemap.columns, cel.tilemap.rows);
+      recalculatedTilemaps.add(cel.tilemap);
+      recalculateTerrainCells(
+        cel.terrainmap,
+        tileset.terrains,
+        tilesetGridLayout(tileset, cel.tilemap),
+        cel.tilemap.tiles,
+        allTerrainCells(cel.terrainmap.columns, cel.terrainmap.rows),
+      );
+    }
+  }
+  refreshMcpTilemapCaches(document, tilesetId);
+}
+
+function validateMcpTilesetTerrains(tileset: Tileset, definitions = tileset.terrains) {
+  validateTileset(tileset);
+  validateTerrainDefinitions(definitions, tilesetGridLayout(tileset));
+  for (const terrain of definitions) {
+    if (!validRGBAHex(terrain.color)) throw new Error(`MCP terrain ${terrain.id} color is invalid`);
+    for (const rule of terrain.rules) {
+      for (const candidate of rule.candidates) {
+        validateMcpTileValue((candidate.tileId | candidate.flags) >>> 0, tileset);
+      }
+    }
+  }
+}
+
+function validateMcpTerrainmap(terrainmap: TerrainMapData, columns: number, rows: number) {
+  if (!terrainmap || typeof terrainmap !== "object"
+    || terrainmap.columns !== columns || terrainmap.rows !== rows
+    || !Number.isSafeInteger(terrainmap.seed)
+    || !(terrainmap.terrains instanceof Uint16Array)
+    || terrainmap.terrains.length !== columns * rows) {
+    throw new Error("MCP terrainmap dimensions or cells are invalid");
+  }
+}
+
+function validateMcpTerrainCell(terrainId: number, tileset: Tileset) {
+  if (!Number.isSafeInteger(terrainId) || terrainId < 0 || terrainId > 0xffff) {
+    throw new Error("MCP terrainmap cell must be an integer from 0 to 65535");
+  }
+  if (terrainId !== 0 && terrainId !== terrainEmpty && !tileset.terrains.some((terrain) => terrain.id === terrainId)) {
+    throw new Error(`MCP terrainmap references unknown terrain ${terrainId}`);
+  }
+}
+
+function allTerrainCells(columns: number, rows: number) {
+  const cells = [] as Array<{column: number; row: number}>;
+  for (let row = 0; row < rows; row += 1) {
+    for (let column = 0; column < columns; column += 1) cells.push({column, row});
+  }
+  return cells;
+}
+
+function cloneMcpTerrainDefinition(terrain: TerrainDefinition): TerrainDefinition {
+  return {
+    ...terrain,
+    rules: terrain.rules.map((rule) => ({
+      ...rule,
+      candidates: rule.candidates.map((candidate) => ({...candidate})),
+    })),
+  };
+}
+
+function terrainDefinitionsEqual(left: TerrainDefinition, right: TerrainDefinition) {
+  if (left.id !== right.id || left.name !== right.name || left.color !== right.color
+    || left.neighborMode !== right.neighborMode || left.boundary !== right.boundary
+    || left.rules.length !== right.rules.length) return false;
+  return left.rules.every((rule, index) => {
+    const next = right.rules[index];
+    return rule.mask === next.mask
+      && rule.candidates.length === next.candidates.length
+      && rule.candidates.every((candidate, candidateIndex) => {
+        const nextCandidate = next.candidates[candidateIndex];
+        return candidate.tileId === nextCandidate.tileId
+          && candidate.flags === nextCandidate.flags
+          && candidate.weight === nextCandidate.weight;
+      });
+  });
 }
 
 function addMcpLayer(document: PixelDocument, operation: MCPAddLayerOperation) {
@@ -1452,13 +1755,16 @@ function validateOperation(value: unknown, index: number): ValidatedOperation {
       return result;
     }
     case "add_tileset": {
-      assertKeys(value, ["type", "tilesetId", "name", "tileWidth", "tileHeight"], context);
+      assertKeys(value, ["type", "tilesetId", "name", "tileWidth", "tileHeight", "grid"], context);
       const tilesetId = value.tilesetId === undefined ? undefined : requiredID(value, "tilesetId", context);
       if (typeof value.name !== "string" || !value.name.trim()) throw new Error(`${context}.name must be a non-empty string`);
       if (!validCanvasDimension(value.tileWidth) || !validCanvasDimension(value.tileHeight)) {
         throw new Error(`${context}.tileWidth and .tileHeight must be integers from 1 to ${MAX_CANVAS_DIMENSION}`);
       }
-      return {type: "add_tileset", ...(tilesetId ? {tilesetId} : {}), name: value.name.trim(), tileWidth: value.tileWidth, tileHeight: value.tileHeight};
+      const grid = value.grid === undefined
+        ? {kind: "orthogonal" as const}
+        : requiredMcpTilesetGrid(value.grid, `${context}.grid`, value.tileWidth, value.tileHeight);
+      return {type: "add_tileset", ...(tilesetId ? {tilesetId} : {}), name: value.name.trim(), tileWidth: value.tileWidth, tileHeight: value.tileHeight, grid};
     }
     case "update_tileset": {
       assertKeys(value, ["type", "tilesetId", "name"], context);
@@ -1473,6 +1779,51 @@ function validateOperation(value: unknown, index: number): ValidatedOperation {
     case "delete_tileset":
       assertKeys(value, ["type", "tilesetId"], context);
       return {type: "delete_tileset", tilesetId: requiredID(value, "tilesetId", context)};
+    case "add_terrain": {
+      assertKeys(value, ["type", "tilesetId", "terrain", "id", "name", "color", "neighborMode", "boundary", "rules"], context);
+      const terrain = value.terrain !== undefined
+        ? requiredMcpTerrainDefinition(value.terrain, `${context}.terrain`)
+        : requiredMcpTerrainDefinition({
+          id: value.id,
+          name: value.name,
+          color: value.color,
+          neighborMode: value.neighborMode,
+          boundary: value.boundary,
+          rules: value.rules,
+        }, context);
+      if (value.terrain !== undefined && ["id", "name", "color", "neighborMode", "boundary", "rules"].some((key) => value[key] !== undefined)) {
+        throw new Error(`${context} cannot mix terrain with direct terrain fields`);
+      }
+      return {type: "add_terrain", tilesetId: requiredID(value, "tilesetId", context), terrain};
+    }
+    case "update_terrain": {
+      assertKeys(value, ["type", "tilesetId", "terrainId", "terrain", "name", "color", "neighborMode", "boundary", "rules"], context);
+      const terrainId = requiredTerrainDefinitionID(value, context);
+      const patch = value.terrain !== undefined
+        ? requiredMcpTerrainPatch(value.terrain, `${context}.terrain`)
+        : requiredMcpTerrainPatch({
+          name: value.name,
+          color: value.color,
+          neighborMode: value.neighborMode,
+          boundary: value.boundary,
+          rules: value.rules,
+        }, context);
+      if (value.terrain !== undefined && ["name", "color", "neighborMode", "boundary", "rules"].some((key) => value[key] !== undefined)) {
+        throw new Error(`${context} cannot mix terrain with direct terrain fields`);
+      }
+      if (value.terrain !== undefined && isRecord(value.terrain) && value.terrain.id !== undefined && value.terrain.id !== terrainId) {
+        throw new Error(`${context}.terrain.id must match terrainId`);
+      }
+      if (Object.keys(patch).length === 0) throw new Error(`${context} must update at least one terrain property`);
+      return {type: "update_terrain", tilesetId: requiredID(value, "tilesetId", context), terrainId, patch};
+    }
+    case "delete_terrain":
+      assertKeys(value, ["type", "tilesetId", "terrainId"], context);
+      return {
+        type: "delete_terrain",
+        tilesetId: requiredID(value, "tilesetId", context),
+        terrainId: requiredTerrainDefinitionID(value, context),
+      };
     case "add_tile": {
       assertKeys(value, ["type", "tilesetId", "tileId", "pixels", "indexes"], context);
       const tileId = value.tileId === undefined ? undefined : requiredInteger(value, "tileId", context);
@@ -1492,9 +1843,12 @@ function validateOperation(value: unknown, index: number): ValidatedOperation {
       assertKeys(value, ["type", "tilesetId", "tileId"], context);
       return {type: "delete_tile", tilesetId: requiredID(value, "tilesetId", context), tileId: requiredInteger(value, "tileId", context)};
     case "set_tile_cells": {
-      assertKeys(value, ["type", "layerId", "frameId", "cells"], context);
+      assertKeys(value, ["type", "layerId", "frameId", "detachTerrain", "cells"], context);
       const layerId = optionalID(value, "layerId", context);
       const frameId = optionalID(value, "frameId", context);
+      if (value.detachTerrain !== undefined && typeof value.detachTerrain !== "boolean") {
+        throw new Error(`${context}.detachTerrain must be a boolean`);
+      }
       if (!Array.isArray(value.cells) || value.cells.length === 0) throw new Error(`${context}.cells must be a non-empty array`);
       const cells = value.cells.map((entry, cellIndex) => {
         const cellContext = `${context}.cells[${cellIndex}]`;
@@ -1506,7 +1860,31 @@ function validateOperation(value: unknown, index: number): ValidatedOperation {
         if (x < 0 || y < 0 || tileValue < -0x80000000 || tileValue > 0xffffffff) throw new Error(`${cellContext} is invalid`);
         return {x, y, value: tileValue};
       });
-      return {type: "set_tile_cells", ...(layerId ? {layerId} : {}), ...(frameId ? {frameId} : {}), cells};
+      return {
+        type: "set_tile_cells",
+        ...(layerId ? {layerId} : {}),
+        ...(frameId ? {frameId} : {}),
+        ...(value.detachTerrain !== undefined ? {detachTerrain: value.detachTerrain} : {}),
+        cells,
+      };
+    }
+    case "set_terrainmap": {
+      assertKeys(value, ["type", "layerId", "frameId", "seed", "cells"], context);
+      const layerId = optionalID(value, "layerId", context);
+      const frameId = optionalID(value, "frameId", context);
+      if (!Array.isArray(value.cells) || value.cells.length === 0) throw new Error(`${context}.cells must be a non-empty row-major array`);
+      const cells = value.cells.map((entry, cellIndex) => {
+        if (!Number.isSafeInteger(entry) || entry < 0 || entry > 0xffff) {
+          throw new Error(`${context}.cells[${cellIndex}] must be an integer from 0 to 65535`);
+        }
+        return entry;
+      });
+      let seed: number | undefined;
+      if (value.seed !== undefined) {
+        if (!Number.isSafeInteger(value.seed)) throw new Error(`${context}.seed must be a safe integer`);
+        seed = value.seed as number;
+      }
+      return {type: "set_terrainmap", ...(layerId ? {layerId} : {}), ...(frameId ? {frameId} : {}), ...(seed !== undefined ? {seed} : {}), cells};
     }
     case "add_layer": {
       assertKeys(value, ["type", "name", "parentId", "kind", "tilesetId", "role", "continuous", "alphaLock", "opacity", "blendMode"], context);
@@ -1831,6 +2209,115 @@ function requiredInteger(value: Record<string, unknown>, key: string, context: s
   return candidate;
 }
 
+function requiredTerrainDefinitionID(value: Record<string, unknown>, context: string) {
+  const terrainId = requiredInteger(value, "terrainId", context);
+  if (terrainId < 1 || terrainId >= terrainEmpty) throw new Error(`${context}.terrainId must be an integer from 1 to 65534`);
+  return terrainId;
+}
+
+function requiredMcpTilesetGrid(value: unknown, context: string, tileWidth: number, tileHeight: number): Tileset["grid"] {
+  if (!isRecord(value)) throw new Error(`${context} must be an object`);
+  if (value.kind === "orthogonal") {
+    assertKeys(value, ["kind"], context);
+    return {kind: "orthogonal"};
+  }
+  if (value.kind === "isometric") {
+    assertKeys(value, ["kind", "cellWidth", "cellHeight", "anchorX", "anchorY"], context);
+    const cellWidth = requiredInteger(value, "cellWidth", context);
+    const cellHeight = requiredInteger(value, "cellHeight", context);
+    const anchorX = requiredInteger(value, "anchorX", context);
+    const anchorY = requiredInteger(value, "anchorY", context);
+    if (cellWidth <= 0 || cellWidth > 4096 || cellHeight <= 0 || cellHeight > 4096
+      || anchorX < 0 || anchorX > tileWidth || anchorY < 0 || anchorY > tileHeight) {
+      throw new Error(`${context} isometric geometry is invalid`);
+    }
+    return {kind: "isometric", cellWidth, cellHeight, anchorX, anchorY};
+  }
+  if (value.kind !== "hexagonal") throw new Error(`${context}.kind is invalid`);
+  assertKeys(value, ["kind", "orientation", "offset"], context);
+  if (value.orientation !== "pointy" && value.orientation !== "flat") throw new Error(`${context}.orientation is invalid`);
+  if (value.offset !== "odd-r" && value.offset !== "even-r" && value.offset !== "odd-q" && value.offset !== "even-q") {
+    throw new Error(`${context}.offset is invalid`);
+  }
+  if (value.orientation === "pointy" && value.offset !== "odd-r" && value.offset !== "even-r") {
+    throw new Error(`${context} pointy grids require odd-r or even-r offsets`);
+  }
+  if (value.orientation === "flat" && value.offset !== "odd-q" && value.offset !== "even-q") {
+    throw new Error(`${context} flat grids require odd-q or even-q offsets`);
+  }
+  return {kind: "hexagonal", orientation: value.orientation, offset: value.offset};
+}
+
+function requiredMcpTerrainDefinition(value: unknown, context: string): TerrainDefinition {
+  if (!isRecord(value)) throw new Error(`${context} must be an object`);
+  assertKeys(value, ["id", "name", "color", "neighborMode", "boundary", "rules"], context);
+  const id = requiredInteger(value, "id", context);
+  if (id < 1 || id >= terrainEmpty) throw new Error(`${context}.id must be an integer from 1 to 65534`);
+  if (typeof value.name !== "string" || !value.name.trim()) throw new Error(`${context}.name is invalid`);
+  if (typeof value.color !== "string" || !validRGBAHex(value.color)) throw new Error(`${context}.color is invalid`);
+  if (!isTerrainNeighborMode(value.neighborMode)) throw new Error(`${context}.neighborMode is invalid`);
+  if (!isTerrainBoundary(value.boundary)) throw new Error(`${context}.boundary is invalid`);
+  return {
+    id,
+    name: value.name.trim(),
+    color: value.color,
+    neighborMode: value.neighborMode,
+    boundary: value.boundary,
+    rules: requiredMcpTerrainRules(value.rules, `${context}.rules`),
+  };
+}
+
+function requiredMcpTerrainPatch(value: unknown, context: string): Partial<Omit<TerrainDefinition, "id">> {
+  if (!isRecord(value)) throw new Error(`${context} must be an object`);
+  assertKeys(value, ["id", "name", "color", "neighborMode", "boundary", "rules"], context);
+  if (value.id !== undefined) {
+    const id = requiredInteger(value, "id", context);
+    if (id < 1 || id >= terrainEmpty) throw new Error(`${context}.id must be an integer from 1 to 65534`);
+  }
+  const patch: Partial<Omit<TerrainDefinition, "id">> = {};
+  if (value.name !== undefined) {
+    if (typeof value.name !== "string" || !value.name.trim()) throw new Error(`${context}.name is invalid`);
+    patch.name = value.name.trim();
+  }
+  if (value.color !== undefined) {
+    if (typeof value.color !== "string" || !validRGBAHex(value.color)) throw new Error(`${context}.color is invalid`);
+    patch.color = value.color;
+  }
+  if (value.neighborMode !== undefined) {
+    if (!isTerrainNeighborMode(value.neighborMode)) throw new Error(`${context}.neighborMode is invalid`);
+    patch.neighborMode = value.neighborMode;
+  }
+  if (value.boundary !== undefined) {
+    if (!isTerrainBoundary(value.boundary)) throw new Error(`${context}.boundary is invalid`);
+    patch.boundary = value.boundary;
+  }
+  if (value.rules !== undefined) patch.rules = requiredMcpTerrainRules(value.rules, `${context}.rules`);
+  return patch;
+}
+
+function requiredMcpTerrainRules(value: unknown, context: string): TerrainDefinition["rules"] {
+  if (!Array.isArray(value)) throw new Error(`${context} must be an array`);
+  return value.map((entry, ruleIndex) => {
+    const ruleContext = `${context}[${ruleIndex}]`;
+    if (!isRecord(entry)) throw new Error(`${ruleContext} must be an object`);
+    assertKeys(entry, ["mask", "candidates"], ruleContext);
+    const mask = requiredInteger(entry, "mask", ruleContext);
+    if (!Array.isArray(entry.candidates) || entry.candidates.length === 0) throw new Error(`${ruleContext}.candidates must be a non-empty array`);
+    const candidates = entry.candidates.map((candidate, candidateIndex) => {
+      const candidateContext = `${ruleContext}.candidates[${candidateIndex}]`;
+      if (!isRecord(candidate)) throw new Error(`${candidateContext} must be an object`);
+      assertKeys(candidate, ["tileId", "flags", "weight"], candidateContext);
+      const tileId = requiredInteger(candidate, "tileId", candidateContext);
+      const flags = requiredInteger(candidate, "flags", candidateContext);
+      if (typeof candidate.weight !== "number" || !Number.isFinite(candidate.weight) || candidate.weight <= 0) {
+        throw new Error(`${candidateContext}.weight must be a positive finite number`);
+      }
+      return {tileId, flags, weight: candidate.weight};
+    });
+    return {mask, candidates};
+  });
+}
+
 function optionalID(value: Record<string, unknown>, key: string, context: string) {
   if (!Object.prototype.hasOwnProperty.call(value, key)) return undefined;
   return requiredID(value, key, context);
@@ -1961,6 +2448,14 @@ function isLayerRole(value: unknown): value is Layer["role"] {
 
 function isTagDirection(value: unknown): value is FrameTag["direction"] {
   return value === "forward" || value === "reverse" || value === "pingpong";
+}
+
+function isTerrainNeighborMode(value: unknown): value is TerrainDefinition["neighborMode"] {
+  return value === "edge4" || value === "blob8" || value === "edge6";
+}
+
+function isTerrainBoundary(value: unknown): value is TerrainDefinition["boundary"] {
+  return value === "empty" || value === "same" || value === "wrap";
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

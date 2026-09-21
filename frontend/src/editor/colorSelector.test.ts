@@ -1,5 +1,5 @@
 import {describe, expect, it} from "vitest";
-import {hexToHsv, hsvToHex, mixHex, selectorColorAt, tintShadeToneColor} from "./colorSelector";
+import {hexToHsv, hsvToHex, mixHex, selectorColorAt, tintShadeToneColor, wheelSelectorGeometry} from "./colorSelector";
 
 describe("color selector", () => {
   it("round-trips primary HSV colors", () => {
@@ -22,9 +22,37 @@ describe("color selector", () => {
     expect(tintShadeToneColor("#ff0000", {column: 0, row: 0})).toBe("#ff2020");
   });
 
-  it("uses the wheel disk for hue/saturation and the strip for value", () => {
-    expect(selectorColorAt("wheel", 50, 42, 100, 100, "#ffffff")).toBe("#ffffff");
-    expect(selectorColorAt("wheel", 99, 99, 100, 100, "#ff0000")).toBe("#ff0000");
-    expect(selectorColorAt("wheel", 0, 0, 100, 100, "#ff0000")).toBeNull();
+  it("shares wheel geometry and selects the center", () => {
+    const width = 240;
+    const height = 252;
+    const geometry = wheelSelectorGeometry(width, height);
+    expect(geometry).toEqual({centerX: 120, centerY: 120, radius: 119, valueStripTop: 242, valueStripHeight: 10});
+    expect(selectorColorAt("wheel", geometry.centerX, geometry.centerY, width, height, "#808080")).toBe("#808080");
+  });
+
+  it("rejects points outside the wheel disk", () => {
+    const geometry = wheelSelectorGeometry(240, 252);
+    expect(selectorColorAt("wheel", geometry.centerX + geometry.radius + 0.5, geometry.centerY, 240, 252, "#ff0000")).toBeNull();
+    expect(selectorColorAt("wheel", 0, 0, 240, 252, "#ff0000")).toBeNull();
+  });
+
+  it("maps the wheel circumference to hue and full saturation", () => {
+    const width = 240;
+    const height = 252;
+    const geometry = wheelSelectorGeometry(width, height);
+    const right = selectorColorAt("wheel", geometry.centerX + geometry.radius, geometry.centerY, width, height, "#ffffff");
+    const left = selectorColorAt("wheel", geometry.centerX - geometry.radius, geometry.centerY, width, height, "#ffffff");
+    expect(right).not.toBeNull();
+    expect(left).not.toBeNull();
+    expect(hexToHsv(right!)).toEqual({h: 0, s: 1, v: 1});
+    expect(hexToHsv(left!)).toEqual({h: 180, s: 1, v: 1});
+  });
+
+  it("keeps the value strip thin and accepts a strip click", () => {
+    const width = 240;
+    const height = 252;
+    const geometry = wheelSelectorGeometry(width, height);
+    expect(geometry.valueStripHeight).toBe(10);
+    expect(selectorColorAt("wheel", width - 1, geometry.valueStripTop + 1, width, height, "#000000")).toBe("#ffffff");
   });
 });

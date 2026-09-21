@@ -79,6 +79,10 @@ type fileDialogLabels struct {
 	defaultSheet        string
 	importSequenceTitle string
 	exportSequenceTitle string
+	importTilemapTitle  string
+	exportTilemapTitle  string
+	tilemapJSONFilter   string
+	tilemapCSVFilter    string
 }
 
 func localizedFileDialogs(language string) fileDialogLabels {
@@ -89,6 +93,8 @@ func localizedFileDialogs(language string) fileDialogLabels {
 			exportGIFTitle: "导出 GIF", gifFilter: "GIF 图片 (*.gif)", exportSheetTitle: "导出精灵图",
 			defaultPNG: "未命名.png", defaultGIF: "未命名.gif", defaultSheet: "未命名-精灵图.png",
 			importSequenceTitle: "导入 PNG 序列", exportSequenceTitle: "导出 PNG 序列",
+			importTilemapTitle: "导入图块地图", exportTilemapTitle: "导出图块地图",
+			tilemapJSONFilter: "Pixtorio 图块地图 JSON (*.json)", tilemapCSVFilter: "图块地图 CSV (*.csv)",
 		}
 	}
 	return fileDialogLabels{
@@ -97,7 +103,107 @@ func localizedFileDialogs(language string) fileDialogLabels {
 		exportGIFTitle: "Export GIF", gifFilter: "GIF image (*.gif)", exportSheetTitle: "Export Sprite Sheet",
 		defaultPNG: "untitled.png", defaultGIF: "untitled.gif", defaultSheet: "untitled-sheet.png",
 		importSequenceTitle: "Import PNG Sequence", exportSequenceTitle: "Export PNG Sequence",
+		importTilemapTitle: "Import Tilemap", exportTilemapTitle: "Export Tilemap",
+		tilemapJSONFilter: "Pixtorio tilemap JSON (*.json)", tilemapCSVFilter: "Tilemap CSV (*.csv)",
 	}
+}
+
+func (a *App) OpenTilemapData(language string) (string, error) {
+	if a.ctx == nil {
+		return "", fmt.Errorf("application is not ready")
+	}
+	dialogs := localizedFileDialogs(language)
+	path, err := runtime.OpenFileDialog(a.ctx, runtime.OpenDialogOptions{
+		Title: dialogs.importTilemapTitle,
+		Filters: []runtime.FileFilter{
+			{DisplayName: dialogs.tilemapJSONFilter, Pattern: "*.json"},
+			{DisplayName: dialogs.tilemapCSVFilter, Pattern: "*.csv"},
+		},
+	})
+	if err != nil || path == "" {
+		return "", err
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		return "", fmt.Errorf("stat tilemap data: %w", err)
+	}
+	if info.Size() > 16<<20 {
+		return "", fmt.Errorf("tilemap data exceeds 16 MiB")
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return "", fmt.Errorf("read tilemap data: %w", err)
+	}
+	payload, err := json.Marshal(struct {
+		Name    string `json:"name"`
+		Content string `json:"content"`
+	}{Name: filepath.Base(path), Content: string(data)})
+	if err != nil {
+		return "", fmt.Errorf("encode tilemap data: %w", err)
+	}
+	return string(payload), nil
+}
+
+func (a *App) SaveTilemapData(content, format, defaultName, language string) (string, error) {
+	if a.ctx == nil {
+		return "", fmt.Errorf("application is not ready")
+	}
+	if len(content) > 16<<20 {
+		return "", fmt.Errorf("tilemap data exceeds 16 MiB")
+	}
+	dialogs := localizedFileDialogs(language)
+	extension, filter := ".json", dialogs.tilemapJSONFilter
+	if format == "csv" {
+		extension, filter = ".csv", dialogs.tilemapCSVFilter
+	} else if format != "json" {
+		return "", fmt.Errorf("unsupported tilemap data format %q", format)
+	}
+	filename := strings.TrimSpace(defaultName)
+	if filename == "" {
+		filename = "tilemap" + extension
+	}
+	if !strings.EqualFold(filepath.Ext(filename), extension) {
+		filename += extension
+	}
+	path, err := runtime.SaveFileDialog(a.ctx, runtime.SaveDialogOptions{
+		Title:           dialogs.exportTilemapTitle,
+		DefaultFilename: filename,
+		Filters:         []runtime.FileFilter{{DisplayName: filter, Pattern: "*" + extension}},
+	})
+	if err != nil || path == "" {
+		return "", err
+	}
+	if !strings.EqualFold(filepath.Ext(path), extension) {
+		path += extension
+	}
+	if err := writeTextFileAtomic(path, []byte(content)); err != nil {
+		return "", err
+	}
+	return path, nil
+}
+
+func writeTextFileAtomic(path string, data []byte) error {
+	temporary, err := os.CreateTemp(filepath.Dir(path), "."+filepath.Base(path)+".tmp-*")
+	if err != nil {
+		return fmt.Errorf("create temporary tilemap data: %w", err)
+	}
+	temporaryPath := temporary.Name()
+	defer os.Remove(temporaryPath)
+	if _, err := temporary.Write(data); err != nil {
+		temporary.Close()
+		return fmt.Errorf("write tilemap data: %w", err)
+	}
+	if err := temporary.Sync(); err != nil {
+		temporary.Close()
+		return fmt.Errorf("sync tilemap data: %w", err)
+	}
+	if err := temporary.Close(); err != nil {
+		return fmt.Errorf("close tilemap data: %w", err)
+	}
+	if err := os.Rename(temporaryPath, path); err != nil {
+		return fmt.Errorf("replace tilemap data: %w", err)
+	}
+	return nil
 }
 
 func (a *App) ImportPNG(language string) (string, error) {
@@ -745,7 +851,15 @@ func marshalPackedAtlasMetadata(imageName, raw string) ([]byte, error) {
 	if len(metadata) == 0 {
 		return nil, fmt.Errorf("atlas metadata must be a JSON object")
 	}
-	metadata["image"] = imageName
+	if metadata["format"] == "pixtorio-tilemap-v1" {
+		image, ok := metadata["tilesetImage"].(map[string]any)
+		if !ok {
+			return nil, fmt.Errorf("tileset bundle metadata requires tilesetImage")
+		}
+		image["file"] = imageName
+	} else {
+		metadata["image"] = imageName
+	}
 	data, err := json.MarshalIndent(metadata, "", "  ")
 	if err != nil {
 		return nil, fmt.Errorf("encode atlas metadata: %w", err)

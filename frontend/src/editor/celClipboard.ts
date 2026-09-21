@@ -14,8 +14,9 @@ import {
   type TilemapData,
   type Tileset,
 } from "./document";
+import type {TerrainDefinition, TerrainMapData} from "./terrain";
 import {indexPixels, renderIndexedPixels} from "./colorModes";
-import {renderTilemapCel} from "./tilemap";
+import {renderTilemapCel, tilemapPixelSize, validateTilemapGridOffset} from "./tilemap";
 
 /** A layer/frame coordinate in the timeline cell grid. */
 export interface CelAddress {
@@ -43,6 +44,8 @@ export interface CelClipboardCell {
   indexes?: Uint8Array;
   /** Authoritative tile cells for tilemap Cels. */
   tilemap?: TilemapData;
+  /** Authoritative logical Terrain cells for Terrain-enabled tilemap Cels. */
+  terrainmap?: TerrainMapData;
   /** Detached tile resources used by the authoritative tilemap cells. */
   tileset?: Tileset;
   /** Cells with the same source linkId share this clipboard group. */
@@ -75,6 +78,7 @@ interface PlannedPaste {
 interface TilemapPasteContext {
   tileset: Tileset;
   tileIDs: Map<number, number>;
+  terrainIDs: Map<number, number>;
 }
 
 interface PlannedClear {
@@ -131,6 +135,7 @@ export function copyCelSelection(
       pixels: source.pixels.slice(),
       indexes: source.indexes?.slice(),
       tilemap: source.tilemap ? cloneTilemap(source.tilemap) : undefined,
+      terrainmap: source.terrainmap ? cloneTerrainmap(source.terrainmap) : undefined,
       tileset: layer.kind === "tilemap" && layer.tilesetId
         ? cloneTileset(document.tilesets.find((tileset) => tileset.id === layer.tilesetId)!)
         : undefined,
@@ -155,6 +160,7 @@ export function copyCelSelection(
       pixels: cell.pixels,
       indexes: cell.indexes,
       tilemap: cell.tilemap,
+      terrainmap: cell.terrainmap,
       tileset: cell.tileset,
       linkGroup: cell.linkGroup,
       origin: cell.origin,
@@ -212,13 +218,15 @@ export function pasteCelSelection(
     const destinationTileset = nextTilesets.get(layer.tilesetId)
       ?? cloneTileset(document.tilesets.find((tileset) => tileset.id === layer.tilesetId)!);
     if (!destinationTileset || destinationTileset.tileWidth !== sourceTileset.tileWidth
-      || destinationTileset.tileHeight !== sourceTileset.tileHeight) return null;
+      || destinationTileset.tileHeight !== sourceTileset.tileHeight
+      || !sameTilesetGrid(destinationTileset, sourceTileset)) return null;
     nextTilesets.set(layer.tilesetId, destinationTileset);
     const contextKey = `${target.source.linkGroup}:${layer.tilesetId}`;
     if (!tilemapContexts.has(contextKey)) {
       const tileIDs = new Map<number, number>();
-      if (!prepareTilemapTileIDs(target.source, sourceTileset, destinationTileset, tileIDs)) return null;
-      tilemapContexts.set(contextKey, {tileset: destinationTileset, tileIDs});
+      const terrainIDs = new Map<number, number>();
+      if (!prepareTilemapResources(target.source, sourceTileset, destinationTileset, tileIDs, terrainIDs)) return null;
+      tilemapContexts.set(contextKey, {tileset: destinationTileset, tileIDs, terrainIDs});
     }
   }
 
@@ -230,7 +238,13 @@ export function pasteCelSelection(
     if (source) continuousSources.set(celKey(target.address.layerId, target.address.frameId), source);
   }
 
-  const groups = new Map<string, {linkId: string; pixels: Uint8ClampedArray; indexes?: Uint8Array; tilemap?: TilemapData}>();
+  const groups = new Map<string, {
+    linkId: string;
+    pixels: Uint8ClampedArray;
+    indexes?: Uint8Array;
+    tilemap?: TilemapData;
+    terrainmap?: TerrainMapData;
+  }>();
   const plan: PlannedPaste[] = [];
   for (const target of targets) {
     const layer = getLayerByID(document, target.address.layerId)!;
@@ -252,6 +266,7 @@ export function pasteCelSelection(
         pixels: continuousSource.pixels,
         indexes: continuousSource.indexes,
         tilemap: continuousSource.tilemap,
+        terrainmap: continuousSource.terrainmap,
       };
       plan.push({address: target.address, cel});
       continue;
@@ -276,6 +291,9 @@ export function pasteCelSelection(
         cel.x = target.source.x;
         cel.y = target.source.y;
         cel.tilemap = remapTilemap(target.source.tilemap, tilemapContext.tileIDs);
+        cel.terrainmap = target.source.terrainmap
+          ? remapTerrainmap(target.source.terrainmap, tilemapContext.terrainIDs)
+          : undefined;
         cel.pixels = renderTilemapCel(cel, tilemapContext.tileset, {
           palette: document.colorMode === "indexed" ? document.palette.colors : undefined,
           transparentIndex: document.palette.transparentIndex,
@@ -286,7 +304,13 @@ export function pasteCelSelection(
       } else {
         copyCelSnapshotToCanvas(cel.pixels, document.width, document.height, target.source);
       }
-      group = {linkId: cel.linkId, pixels: cel.pixels, indexes: cel.indexes, tilemap: cel.tilemap};
+      group = {
+        linkId: cel.linkId,
+        pixels: cel.pixels,
+        indexes: cel.indexes,
+        tilemap: cel.tilemap,
+        terrainmap: cel.terrainmap,
+      };
       groups.set(groupKey, group);
       plan.push({address: target.address, cel});
       continue;
@@ -302,7 +326,10 @@ export function pasteCelSelection(
     cel.indexes = group.indexes;
     cel.x = target.source.x;
     cel.y = target.source.y;
-    if (kind === "tilemap") cel.tilemap = group.tilemap;
+    if (kind === "tilemap") {
+      cel.tilemap = group.tilemap;
+      cel.terrainmap = group.terrainmap;
+    }
     plan.push({address: target.address, cel});
   }
 
@@ -388,7 +415,12 @@ export function clearCelSelection(
       const layer = getLayerByID(document, group[0].layerId);
       if (!layer || !isTilemapLayer(layer) || !layer.tilesetId || !group[0].tilemap) return false;
       if (!group.every((cel) => cel.tilemap && sameTilemapGeometry(cel.tilemap, group[0].tilemap!))) return false;
-      tilemap = {columns: group[0].tilemap.columns, rows: group[0].tilemap.rows, tiles: new Uint32Array(group[0].tilemap.tiles.length)};
+      tilemap = {
+        columns: group[0].tilemap.columns,
+        rows: group[0].tilemap.rows,
+        ...(group[0].tilemap.gridOffset ? {gridOffset: group[0].tilemap.gridOffset} : {}),
+        tiles: new Uint32Array(group[0].tilemap.tiles.length),
+      };
       const tileset = document.tilesets.find((candidate) => candidate.id === layer.tilesetId);
       if (!tileset) return false;
       pixels = renderTilemapCel({...group[0], tilemap}, tileset, {
@@ -499,8 +531,7 @@ function validSourceCel(document: PixelDocument, cel: Cel | null, address: CelAd
   if (layer?.kind === "tilemap") {
     if (!layer.tilesetId || !cel.tilemap) return false;
     const tileset = document.tilesets.find((candidate) => candidate.id === layer.tilesetId);
-    if (!tileset || cel.tilemap.columns !== Math.ceil(cel.width / tileset.tileWidth)
-      || cel.tilemap.rows !== Math.ceil(cel.height / tileset.tileHeight)
+    if (!tileset || !validTilemapCelGeometry(cel.width, cel.height, cel.tilemap, tileset)
       || cel.tilemap.tiles.length !== cel.tilemap.columns * cel.tilemap.rows) return false;
     const tileIDs = new Set(tileset.tiles.map((tile) => tile.id));
     if ([...cel.tilemap.tiles].some((value) => (value & tileIndexMask) !== 0 && !tileIDs.has(value & tileIndexMask))) return false;
@@ -547,14 +578,16 @@ function sameClipboardSnapshotAsCel(source: CelClipboardCell, cel: Cel) {
     && source.width === cel.width && source.height === cel.height
     && bytesEqual(source.pixels, cel.pixels)
     && optionalBytesEqual(source.indexes, cel.indexes)
-    && sameTilemap(source.tilemap, cel.tilemap);
+    && sameTilemap(source.tilemap, cel.tilemap)
+    && sameTerrainmap(source.terrainmap, cel.terrainmap);
 }
 
 function sameCelSnapshot(first: SourceCell, cel: Cel) {
   if (first.x !== cel.x || first.y !== cel.y || first.width !== cel.width || first.height !== cel.height) return false;
   return bytesEqual(first.pixels, cel.pixels)
     && optionalBytesEqual(first.indexes, cel.indexes)
-    && sameTilemap(first.tilemap, cel.tilemap);
+    && sameTilemap(first.tilemap, cel.tilemap)
+    && sameTerrainmap(first.terrainmap, cel.terrainmap);
 }
 
 function sameGeometry(cels: readonly Cel[]) {
@@ -586,10 +619,10 @@ function validClipboardCell(cell: CelClipboardCell) {
   const kind = clipboardCellKind(cell);
   if (kind !== "image" && kind !== "tilemap") return false;
   if (kind === "tilemap" && (!cell.tilemap || !cell.tileset
-    || cell.tilemap.columns !== Math.ceil(cell.width / cell.tileset.tileWidth)
-    || cell.tilemap.rows !== Math.ceil(cell.height / cell.tileset.tileHeight)
+    || !validTilemapCelGeometry(cell.width, cell.height, cell.tilemap, cell.tileset)
     || !validTilemapSnapshot(cell.tilemap, cell.tileset))) return false;
-  if (kind === "image" && (cell.tilemap !== undefined || cell.tileset !== undefined)) return false;
+  if (kind === "tilemap" && cell.terrainmap && !validTerrainmapSnapshot(cell.terrainmap, cell.tilemap!, cell.tileset!)) return false;
+  if (kind === "image" && (cell.tilemap !== undefined || cell.terrainmap !== undefined || cell.tileset !== undefined)) return false;
   return Boolean(cell)
     && Number.isFinite(cell.opacity) && cell.opacity >= 0 && cell.opacity <= 1
     && Number.isInteger(cell.zIndex) && cell.zIndex >= -32768 && cell.zIndex <= 32767
@@ -610,6 +643,7 @@ function sameClipboardSnapshot(first: CelClipboardCell, cell: CelClipboardCell) 
     && bytesEqual(first.pixels, cell.pixels)
     && optionalBytesEqual(first.indexes, cell.indexes)
     && sameTilemap(first.tilemap, cell.tilemap)
+    && sameTerrainmap(first.terrainmap, cell.terrainmap)
     && sameTileset(first.tileset, cell.tileset);
 }
 
@@ -629,21 +663,57 @@ function validTilemapSnapshot(tilemap: TilemapData, tileset: Tileset) {
     || tile.pixels.length !== tileset.tileWidth * tileset.tileHeight * 4
     || (tile.indexes !== undefined && (!(tile.indexes instanceof Uint8Array)
       || tile.indexes.length !== tileset.tileWidth * tileset.tileHeight)))) return false;
+  try {
+    validateTilemapGridOffset(tilemap, tileset);
+  } catch {
+    return false;
+  }
   const tileIDs = new Set(tileset.tiles.map((tile) => tile.id));
   return [...tilemap.tiles].every((value) => (value & tileIndexMask) === 0 || tileIDs.has(value & tileIndexMask));
 }
 
-function prepareTilemapTileIDs(
+function validTilemapCelGeometry(width: number, height: number, tilemap: TilemapData, tileset: Tileset) {
+  if (tileset.grid.kind === "orthogonal") {
+    return tilemap.columns === Math.ceil(width / tileset.tileWidth)
+      && tilemap.rows === Math.ceil(height / tileset.tileHeight);
+  }
+  const size = tilemapPixelSize(tileset, tilemap);
+  return width === size.width && height === size.height;
+}
+
+function validTerrainmapSnapshot(terrainmap: TerrainMapData, tilemap: TilemapData, tileset: Tileset) {
+  if (!Number.isInteger(terrainmap.columns) || !Number.isInteger(terrainmap.rows)
+    || terrainmap.columns !== tilemap.columns || terrainmap.rows !== tilemap.rows
+    || !Number.isSafeInteger(terrainmap.seed)
+    || !(terrainmap.terrains instanceof Uint16Array)
+    || terrainmap.terrains.length !== tilemap.tiles.length) return false;
+  const terrainIDs = new Set(tileset.terrains.map((terrain) => terrain.id));
+  return [...terrainmap.terrains].every((id) => id === 0 || terrainIDs.has(id));
+}
+
+function prepareTilemapResources(
   source: CelClipboardCell,
   sourceTileset: Tileset,
   destinationTileset: Tileset,
   tileIDs: Map<number, number>,
+  terrainIDs: Map<number, number>,
 ) {
   if (!source.tilemap || !validTilemapSnapshot(source.tilemap, sourceTileset)) return false;
   const referenced = new Set<number>();
   for (const value of source.tilemap.tiles) {
     const id = value & tileIndexMask;
     if (id !== 0) referenced.add(id);
+  }
+  if (source.terrainmap) {
+    if (!validTerrainmapSnapshot(source.terrainmap, source.tilemap, sourceTileset)) return false;
+    const referencedTerrainIDs = new Set([...source.terrainmap.terrains].filter((id) => id !== 0));
+    for (const terrainID of referencedTerrainIDs) {
+      const terrain = sourceTileset.terrains.find((candidate) => candidate.id === terrainID);
+      if (!terrain) return false;
+      for (const rule of terrain.rules) {
+        for (const candidate of rule.candidates) referenced.add(candidate.tileId);
+      }
+    }
   }
   for (const id of referenced) {
     if (tileIDs.has(id)) continue;
@@ -663,6 +733,22 @@ function prepareTilemapTileIDs(
     });
     tileIDs.set(id, nextID);
   }
+  if (source.terrainmap) {
+    const referencedTerrainIDs = [...new Set([...source.terrainmap.terrains].filter((id) => id !== 0))].sort((left, right) => left - right);
+    for (const sourceID of referencedTerrainIDs) {
+      const sourceTerrain = sourceTileset.terrains.find((terrain) => terrain.id === sourceID);
+      if (!sourceTerrain) return false;
+      const remapped = remapTerrainDefinition(sourceTerrain, tileIDs, sourceID);
+      const existing = destinationTileset.terrains.find((terrain) => terrainDefinitionsEqual(terrain, remapped));
+      if (existing) {
+        terrainIDs.set(sourceID, existing.id);
+        continue;
+      }
+      const nextID = nextTerrainID(destinationTileset);
+      destinationTileset.terrains.push({...remapped, id: nextID});
+      terrainIDs.set(sourceID, nextID);
+    }
+  }
   return true;
 }
 
@@ -670,6 +756,7 @@ function remapTilemap(tilemap: TilemapData, tileIDs: ReadonlyMap<number, number>
   return {
     columns: tilemap.columns,
     rows: tilemap.rows,
+    ...(tilemap.gridOffset ? {gridOffset: tilemap.gridOffset} : {}),
     tiles: Uint32Array.from(tilemap.tiles, (value) => {
       const id = value & tileIndexMask;
       if (id === 0) return value >>> 0;
@@ -684,9 +771,21 @@ function cloneTilemap(tilemap: TilemapData): TilemapData {
   return {...tilemap, tiles: tilemap.tiles.slice()};
 }
 
+function cloneTerrainmap(terrainmap: TerrainMapData): TerrainMapData {
+  return {...terrainmap, terrains: terrainmap.terrains.slice()};
+}
+
 function cloneTileset(tileset: Tileset): Tileset {
   return {
     ...tileset,
+    grid: {...tileset.grid},
+    terrains: tileset.terrains.map((terrain) => ({
+      ...terrain,
+      rules: terrain.rules.map((rule) => ({
+        ...rule,
+        candidates: rule.candidates.map((candidate) => ({...candidate})),
+      })),
+    })),
     tiles: tileset.tiles.map((tile) => ({...tile, pixels: tile.pixels.slice(), indexes: tile.indexes?.slice()})),
   };
 }
@@ -702,14 +801,80 @@ function sameTilemap(left: TilemapData | undefined, right: TilemapData | undefin
 }
 
 function sameTilemapGeometry(left: TilemapData, right: TilemapData) {
-  return left.columns === right.columns && left.rows === right.rows && left.tiles.length === right.tiles.length;
+  return left.columns === right.columns && left.rows === right.rows
+    && left.gridOffset === right.gridOffset && left.tiles.length === right.tiles.length;
+}
+
+function sameTerrainmap(left: TerrainMapData | undefined, right: TerrainMapData | undefined) {
+  if (left === undefined || right === undefined) return left === right;
+  return left.columns === right.columns && left.rows === right.rows && left.seed === right.seed
+    && bytesEqual(left.terrains, right.terrains);
 }
 
 function sameTileset(left: Tileset | undefined, right: Tileset | undefined) {
   if (left === undefined || right === undefined) return left === right;
   return left.tileWidth === right.tileWidth && left.tileHeight === right.tileHeight
+    && sameTilesetGrid(left, right)
+    && terrainDefinitionListsEqual(left.terrains, right.terrains)
     && left.tiles.length === right.tiles.length
     && left.tiles.every((tile, index) => tile.id === right.tiles[index].id && tilesEqual(tile, right.tiles[index]));
+}
+
+function sameTilesetGrid(left: Tileset, right: Tileset) {
+  return left.grid.kind === right.grid.kind
+    && (left.grid.kind !== "hexagonal" || right.grid.kind !== "hexagonal"
+      || (left.grid.orientation === right.grid.orientation && left.grid.offset === right.grid.offset));
+}
+
+function terrainDefinitionListsEqual(left: readonly TerrainDefinition[], right: readonly TerrainDefinition[]) {
+  return left.length === right.length
+    && left.every((terrain, index) => terrainDefinitionsEqual(terrain, right[index]));
+}
+
+function terrainDefinitionsEqual(left: TerrainDefinition, right: TerrainDefinition) {
+  return left.id === right.id && left.name === right.name && left.color === right.color
+    && left.neighborMode === right.neighborMode && left.boundary === right.boundary
+    && left.rules.length === right.rules.length
+    && left.rules.every((rule, index) => {
+      const other = right.rules[index];
+      return rule.mask === other.mask && rule.candidates.length === other.candidates.length
+        && rule.candidates.every((candidate, candidateIndex) => {
+          const otherCandidate = other.candidates[candidateIndex];
+          return candidate.tileId === otherCandidate.tileId && candidate.flags === otherCandidate.flags
+            && candidate.weight === otherCandidate.weight;
+        });
+    });
+}
+
+function remapTerrainDefinition(
+  terrain: TerrainDefinition,
+  tileIDs: ReadonlyMap<number, number>,
+  id = terrain.id,
+): TerrainDefinition {
+  return {
+    ...terrain,
+    id,
+    rules: terrain.rules.map((rule) => ({
+      ...rule,
+      candidates: rule.candidates.map((candidate) => {
+        const tileId = tileIDs.get(candidate.tileId);
+        if (tileId === undefined) throw new Error("Terrain clipboard references an unknown tile");
+        return {...candidate, tileId};
+      }),
+    })),
+  };
+}
+
+function remapTerrainmap(terrainmap: TerrainMapData, terrainIDs: ReadonlyMap<number, number>): TerrainMapData {
+  return {
+    ...terrainmap,
+    terrains: Uint16Array.from(terrainmap.terrains, (id) => {
+      if (id === 0) return 0;
+      const mapped = terrainIDs.get(id);
+      if (mapped === undefined) throw new Error("Terrain clipboard references an unknown terrain");
+      return mapped;
+    }),
+  };
 }
 
 function nextTileID(tileset: Tileset) {
@@ -717,6 +882,14 @@ function nextTileID(tileset: Tileset) {
   let id = 1;
   while (used.has(id)) id += 1;
   if (id > tileIndexMask) throw new Error("Tileset has reached its tile limit");
+  return id;
+}
+
+function nextTerrainID(tileset: Tileset) {
+  const used = new Set(tileset.terrains.map((terrain) => terrain.id));
+  let id = 1;
+  while (used.has(id)) id += 1;
+  if (id > 0xffff) throw new Error("Tileset has reached its Terrain limit");
   return id;
 }
 

@@ -10,7 +10,30 @@ export interface HSVColor {
 
 export interface TintShadeToneCell {column: number; row: number}
 
+export interface WheelSelectorGeometry {
+  centerX: number;
+  centerY: number;
+  radius: number;
+  valueStripTop: number;
+  valueStripHeight: number;
+}
+
 const clampUnit = (value: number) => Math.max(0, Math.min(1, value));
+
+export function wheelSelectorGeometry(width: number, height: number): WheelSelectorGeometry {
+  const safeWidth = Math.max(1, width);
+  const safeHeight = Math.max(1, height);
+  const valueStripHeight = Math.min(safeHeight, Math.min(10, Math.max(6, Math.floor(safeHeight * 0.1))));
+  const valueStripTop = safeHeight - valueStripHeight;
+  const wheelHeight = Math.max(1, valueStripTop - 2);
+  return {
+    centerX: safeWidth / 2,
+    centerY: wheelHeight / 2,
+    radius: Math.max(1, Math.min(safeWidth, wheelHeight) / 2 - 1),
+    valueStripTop,
+    valueStripHeight,
+  };
+}
 
 export function hexToHsv(hex: string): HSVColor {
   const [red, green, blue] = hexToRGBA(hex).map((value) => value / 255);
@@ -89,17 +112,13 @@ export function selectorColorAt(
     return tintShadeToneColor(baseHex, {column, row});
   }
 
-  const valueStripHeight = Math.min(14, Math.max(8, Math.floor(safeHeight * 0.16)));
-  if (y >= safeHeight - valueStripHeight) {
+  const geometry = wheelSelectorGeometry(safeWidth, safeHeight);
+  if (y >= geometry.valueStripTop) {
     return hsvToHex({...base, v: clampUnit(x / Math.max(1, safeWidth - 1))});
   }
-  const wheelHeight = safeHeight - valueStripHeight - 2;
-  const centerX = safeWidth / 2;
-  const centerY = wheelHeight / 2;
-  const radius = Math.max(1, Math.min(safeWidth, wheelHeight) / 2 - 1);
-  const dx = x - centerX;
-  const dy = y - centerY;
+  const dx = x - geometry.centerX;
+  const dy = y - geometry.centerY;
   const distance = Math.hypot(dx, dy);
-  if (distance > radius) return null;
-  return hsvToHex({h: (Math.atan2(dy, dx) * 180 / Math.PI + 360) % 360, s: clampUnit(distance / radius), v: base.v});
+  if (distance > geometry.radius) return null;
+  return hsvToHex({h: (Math.atan2(dy, dx) * 180 / Math.PI + 360) % 360, s: clampUnit(distance / geometry.radius), v: base.v});
 }

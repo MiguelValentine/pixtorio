@@ -68,6 +68,7 @@ npm --prefix frontend run dev -- --host 127.0.0.1
 ```bash
 npm --prefix frontend run check
 npm --prefix frontend test
+npm --prefix frontend run test:e2e
 npm --prefix frontend run build
 go test ./...
 ```
@@ -88,9 +89,11 @@ macOS 产物位于 `build/bin/Pixtorio.app`。自行构建的应用需要使用�
 
 ## 项目文件
 
-`.pixio` 是 Pixtorio 唯一的可编辑项目格式。当前版本为严格的 `.pixio v4` ZIP 容器，保存画布、图层、帧、动画格、调色板、图块集、图块地图、切片、参考线、色彩配置、设置和缩略图等数据。
+`.pixio` 是 Pixtorio 唯一的可编辑项目格式。当前版本为严格的 `.pixio v5` ZIP 容器，保存画布、图层、帧、动画格、调色板、图块集、图块地图、切片、参考线、色彩配置、设置和缩略图等数据。
 
-v4 有意不兼容旧版本：v1-v3 项目会被拒绝，不提供迁移、降级或兼容读取。PNG、GIF、精灵图、图集和图像序列是交换格式，不是项目格式。
+v5 有意不兼容旧版本：v1-v4 项目会被拒绝，不提供迁移、降级或兼容读取。PNG、GIF、精灵图、图集和图像序列是交换格式，不是项目格式。
+
+TerrainMap 保留三种逻辑单元格状态：`0` 表示未指定，`65535` 表示显式空白，`1..65534` 引用 Terrain 定义。
 
 ## 项目状态
 
@@ -111,7 +114,7 @@ Pixtorio 已具备较完整的像素编辑、动画、合成、导入导出、�
 1. 保持变更范围清晰，遵循现有 TypeScript、React 与 Go 代码风格。
 2. 为行为变化补充有针对性的测试。
 3. 运行本 README 中的完整检查命令。
-4. 不要为 `.pixio v1-v3` 添加迁移、兼容读取或兼容测试。
+4. 不要为 `.pixio v1-v4` 添加迁移、兼容读取或兼容测试。
 
 更完整的工程约束和发布验证要求见 [AGENTS.md](AGENTS.md) 与 [RELEASE.md](RELEASE.md)。
 

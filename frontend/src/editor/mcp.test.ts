@@ -13,12 +13,42 @@ import {
 import {DocumentStateCommand, PixelEditCommand} from "./history";
 import {applyMCPEdits, readMCPIndexes, readMCPPixels, readMCPTilemap, readMCPTileset, summarizeMCPDocument} from "./mcp";
 import {setPixel} from "./pixels";
+import {decodeProject, encodeProject} from "./serialization";
+import {createTilemapData, createTileset, renderTilemapCel, tilemapPixelSize} from "./tilemap";
 
 function pixelAt(document: PixelDocument, layerId: string, frameId: string, x: number, y: number) {
   const cel = document.cels[celKey(layerId, frameId)];
   if (!cel) throw new Error("Test cel is missing");
   const offset = ((y - cel.y) * cel.width + x - cel.x) * 4;
   return Array.from(cel.pixels.subarray(offset, offset + 4));
+}
+
+function createTerrainTilemapFixture() {
+  const document = createDocument({width: 2, height: 1});
+  applyMCPEdits(document, [
+    {type: "add_tileset", tilesetId: "terrain", name: "Terrain", tileWidth: 1, tileHeight: 1},
+    {type: "add_tile", tilesetId: "terrain", tileId: 1, pixels: ["#ff0000ff"]},
+    {type: "add_tile", tilesetId: "terrain", tileId: 2, pixels: ["#0000ffff"]},
+    {type: "add_layer", name: "Map", kind: "tilemap", tilesetId: "terrain"},
+  ]);
+  const layerId = document.activeLayerId;
+  const firstFrameId = document.activeFrameId;
+  applyMCPEdits(document, [{
+    type: "add_terrain",
+    tilesetId: "terrain",
+    terrain: {
+      id: 1,
+      name: "Grass",
+      color: "#00ff00",
+      neighborMode: "edge4",
+      boundary: "empty",
+      rules: [{mask: 0, candidates: [{tileId: 1, flags: 0, weight: 1}]}],
+    },
+  }]);
+  applyMCPEdits(document, [{type: "set_terrainmap", layerId, frameId: firstFrameId, cells: [1, 1]}]);
+  const secondFrame = addFrame(document);
+  linkCels(document, layerId, [firstFrameId, secondFrame.id], firstFrameId);
+  return {document, layerId, firstFrameId, secondFrameId: secondFrame.id};
 }
 
 describe("MCP document metadata and reads", () => {
@@ -44,7 +74,7 @@ describe("MCP document metadata and reads", () => {
     expect(summary.cels[0]).toMatchObject({opacity: 1, zIndex: 0});
   });
 
-  it("summarizes and edits v4 tilesets and tilemap Cels", () => {
+  it("summarizes and edits v5 tilesets and tilemap Cels", () => {
     const document = createDocument({width: 4, height: 2});
     const command = applyMCPEdits(document, [
       {type: "add_tileset", tilesetId: "terrain", name: "Terrain", tileWidth: 2, tileHeight: 2},
@@ -67,6 +97,28 @@ describe("MCP document metadata and reads", () => {
 
     applyMCPEdits(document, [{type: "delete_tile", tilesetId: "terrain", tileId: 1}]);
     expect(readMCPTilemap(document, {layerId: layer.id}).tiles).toEqual([0, 0]);
+  });
+
+  it("reports an effective per-map hex offset through document and tilemap reads", () => {
+    const document = createDocument({width: 8, height: 8});
+    const tileset = createTileset({
+      tileWidth: 2,
+      tileHeight: 2,
+      grid: {kind: "hexagonal", orientation: "pointy", offset: "odd-r"},
+      tiles: [{id: 1, pixels: new Uint8ClampedArray(16).fill(255)}],
+    });
+    document.tilesets = [tileset];
+    Object.assign(document.layers[0], {kind: "tilemap", tilesetId: tileset.id});
+    const cel = getActiveCel(document);
+    cel.tilemap = {...createTilemapData(2, 3), gridOffset: "even-r"};
+    cel.tilemap.tiles.fill(1);
+    Object.assign(cel, tilemapPixelSize(tileset, cel.tilemap));
+    cel.pixels = renderTilemapCel(cel, tileset);
+
+    expect(summarizeMCPDocument(document).cels[0].tilemap).toEqual({
+      columns: 2, rows: 3, gridOffset: "even-r",
+    });
+    expect(readMCPTilemap(document)).toMatchObject({columns: 2, rows: 3, gridOffset: "even-r"});
   });
 
   it("reads composited pixels as row-major RGBA hex", () => {
@@ -107,10 +159,186 @@ describe("MCP document metadata and reads", () => {
     const document = createDocument({width: 2048, height: 2048});
     expect(() => readMCPPixels(document)).toThrow(/16384/);
   });
+
+  it("reads and strictly validates orthogonal, isometric, and hexagonal grids", () => {
+    const grids = [
+      {kind: "orthogonal" as const},
+      {kind: "isometric" as const, cellWidth: 1, cellHeight: 1, anchorX: 0, anchorY: 1},
+      {kind: "hexagonal" as const, orientation: "pointy" as const, offset: "odd-r" as const},
+      {kind: "hexagonal" as const, orientation: "pointy" as const, offset: "even-r" as const},
+      {kind: "hexagonal" as const, orientation: "flat" as const, offset: "odd-q" as const},
+      {kind: "hexagonal" as const, orientation: "flat" as const, offset: "even-q" as const},
+    ];
+
+    for (const [index, grid] of grids.entries()) {
+      const document = createDocument({width: 2, height: 2});
+      applyMCPEdits(document, [{
+        type: "add_tileset",
+        tilesetId: `grid-${index}`,
+        name: "Grid",
+        tileWidth: 1,
+        tileHeight: 1,
+        grid,
+      }]);
+      expect(summarizeMCPDocument(document).tilesets[0]).toMatchObject({grid, terrains: []});
+      expect(readMCPTileset(document, {tilesetId: `grid-${index}`})).toMatchObject({grid, terrains: []});
+    }
+
+    const invalidGrids = [
+      {kind: "isometric", cellWidth: 1, cellHeight: 1, anchorX: 2, anchorY: 1},
+      {kind: "hexagonal", orientation: "pointy", offset: "odd-q"},
+      {kind: "hexagonal", orientation: "flat", offset: "even-r"},
+      {kind: "hexagonal", orientation: "pointy", offset: "diagonal"},
+    ];
+    for (const [index, grid] of invalidGrids.entries()) {
+      const document = createDocument({width: 1, height: 1});
+      expect(() => applyMCPEdits(document, [{
+        type: "add_tileset",
+        tilesetId: `invalid-${index}`,
+        name: "Invalid",
+        tileWidth: 1,
+        tileHeight: 1,
+        grid,
+      }])).toThrow(/grid|offset/);
+      expect(document.tilesets).toHaveLength(0);
+    }
+  });
+
+  it("reads terrainmap seed and row-major terrain cells", () => {
+    const document = createDocument({width: 2, height: 2});
+    applyMCPEdits(document, [
+      {type: "add_tileset", tilesetId: "terrain", name: "Terrain", tileWidth: 1, tileHeight: 1},
+      {type: "add_tile", tilesetId: "terrain", tileId: 1, pixels: ["#ff0000ff"]},
+      {type: "add_layer", name: "Map", kind: "tilemap", tilesetId: "terrain"},
+    ]);
+    const layerId = document.activeLayerId;
+    applyMCPEdits(document, [{
+      type: "add_terrain",
+      tilesetId: "terrain",
+      terrain: {
+        id: 1,
+        name: "Grass",
+        color: "#00ff00",
+        neighborMode: "edge4",
+        boundary: "empty",
+        rules: [{mask: 0, candidates: [{tileId: 1, flags: 0, weight: 1}]}],
+      },
+    }]);
+    applyMCPEdits(document, [{type: "set_terrainmap", layerId, cells: [1, 1, 65535, 0], seed: 42}]);
+
+    expect(readMCPTileset(document, {tilesetId: "terrain"}).terrains).toEqual([{
+      id: 1,
+      name: "Grass",
+      color: "#00ff00",
+      neighborMode: "edge4",
+      boundary: "empty",
+      rules: [{mask: 0, candidates: [{tileId: 1, flags: 0, weight: 1}]}],
+    }]);
+    expect(readMCPTilemap(document, {layerId})).toMatchObject({
+      columns: 2,
+      rows: 2,
+      tiles: [1, 1, 0, 0],
+      terrainmap: {seed: 42, terrains: [1, 1, 65535, 0]},
+    });
+    expect(readMCPPixels(document, {x: 0, y: 0, width: 2, height: 2})).toEqual([
+      "#ff0000ff", "#ff0000ff",
+      "#00000000", "#00000000",
+    ]);
+  });
 });
 
 describe("MCP edits", () => {
-  it("exposes and edits the v4 layer, sparse cel, indexed, tag, slice, guide and settings model", () => {
+  it("rejects Terrain-managed tile writes by default and detaches the linked group only when requested", () => {
+    const {document, layerId, firstFrameId, secondFrameId} = createTerrainTilemapFixture();
+    const firstKey = celKey(layerId, firstFrameId);
+    const secondKey = celKey(layerId, secondFrameId);
+    const before = cloneDocument(document);
+
+    expect(() => applyMCPEdits(document, [{
+      type: "set_tile_cells",
+      layerId,
+      frameId: firstFrameId,
+      cells: [{x: 0, y: 0, value: 2}],
+    }])).toThrow(/detachTerrain/);
+    expect(document).toEqual(before);
+    expect(() => decodeProject(encodeProject(document))).not.toThrow();
+
+    expect(() => applyMCPEdits(document, [{
+      type: "set_tile_cells",
+      layerId,
+      frameId: firstFrameId,
+      detachTerrain: "yes" as unknown as boolean,
+      cells: [{x: 0, y: 0, value: 2}],
+    }])).toThrow(/detachTerrain.*boolean/);
+    expect(document).toEqual(before);
+
+    expect(() => applyMCPEdits(document, [
+      {
+        type: "set_tile_cells",
+        layerId,
+        frameId: firstFrameId,
+        detachTerrain: true,
+        cells: [{x: 0, y: 0, value: 2}],
+      },
+      {
+        type: "set_tile_cells",
+        layerId,
+        frameId: firstFrameId,
+        detachTerrain: true,
+        cells: [{x: 1, y: 0, value: 99}],
+      },
+    ])).toThrow(/does not exist in tileset/);
+    expect(document).toEqual(before);
+
+    const command = applyMCPEdits(document, [{
+      type: "set_tile_cells",
+      layerId,
+      frameId: firstFrameId,
+      detachTerrain: true,
+      cells: [{x: 0, y: 0, value: 2}],
+    }]);
+    expect(command).toBeInstanceOf(DocumentStateCommand);
+    expect(document.cels[firstKey]?.terrainmap).toBeUndefined();
+    expect(document.cels[secondKey]?.terrainmap).toBeUndefined();
+    expect([...document.cels[firstKey].tilemap!.tiles]).toEqual([2, 1]);
+    expect(() => decodeProject(encodeProject(document))).not.toThrow();
+
+    command!.undo(document);
+    expect(document.cels[firstKey]?.terrainmap).toBeDefined();
+    expect(document.cels[secondKey]?.terrainmap).toEqual(document.cels[firstKey]?.terrainmap);
+    expect(document.cels[secondKey]?.linkId).toBe(document.cels[firstKey]?.linkId);
+    expect([...document.cels[firstKey].tilemap!.tiles]).toEqual([1, 1]);
+    expect(() => decodeProject(encodeProject(document))).not.toThrow();
+
+    command!.redo(document);
+    expect(document.cels[firstKey]?.terrainmap).toBeUndefined();
+    expect(document.cels[secondKey]?.terrainmap).toBeUndefined();
+    expect([...document.cels[firstKey].tilemap!.tiles]).toEqual([2, 1]);
+    expect(() => decodeProject(encodeProject(document))).not.toThrow();
+  });
+
+  it("does not detach Terrain for a tile no-op, including a duplicate write that ends at the original value", () => {
+    const {document, layerId, firstFrameId, secondFrameId} = createTerrainTilemapFixture();
+    const first = document.cels[celKey(layerId, firstFrameId)];
+    const second = document.cels[celKey(layerId, secondFrameId)];
+    const terrainmap = first.terrainmap;
+
+    expect(applyMCPEdits(document, [{
+      type: "set_tile_cells",
+      layerId,
+      frameId: firstFrameId,
+      detachTerrain: true,
+      cells: [
+        {x: 0, y: 0, value: 2},
+        {x: 0, y: 0, value: 1},
+      ],
+    }])).toBeNull();
+    expect(first.terrainmap).toBe(terrainmap);
+    expect(second.terrainmap).toBe(terrainmap);
+    expect([...first.tilemap!.tiles]).toEqual([1, 1]);
+  });
+
+  it("exposes and edits the v5 layer, sparse cel, indexed, tag, slice, guide and settings model", () => {
     const document = createDocument({width: 4, height: 3, colorMode: "indexed"});
     const firstFrameId = document.activeFrameId;
     const secondFrame = addFrame(document);
@@ -127,7 +355,7 @@ describe("MCP edits", () => {
     expect(document.cels[celKey(layerId, secondFrame.id)]).toBeDefined();
     expect(readMCPIndexes(document, {layerId, frameId: secondFrame.id, x: 0, y: 0, width: 2, height: 2})).toEqual([0, 0, 0, 2]);
     const summary = summarizeMCPDocument(document);
-    expect(summary.formatVersion).toBe(4);
+    expect(summary.formatVersion).toBe(5);
     expect(summary.layers[0]).toMatchObject({role: "reference", continuous: true, alphaLock: true, blendMode: "soft-light"});
     expect(summary.tags[0].repeat).toBe(2);
     expect(summary.slices[0].name).toBe("hero");
@@ -259,7 +487,7 @@ describe("MCP edits", () => {
     const firstFrameId = document.activeFrameId;
     const secondFrame = addFrame(document);
     const layerId = document.activeLayerId;
-    // v4 permits sparse Cels; materialize the target before linking it.
+    // v5 permits sparse Cels; materialize the target before linking it.
     ensureCel(document, layerId, secondFrame.id);
     expect(linkCels(document, layerId, [firstFrameId, secondFrame.id], firstFrameId)).toBe(true);
 
@@ -340,5 +568,88 @@ describe("MCP edits", () => {
       pixels: [{x: 1, y: 0, color: "#ffffff"}],
     }])).toThrow(/outside the document/);
     expect(document).toMatchObject({name: before.name, width: before.width, height: before.height});
+  });
+
+  it("adds, updates, and deletes terrains while rebuilding tilemap caches", () => {
+    const document = createDocument({width: 2, height: 2});
+    applyMCPEdits(document, [
+      {type: "add_tileset", tilesetId: "terrain", name: "Terrain", tileWidth: 1, tileHeight: 1},
+      {type: "add_tile", tilesetId: "terrain", tileId: 1, pixels: ["#ff0000ff"]},
+      {type: "add_tile", tilesetId: "terrain", tileId: 2, pixels: ["#0000ffff"]},
+      {type: "add_layer", name: "Map", kind: "tilemap", tilesetId: "terrain"},
+    ]);
+    const layerId = document.activeLayerId;
+    const terrain = {
+      id: 1,
+      name: "Grass",
+      color: "#00ff00",
+      neighborMode: "edge4" as const,
+      boundary: "empty" as const,
+      rules: [{mask: 0, candidates: [{tileId: 1, flags: 0, weight: 1}]}],
+    };
+
+    const addCommand = applyMCPEdits(document, [{type: "add_terrain", tilesetId: "terrain", terrain}]);
+    expect(addCommand).toBeInstanceOf(DocumentStateCommand);
+    applyMCPEdits(document, [{type: "set_terrainmap", layerId, cells: [1, 1, 0, 0], seed: 9}]);
+    expect(readMCPTilemap(document, {layerId}).tiles).toEqual([1, 1, 0, 0]);
+
+    const updateCommand = applyMCPEdits(document, [{
+      type: "update_terrain",
+      tilesetId: "terrain",
+      terrainId: 1,
+      rules: [{mask: 0, candidates: [{tileId: 2, flags: 0, weight: 1}]}],
+    }]);
+    expect(updateCommand).toBeInstanceOf(DocumentStateCommand);
+    expect(readMCPTilemap(document, {layerId}).tiles).toEqual([2, 2, 0, 0]);
+    updateCommand?.undo(document);
+    expect(readMCPTilemap(document, {layerId}).tiles).toEqual([1, 1, 0, 0]);
+    updateCommand?.redo(document);
+    expect(readMCPTilemap(document, {layerId}).tiles).toEqual([2, 2, 0, 0]);
+
+    expect(() => applyMCPEdits(document, [{type: "delete_terrain", tilesetId: "terrain", terrainId: 1}])).toThrow(/terrainmap/);
+    applyMCPEdits(document, [{type: "set_terrainmap", layerId, cells: [0, 0, 0, 0]}]);
+    expect(applyMCPEdits(document, [{type: "delete_terrain", tilesetId: "terrain", terrainId: 1}])).toBeInstanceOf(DocumentStateCommand);
+    expect(readMCPTileset(document, {tilesetId: "terrain"}).terrains).toEqual([]);
+  });
+
+  it("rejects invalid terrain rules, tile references, and terrainmap writes atomically", () => {
+    const document = createDocument({name: "before.pixio", width: 2, height: 1});
+    applyMCPEdits(document, [
+      {type: "add_tileset", tilesetId: "terrain", name: "Terrain", tileWidth: 1, tileHeight: 1},
+      {type: "add_tile", tilesetId: "terrain", tileId: 1, pixels: ["#ff0000ff"]},
+      {type: "add_layer", name: "Map", kind: "tilemap", tilesetId: "terrain"},
+    ]);
+    const layerId = document.activeLayerId;
+    const validTerrain = {
+      id: 1,
+      name: "Grass",
+      color: "#00ff00",
+      neighborMode: "edge4" as const,
+      boundary: "empty" as const,
+      rules: [{mask: 0, candidates: [{tileId: 1, flags: 0, weight: 1}]}],
+    };
+
+    expect(() => applyMCPEdits(document, [{
+      type: "add_terrain",
+      tilesetId: "terrain",
+      terrain: {...validTerrain, rules: [{mask: 0, candidates: [{tileId: 99, flags: 0, weight: 1}]}]},
+    }])).toThrow(/tile 99/);
+    expect(() => applyMCPEdits(document, [{
+      type: "add_terrain",
+      tilesetId: "terrain",
+      terrain: {...validTerrain, neighborMode: "edge6"},
+    }])).toThrow(/edge6/);
+    applyMCPEdits(document, [{type: "add_terrain", tilesetId: "terrain", terrain: validTerrain}]);
+
+    const before = cloneDocument(document);
+    expect(() => applyMCPEdits(document, [
+      {type: "rename_document", name: "after.pixio"},
+      {type: "set_terrainmap", layerId, cells: [1]},
+    ])).toThrow(/exactly 2/);
+    expect(document.name).toBe(before.name);
+    expect(document.cels[celKey(layerId, document.activeFrameId)]?.terrainmap).toBeUndefined();
+
+    expect(() => applyMCPEdits(document, [{type: "set_terrainmap", layerId, cells: [1, 2]}])).toThrow(/unknown terrain 2/);
+    expect(document.cels[celKey(layerId, document.activeFrameId)]?.terrainmap).toBeUndefined();
   });
 });

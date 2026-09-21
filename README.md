@@ -68,6 +68,7 @@ Run the full verification suite:
 ```bash
 npm --prefix frontend run check
 npm --prefix frontend test
+npm --prefix frontend run test:e2e
 npm --prefix frontend run build
 go test ./...
 ```
@@ -88,9 +89,11 @@ The macOS bundle is written to `build/bin/Pixtorio.app`. A release distributed t
 
 ## Project Files
 
-`.pixio` is Pixtorio's only editable project format. The current format is a strict `.pixio v4` ZIP container containing canvas, layers, frames, cels, palettes, tilesets, tilemaps, slices, guides, colour profiles, settings, and thumbnails.
+`.pixio` is Pixtorio's only editable project format. The current format is a strict `.pixio v5` ZIP container containing canvas, layers, frames, cels, palettes, tilesets, tilemaps, slices, guides, colour profiles, settings, and thumbnails.
 
-v4 intentionally rejects older projects: v1-v3 files are not migrated, downgraded, or opened through a compatibility reader. PNG, GIF, sprite sheets, atlases, and image sequences are interchange formats, not project formats.
+v5 intentionally rejects older projects: v1-v4 files are not migrated, downgraded, or opened through a compatibility reader. PNG, GIF, sprite sheets, atlases, and image sequences are interchange formats, not project formats.
+
+Terrain maps preserve three logical cell states: `0` is unspecified, `65535` is explicit empty, and `1..65534` references a Terrain definition.
 
 ## Project Status
 
@@ -111,7 +114,7 @@ Issues and pull requests are welcome. Before submitting a change:
 1. Keep the change focused and follow the existing TypeScript, React, and Go conventions.
 2. Add focused tests for behavioural changes.
 3. Run the full verification suite listed above.
-4. Do not add migration, compatibility reading, or compatibility tests for `.pixio v1-v3`.
+4. Do not add migration, compatibility reading, or compatibility tests for `.pixio v1-v4`.
 
 See [AGENTS.md](AGENTS.md) and [RELEASE.md](RELEASE.md) for the full engineering and release-verification requirements.
 

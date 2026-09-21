@@ -51,7 +51,7 @@ describe("Cel appearance properties", () => {
     bottom.zIndex = 0;
   });
 
-  it("retains independent linked appearance through history, v4 and duplication", () => {
+  it("retains independent linked appearance through history, v5 and duplication", () => {
     const document = createDocument({width: 1, height: 1});
     const cel = getActiveCel(document);
     cel.pixels.set([255, 100, 20, 255]);
@@ -128,7 +128,7 @@ describe("Cel appearance properties", () => {
     expect(compositeFrame(document)).toEqual(celOpacity);
   });
 
-  it("rejects omitted or invalid appearance fields in strict v4", () => {
+  it("rejects omitted or invalid appearance fields in strict v5", () => {
     const raw = JSON.parse(encodeProject(createDocument({width: 1, height: 1})));
     for (const [field, value] of [["opacity", undefined], ["zIndex", undefined], ["opacity", -1], ["opacity", 2], ["zIndex", 0.5], ["zIndex", 32768]]) {
       const invalid = structuredClone(raw);

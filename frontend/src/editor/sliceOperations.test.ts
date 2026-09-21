@@ -68,7 +68,7 @@ describe("slice batch operations", () => {
     expect(getSliceKey(document, second.id, secondFrame.id)).toBeNull();
   });
 
-  it("deletes complete slices, reuses colors, and round-trips through strict v4", () => {
+  it("deletes complete slices, reuses colors, and round-trips through strict v5", () => {
     const document = createDocument({width: 8, height: 8});
     const first = addSlice(document, "First", {x: 0, y: 0, width: 2, height: 2})!;
     const second = addSlice(document, "Second", {x: 2, y: 0, width: 2, height: 2})!;

@@ -15,10 +15,11 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 )
 
-const FormatVersion = 4
+const FormatVersion = 5
 
 const (
 	ColorModeRGBA      = "rgba"
@@ -28,30 +29,38 @@ const (
 )
 
 const (
-	maxCanvasDimension    = 2048
-	maxManifestBytes      = 8 << 20
-	maxThumbnailBytes     = 8 << 20
-	maxCelPNGBytes        = 32 << 20
-	maxThumbnailDimension = 256
-	minCelZIndex          = -32768
-	maxCelZIndex          = 32767
+	maxCanvasDimension      = 2048
+	maxTilesetGridDimension = 4096
+	maxManifestBytes        = 8 << 20
+	maxThumbnailBytes       = 8 << 20
+	maxCelPNGBytes          = 32 << 20
+	maxThumbnailDimension   = 256
+	minCelZIndex            = -32768
+	maxCelZIndex            = 32767
 )
 
 const maxCelIndexBytes = maxCanvasDimension * maxCanvasDimension
 
 const (
-	maxICCBytes      = 4 << 20
-	maxTilePNGBytes  = 32 << 20
-	maxTilemapBytes  = maxCanvasDimension * maxCanvasDimension * 4
-	TileIndexMask    = uint32(0x1fffffff)
-	TileFlipX        = uint32(0x80000000)
-	TileFlipY        = uint32(0x40000000)
-	TileFlipDiagonal = uint32(0x20000000)
-	tileIndexMask    = TileIndexMask
-	tileFlipX        = TileFlipX
-	tileFlipY        = TileFlipY
-	tileFlipDiagonal = TileFlipDiagonal
-	tileFlagMask     = tileFlipX | tileFlipY | tileFlipDiagonal
+	terrainUnspecifiedID = 0
+	terrainEmptyID       = 0xffff
+	maxTerrainID         = 0xfffe
+)
+
+const (
+	maxICCBytes        = 4 << 20
+	maxTilePNGBytes    = 32 << 20
+	maxTilemapBytes    = maxCanvasDimension * maxCanvasDimension * 4
+	maxTerrainMapBytes = maxCanvasDimension * maxCanvasDimension * 2
+	TileIndexMask      = uint32(0x1fffffff)
+	TileFlipX          = uint32(0x80000000)
+	TileFlipY          = uint32(0x40000000)
+	TileFlipDiagonal   = uint32(0x20000000)
+	tileIndexMask      = TileIndexMask
+	tileFlipX          = TileFlipX
+	tileFlipY          = TileFlipY
+	tileFlipDiagonal   = TileFlipDiagonal
+	tileFlagMask       = tileFlipX | tileFlipY | tileFlipDiagonal
 )
 
 type Palette struct {
@@ -157,19 +166,20 @@ type FrameTag struct {
 	Repeat      int          `json:"repeat"`
 }
 type Cel struct {
-	ID      string       `json:"id"`
-	LinkID  string       `json:"linkId"`
-	LayerID string       `json:"layerId"`
-	FrameID string       `json:"frameId"`
-	X       int          `json:"x"`
-	Y       int          `json:"y"`
-	Width   int          `json:"width"`
-	Height  int          `json:"height"`
-	Opacity float64      `json:"opacity"`
-	ZIndex  int          `json:"zIndex"`
-	Pixels  []byte       `json:"pixels"`
-	Indexes []byte       `json:"indexes,omitempty"`
-	Tilemap *TilemapData `json:"tilemap,omitempty"`
+	ID         string          `json:"id"`
+	LinkID     string          `json:"linkId"`
+	LayerID    string          `json:"layerId"`
+	FrameID    string          `json:"frameId"`
+	X          int             `json:"x"`
+	Y          int             `json:"y"`
+	Width      int             `json:"width"`
+	Height     int             `json:"height"`
+	Opacity    float64         `json:"opacity"`
+	ZIndex     int             `json:"zIndex"`
+	Pixels     []byte          `json:"pixels"`
+	Indexes    []byte          `json:"indexes,omitempty"`
+	Tilemap    *TilemapData    `json:"tilemap,omitempty"`
+	TerrainMap *TerrainMapData `json:"terrainmap,omitempty"`
 }
 
 func (cel *Cel) UnmarshalJSON(data []byte) error {
@@ -192,20 +202,238 @@ type Tile struct {
 	Indexes []byte `json:"indexes,omitempty"`
 }
 
+type TileGridKind string
+
+const (
+	TileGridOrthogonal TileGridKind = "orthogonal"
+	TileGridIsometric  TileGridKind = "isometric"
+	TileGridHexagonal  TileGridKind = "hexagonal"
+)
+
+type TilesetGrid struct {
+	Kind        TileGridKind `json:"kind"`
+	CellWidth   int          `json:"cellWidth"`
+	CellHeight  int          `json:"cellHeight"`
+	AnchorX     int          `json:"anchorX"`
+	AnchorY     int          `json:"anchorY"`
+	Orientation string       `json:"orientation"`
+	Offset      string       `json:"offset"`
+}
+
+func (grid TilesetGrid) MarshalJSON() ([]byte, error) {
+	if !validTilesetGrid(grid) {
+		return nil, fmt.Errorf("invalid tileset grid")
+	}
+	switch grid.Kind {
+	case TileGridOrthogonal:
+		return json.Marshal(struct {
+			Kind TileGridKind `json:"kind"`
+		}{Kind: grid.Kind})
+	case TileGridIsometric:
+		return json.Marshal(struct {
+			Kind       TileGridKind `json:"kind"`
+			CellWidth  int          `json:"cellWidth"`
+			CellHeight int          `json:"cellHeight"`
+			AnchorX    int          `json:"anchorX"`
+			AnchorY    int          `json:"anchorY"`
+		}{Kind: grid.Kind, CellWidth: grid.CellWidth, CellHeight: grid.CellHeight, AnchorX: grid.AnchorX, AnchorY: grid.AnchorY})
+	case TileGridHexagonal:
+		return json.Marshal(struct {
+			Kind        TileGridKind `json:"kind"`
+			Orientation string       `json:"orientation"`
+			Offset      string       `json:"offset"`
+		}{Kind: grid.Kind, Orientation: grid.Orientation, Offset: grid.Offset})
+	default:
+		return nil, fmt.Errorf("invalid tileset grid")
+	}
+}
+
+func (grid *TilesetGrid) UnmarshalJSON(data []byte) error {
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(data, &fields); err != nil {
+		return fmt.Errorf("invalid tileset grid")
+	}
+	kindData, ok := fields["kind"]
+	if !ok {
+		return fmt.Errorf("invalid tileset grid")
+	}
+	var kind TileGridKind
+	if err := json.Unmarshal(kindData, &kind); err != nil {
+		return fmt.Errorf("invalid tileset grid")
+	}
+	switch kind {
+	case TileGridOrthogonal:
+		if !exactJSONFields(fields, "kind") {
+			return fmt.Errorf("invalid tileset grid")
+		}
+		*grid = TilesetGrid{Kind: kind}
+	case TileGridIsometric:
+		if !exactJSONFields(fields, "kind", "cellWidth", "cellHeight", "anchorX", "anchorY") {
+			return fmt.Errorf("invalid tileset grid")
+		}
+		var decoded struct {
+			Kind       TileGridKind `json:"kind"`
+			CellWidth  *int         `json:"cellWidth"`
+			CellHeight *int         `json:"cellHeight"`
+			AnchorX    *int         `json:"anchorX"`
+			AnchorY    *int         `json:"anchorY"`
+		}
+		if err := json.Unmarshal(data, &decoded); err != nil || decoded.CellWidth == nil || decoded.CellHeight == nil || decoded.AnchorX == nil || decoded.AnchorY == nil {
+			return fmt.Errorf("invalid tileset grid")
+		}
+		candidate := TilesetGrid{Kind: kind, CellWidth: *decoded.CellWidth, CellHeight: *decoded.CellHeight, AnchorX: *decoded.AnchorX, AnchorY: *decoded.AnchorY}
+		if !validTilesetGrid(candidate) {
+			return fmt.Errorf("invalid tileset grid")
+		}
+		*grid = candidate
+	case TileGridHexagonal:
+		if !exactJSONFields(fields, "kind", "orientation", "offset") {
+			return fmt.Errorf("invalid tileset grid")
+		}
+		var decoded struct {
+			Kind        TileGridKind `json:"kind"`
+			Orientation *string      `json:"orientation"`
+			Offset      *string      `json:"offset"`
+		}
+		if err := json.Unmarshal(data, &decoded); err != nil || decoded.Orientation == nil || decoded.Offset == nil {
+			return fmt.Errorf("invalid tileset grid")
+		}
+		candidate := TilesetGrid{Kind: kind, Orientation: *decoded.Orientation, Offset: *decoded.Offset}
+		if !validTilesetGrid(candidate) {
+			return fmt.Errorf("invalid tileset grid")
+		}
+		*grid = candidate
+	default:
+		return fmt.Errorf("invalid tileset grid")
+	}
+	return nil
+}
+
+func exactJSONFields(fields map[string]json.RawMessage, expected ...string) bool {
+	if len(fields) != len(expected) {
+		return false
+	}
+	for _, key := range expected {
+		if _, ok := fields[key]; !ok {
+			return false
+		}
+	}
+	return true
+}
+
 type Tileset struct {
-	ID         string `json:"id"`
-	Name       string `json:"name"`
-	TileWidth  int    `json:"tileWidth"`
-	TileHeight int    `json:"tileHeight"`
-	Tiles      []Tile `json:"tiles"`
+	ID         string              `json:"id"`
+	Name       string              `json:"name"`
+	TileWidth  int                 `json:"tileWidth"`
+	TileHeight int                 `json:"tileHeight"`
+	Grid       TilesetGrid         `json:"grid"`
+	Terrains   []TerrainDefinition `json:"terrains"`
+	Tiles      []Tile              `json:"tiles"`
+}
+
+type TerrainNeighborMode string
+
+const (
+	TerrainNeighborEdge4 TerrainNeighborMode = "edge4"
+	TerrainNeighborBlob8 TerrainNeighborMode = "blob8"
+	TerrainNeighborEdge6 TerrainNeighborMode = "edge6"
+)
+
+type TerrainBoundary string
+
+const (
+	TerrainBoundaryEmpty TerrainBoundary = "empty"
+	TerrainBoundarySame  TerrainBoundary = "same"
+	TerrainBoundaryWrap  TerrainBoundary = "wrap"
+)
+
+type TerrainCandidate struct {
+	TileID       int     `json:"tileId"`
+	Flags        int64   `json:"flags"`
+	Weight       float64 `json:"weight"`
+	decoded      bool
+	flagsPresent bool
+}
+
+type TerrainRule struct {
+	Mask        uint32             `json:"mask"`
+	Candidates  []TerrainCandidate `json:"candidates"`
+	decoded     bool
+	maskPresent bool
+}
+
+type TerrainDefinition struct {
+	ID           int                 `json:"id"`
+	Name         string              `json:"name"`
+	Color        string              `json:"color"`
+	NeighborMode TerrainNeighborMode `json:"neighborMode"`
+	Boundary     TerrainBoundary     `json:"boundary"`
+	Rules        []TerrainRule       `json:"rules"`
+}
+
+func (candidate *TerrainCandidate) UnmarshalJSON(data []byte) error {
+	type terrainCandidateJSON TerrainCandidate
+	var decoded terrainCandidateJSON
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		return err
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(data, &fields); err != nil {
+		return fmt.Errorf("invalid terrain candidate")
+	}
+	if _, ok := fields["tileId"]; !ok {
+		return fmt.Errorf("invalid terrain candidate")
+	}
+	if _, ok := fields["weight"]; !ok {
+		return fmt.Errorf("invalid terrain candidate")
+	}
+	if _, ok := fields["flags"]; !ok {
+		return fmt.Errorf("invalid terrain candidate")
+	}
+	*candidate = TerrainCandidate(decoded)
+	candidate.decoded = true
+	_, candidate.flagsPresent = fields["flags"]
+	return nil
+}
+
+func (rule *TerrainRule) UnmarshalJSON(data []byte) error {
+	type terrainRuleJSON TerrainRule
+	var decoded terrainRuleJSON
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		return err
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(data, &fields); err != nil {
+		return fmt.Errorf("invalid terrain rule")
+	}
+	if _, ok := fields["candidates"]; !ok {
+		return fmt.Errorf("invalid terrain rule")
+	}
+	if _, ok := fields["mask"]; !ok {
+		return fmt.Errorf("invalid terrain rule")
+	}
+	*rule = TerrainRule(decoded)
+	rule.decoded = true
+	_, rule.maskPresent = fields["mask"]
+	return nil
 }
 
 // TilemapData stores little-endian uint32 tile cells. Tile index zero is
 // empty; the three high bits are the X, Y and diagonal flip flags.
 type TilemapData struct {
-	Columns int    `json:"columns"`
-	Rows    int    `json:"rows"`
-	Tiles   []byte `json:"tiles"`
+	Columns    int    `json:"columns"`
+	Rows       int    `json:"rows"`
+	GridOffset string `json:"gridOffset,omitempty"`
+	Tiles      []byte `json:"tiles"`
+}
+
+// TerrainMapData stores little-endian uint16 logical Terrain IDs. ID zero is
+// the empty Terrain and is not required to have a definition.
+type TerrainMapData struct {
+	Columns  int    `json:"columns"`
+	Rows     int    `json:"rows"`
+	Seed     int64  `json:"seed"`
+	Terrains []byte `json:"terrains"`
 }
 
 type SliceRect struct {
@@ -307,21 +535,28 @@ type manifest struct {
 	ActiveFrameID    string               `json:"activeFrameId"`
 }
 type manifestCel struct {
-	ID             string  `json:"id"`
-	LinkID         string  `json:"linkId"`
-	LayerID        string  `json:"layerId"`
-	FrameID        string  `json:"frameId"`
-	X              int     `json:"x"`
-	Y              int     `json:"y"`
-	Width          int     `json:"width"`
-	Height         int     `json:"height"`
-	Opacity        float64 `json:"opacity"`
-	ZIndex         int     `json:"zIndex"`
-	Path           string  `json:"path"`
-	IndexPath      string  `json:"indexPath,omitempty"`
-	TilemapPath    string  `json:"tilemapPath,omitempty"`
-	TilemapColumns int     `json:"tilemapColumns,omitempty"`
-	TilemapRows    int     `json:"tilemapRows,omitempty"`
+	ID                    string  `json:"id"`
+	LinkID                string  `json:"linkId"`
+	LayerID               string  `json:"layerId"`
+	FrameID               string  `json:"frameId"`
+	X                     int     `json:"x"`
+	Y                     int     `json:"y"`
+	Width                 int     `json:"width"`
+	Height                int     `json:"height"`
+	Opacity               float64 `json:"opacity"`
+	ZIndex                int     `json:"zIndex"`
+	Path                  string  `json:"path"`
+	IndexPath             string  `json:"indexPath,omitempty"`
+	TilemapPath           string  `json:"tilemapPath,omitempty"`
+	TilemapColumns        int     `json:"tilemapColumns,omitempty"`
+	TilemapRows           int     `json:"tilemapRows,omitempty"`
+	TilemapGridOffset     string  `json:"tilemapGridOffset,omitempty"`
+	TerrainMapPath        string  `json:"terrainmapPath,omitempty"`
+	TerrainMapColumns     int     `json:"terrainmapColumns,omitempty"`
+	TerrainMapRows        int     `json:"terrainmapRows,omitempty"`
+	TerrainMapSeed        int64   `json:"terrainmapSeed,omitempty"`
+	terrainMapSeedPresent bool
+	tilemapOffsetPresent  bool
 }
 
 func (cel *manifestCel) UnmarshalJSON(data []byte) error {
@@ -333,9 +568,35 @@ func (cel *manifestCel) UnmarshalJSON(data []byte) error {
 	if err := json.Unmarshal(data, (*manifestCelJSON)(cel)); err != nil {
 		return err
 	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(data, &fields); err != nil {
+		return fmt.Errorf("invalid cel")
+	}
+	_, cel.terrainMapSeedPresent = fields["terrainmapSeed"]
+	if raw, ok := fields["tilemapGridOffset"]; ok {
+		var value *string
+		if err := json.Unmarshal(raw, &value); err != nil || value == nil || *value == "" {
+			return fmt.Errorf("invalid cel")
+		}
+		cel.tilemapOffsetPresent = true
+	}
 	cel.Opacity = opacity
 	cel.ZIndex = zIndex
 	return nil
+}
+
+func (cel manifestCel) MarshalJSON() ([]byte, error) {
+	type manifestCelJSON manifestCel
+	data, err := json.Marshal((*manifestCelJSON)(&cel))
+	if err != nil || cel.TerrainMapPath == "" || cel.TerrainMapSeed != 0 {
+		return data, err
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(data, &fields); err != nil {
+		return nil, err
+	}
+	fields["terrainmapSeed"] = json.RawMessage("0")
+	return json.Marshal(fields)
 }
 
 func decodeRequiredCelProperties(data []byte) (float64, int, error) {
@@ -366,11 +627,13 @@ type manifestColorProfile struct {
 }
 
 type manifestTileset struct {
-	ID         string         `json:"id"`
-	Name       string         `json:"name"`
-	TileWidth  int            `json:"tileWidth"`
-	TileHeight int            `json:"tileHeight"`
-	Tiles      []manifestTile `json:"tiles"`
+	ID         string              `json:"id"`
+	Name       string              `json:"name"`
+	TileWidth  int                 `json:"tileWidth"`
+	TileHeight int                 `json:"tileHeight"`
+	Grid       TilesetGrid         `json:"grid"`
+	Terrains   []TerrainDefinition `json:"terrains"`
+	Tiles      []manifestTile      `json:"tiles"`
 }
 
 type manifestTile struct {
@@ -470,7 +733,7 @@ func ReadFile(path string) (Document, []byte, error) {
 	}
 	tilesets := make([]Tileset, 0, len(stored.Tilesets))
 	for _, storedTileset := range stored.Tilesets {
-		tileset := Tileset{ID: storedTileset.ID, Name: storedTileset.Name, TileWidth: storedTileset.TileWidth, TileHeight: storedTileset.TileHeight}
+		tileset := Tileset{ID: storedTileset.ID, Name: storedTileset.Name, TileWidth: storedTileset.TileWidth, TileHeight: storedTileset.TileHeight, Grid: storedTileset.Grid, Terrains: storedTileset.Terrains}
 		for _, storedTile := range storedTileset.Tiles {
 			file := files[storedTile.Path]
 			if file == nil {
@@ -552,9 +815,21 @@ func ReadFile(path string) (Document, []byte, error) {
 			if tileErr != nil {
 				return Document{}, nil, tileErr
 			}
-			tilemap = &TilemapData{Columns: storedCel.TilemapColumns, Rows: storedCel.TilemapRows, Tiles: cells}
+			tilemap = &TilemapData{Columns: storedCel.TilemapColumns, Rows: storedCel.TilemapRows, GridOffset: storedCel.TilemapGridOffset, Tiles: cells}
 		}
-		document.Cels = append(document.Cels, Cel{ID: storedCel.ID, LinkID: storedCel.LinkID, LayerID: storedCel.LayerID, FrameID: storedCel.FrameID, X: storedCel.X, Y: storedCel.Y, Width: storedCel.Width, Height: storedCel.Height, Opacity: storedCel.Opacity, ZIndex: storedCel.ZIndex, Pixels: pixels, Indexes: indexes, Tilemap: tilemap})
+		var terrainMap *TerrainMapData
+		if storedCel.TerrainMapPath != "" {
+			terrainFile := files[storedCel.TerrainMapPath]
+			if terrainFile == nil {
+				return Document{}, nil, fmt.Errorf("project is missing cel terrain map %q", storedCel.TerrainMapPath)
+			}
+			terrains, terrainErr := readZipFile(terrainFile, maxTerrainMapBytes)
+			if terrainErr != nil {
+				return Document{}, nil, terrainErr
+			}
+			terrainMap = &TerrainMapData{Columns: storedCel.TerrainMapColumns, Rows: storedCel.TerrainMapRows, Seed: storedCel.TerrainMapSeed, Terrains: terrains}
+		}
+		document.Cels = append(document.Cels, Cel{ID: storedCel.ID, LinkID: storedCel.LinkID, LayerID: storedCel.LayerID, FrameID: storedCel.FrameID, X: storedCel.X, Y: storedCel.Y, Width: storedCel.Width, Height: storedCel.Height, Opacity: storedCel.Opacity, ZIndex: storedCel.ZIndex, Pixels: pixels, Indexes: indexes, Tilemap: tilemap, TerrainMap: terrainMap})
 	}
 	if err := validate(document); err != nil {
 		return Document{}, nil, err
@@ -591,15 +866,24 @@ func writeTo(writer io.Writer, document Document, thumbnail []byte) error {
 		path := "cels/" + cel.ID + ".png"
 		indexPath := ""
 		tilemapPath := ""
-		tilemapColumns, tilemapRows := 0, 0
+		tilemapColumns, tilemapRows, tilemapGridOffset := 0, 0, ""
+		terrainMapPath := ""
+		terrainMapColumns, terrainMapRows := 0, 0
+		var terrainMapSeed int64
 		if document.ColorMode == ColorModeIndexed {
 			indexPath = "cels/" + cel.ID + ".idx"
 		}
 		if cel.Tilemap != nil {
 			tilemapPath = "tilemaps/" + cel.ID + ".bin"
 			tilemapColumns, tilemapRows = cel.Tilemap.Columns, cel.Tilemap.Rows
+			tilemapGridOffset = cel.Tilemap.GridOffset
 		}
-		entries = append(entries, manifestCel{ID: cel.ID, LinkID: cel.LinkID, LayerID: cel.LayerID, FrameID: cel.FrameID, X: cel.X, Y: cel.Y, Width: cel.Width, Height: cel.Height, Opacity: cel.Opacity, ZIndex: cel.ZIndex, Path: path, IndexPath: indexPath, TilemapPath: tilemapPath, TilemapColumns: tilemapColumns, TilemapRows: tilemapRows})
+		if cel.TerrainMap != nil {
+			terrainMapPath = "terrainmaps/" + cel.ID + ".bin"
+			terrainMapColumns, terrainMapRows = cel.TerrainMap.Columns, cel.TerrainMap.Rows
+			terrainMapSeed = cel.TerrainMap.Seed
+		}
+		entries = append(entries, manifestCel{ID: cel.ID, LinkID: cel.LinkID, LayerID: cel.LayerID, FrameID: cel.FrameID, X: cel.X, Y: cel.Y, Width: cel.Width, Height: cel.Height, Opacity: cel.Opacity, ZIndex: cel.ZIndex, Path: path, IndexPath: indexPath, TilemapPath: tilemapPath, TilemapColumns: tilemapColumns, TilemapRows: tilemapRows, TilemapGridOffset: tilemapGridOffset, TerrainMapPath: terrainMapPath, TerrainMapColumns: terrainMapColumns, TerrainMapRows: terrainMapRows, TerrainMapSeed: terrainMapSeed})
 		var encoded limitedBuffer
 		encoded.maximum = maxCelPNGBytes
 		if err := png.Encode(&encoded, &image.NRGBA{Pix: cel.Pixels, Stride: cel.Width * 4, Rect: image.Rect(0, 0, cel.Width, cel.Height)}); err != nil {
@@ -636,10 +920,21 @@ func writeTo(writer io.Writer, document Document, thumbnail []byte) error {
 				return fmt.Errorf("write cel tilemap %q: short write", cel.ID)
 			}
 		}
+		if terrainMapPath != "" {
+			file, err := archive.Create(terrainMapPath)
+			if err != nil {
+				return fmt.Errorf("create cel terrain map entry: %w", err)
+			}
+			if written, err := file.Write(cel.TerrainMap.Terrains); err != nil {
+				return fmt.Errorf("write cel terrain map %q: %w", cel.ID, err)
+			} else if written != len(cel.TerrainMap.Terrains) {
+				return fmt.Errorf("write cel terrain map %q: short write", cel.ID)
+			}
+		}
 	}
 	manifestTilesets := make([]manifestTileset, 0, len(document.Tilesets))
 	for _, tileset := range document.Tilesets {
-		storedTileset := manifestTileset{ID: tileset.ID, Name: tileset.Name, TileWidth: tileset.TileWidth, TileHeight: tileset.TileHeight}
+		storedTileset := manifestTileset{ID: tileset.ID, Name: tileset.Name, TileWidth: tileset.TileWidth, TileHeight: tileset.TileHeight, Grid: tileset.Grid, Terrains: tileset.Terrains}
 		for _, tile := range tileset.Tiles {
 			path := fmt.Sprintf("tilesets/%s/%d.png", tileset.ID, tile.ID)
 			indexPath := ""
@@ -726,19 +1021,19 @@ func validate(document Document) error {
 		reference := celReference{layerID: cel.LayerID, frameID: cel.FrameID}
 		pixelBytes, dimensionsOK := expectedPixelBytes(cel.Width, cel.Height)
 		indexBytes, indexDimensionsOK := expectedIndexBytes(cel.Width, cel.Height)
-		indexesValid := indexDimensionsOK && ((document.ColorMode == ColorModeIndexed && cel.Indexes != nil && len(cel.Indexes) == indexBytes) || (document.ColorMode != ColorModeIndexed && cel.Indexes == nil))
+		indexesValid := indexDimensionsOK && ((document.ColorMode == ColorModeIndexed && cel.Indexes != nil && len(cel.Indexes) == indexBytes && indexedCacheMatches(cel.Indexes, cel.Pixels, document.Palette)) || (document.ColorMode != ColorModeIndexed && cel.Indexes == nil))
 		layer, layerExists := layerByID(document.Layers, cel.LayerID)
 		tilemapValid := layerExists && validateCelTilemap(document, cel, layer)
 		if !validCelID(cel.ID) || !validCelID(cel.LinkID) || celIDs[cel.ID] || !validCelReference(cel, document) || celRefs[reference] || !dimensionsOK || len(cel.Pixels) != pixelBytes || !indexesValid || !tilemapValid || !validCelOpacity(cel.Opacity) || !validCelZIndex(cel.ZIndex) || !validCelLayerProperties(layer.Role, cel.Opacity, cel.ZIndex) {
 			return fmt.Errorf("invalid cel")
 		}
-		if previous, exists := links[cel.LinkID]; exists && (previous.width != cel.Width || previous.height != cel.Height || !bytes.Equal(previous.pixels, cel.Pixels) || !bytes.Equal(previous.indexes, cel.Indexes) || !equalTilemaps(previous.tilemap, cel.Tilemap)) {
+		if previous, exists := links[cel.LinkID]; exists && (previous.width != cel.Width || previous.height != cel.Height || !bytes.Equal(previous.pixels, cel.Pixels) || !bytes.Equal(previous.indexes, cel.Indexes) || !equalTilemaps(previous.tilemap, cel.Tilemap) || !equalTerrainMaps(previous.terrainMap, cel.TerrainMap)) {
 			return fmt.Errorf("invalid cel")
 		}
 		celIDs[cel.ID] = true
 		celRefs[reference] = true
 		if _, exists := links[cel.LinkID]; !exists {
-			links[cel.LinkID] = celLink{width: cel.Width, height: cel.Height, pixels: cel.Pixels, indexes: cel.Indexes, tilemap: cel.Tilemap}
+			links[cel.LinkID] = celLink{width: cel.Width, height: cel.Height, pixels: cel.Pixels, indexes: cel.Indexes, tilemap: cel.Tilemap, terrainMap: cel.TerrainMap}
 		}
 	}
 	return nil
@@ -769,7 +1064,7 @@ func validateMetadata(document Document) error {
 		}
 	}
 	layers, frames := map[string]Layer{}, map[string]bool{}
-	tilesets, err := validateTilesets(document.Tilesets, document.ColorMode)
+	tilesets, err := validateTilesets(document.Tilesets, document.ColorMode, document.Palette)
 	if err != nil {
 		return err
 	}
@@ -816,11 +1111,12 @@ type celReference struct {
 }
 
 type celLink struct {
-	width   int
-	height  int
-	pixels  []byte
-	indexes []byte
-	tilemap *TilemapData
+	width      int
+	height     int
+	pixels     []byte
+	indexes    []byte
+	tilemap    *TilemapData
+	terrainMap *TerrainMapData
 }
 
 func layerByID(layers []Layer, id string) (Layer, bool) {
@@ -836,18 +1132,29 @@ func equalTilemaps(left, right *TilemapData) bool {
 	if left == nil || right == nil {
 		return left == right
 	}
-	return left.Columns == right.Columns && left.Rows == right.Rows && bytes.Equal(left.Tiles, right.Tiles)
+	return left.Columns == right.Columns && left.Rows == right.Rows && left.GridOffset == right.GridOffset && bytes.Equal(left.Tiles, right.Tiles)
+}
+
+func equalTerrainMaps(left, right *TerrainMapData) bool {
+	if left == nil || right == nil {
+		return left == right
+	}
+	return left.Columns == right.Columns && left.Rows == right.Rows && left.Seed == right.Seed && bytes.Equal(left.Terrains, right.Terrains)
 }
 
 func validateCelTilemap(document Document, cel Cel, layer Layer) bool {
 	if layer.Kind != LayerKindTilemap {
-		return cel.Tilemap == nil
+		return cel.Tilemap == nil && cel.TerrainMap == nil
 	}
 	if cel.Tilemap == nil {
 		return false
 	}
 	tileset, exists := findTileset(document.Tilesets, layer.TilesetID)
-	if !exists || cel.Tilemap.Columns != (cel.Width+tileset.TileWidth-1)/tileset.TileWidth || cel.Tilemap.Rows != (cel.Height+tileset.TileHeight-1)/tileset.TileHeight || cel.Tilemap.Columns <= 0 || cel.Tilemap.Rows <= 0 {
+	if !exists || !validTilemapGridOffset(*cel.Tilemap, tileset.Grid) {
+		return false
+	}
+	tileset = tilesetForTilemap(tileset, *cel.Tilemap)
+	if !validTilemapGeometry(cel.Width, cel.Height, *cel.Tilemap, tileset) {
 		return false
 	}
 	if len(cel.Tilemap.Tiles) != cel.Tilemap.Columns*cel.Tilemap.Rows*4 || len(cel.Tilemap.Tiles) > maxTilemapBytes {
@@ -866,8 +1173,32 @@ func validateCelTilemap(document Document, cel Cel, layer Layer) bool {
 			return false
 		}
 	}
+	if cel.TerrainMap != nil {
+		if cel.TerrainMap.Columns != cel.Tilemap.Columns || cel.TerrainMap.Rows != cel.Tilemap.Rows || len(cel.TerrainMap.Terrains) != cel.TerrainMap.Columns*cel.TerrainMap.Rows*2 || len(cel.TerrainMap.Terrains) > maxTerrainMapBytes {
+			return false
+		}
+		for offset := 0; offset < len(cel.TerrainMap.Terrains); offset += 2 {
+			terrainID := int(binary.LittleEndian.Uint16(cel.TerrainMap.Terrains[offset : offset+2]))
+			if terrainID != terrainUnspecifiedID && terrainID != terrainEmptyID && !terrainDefinitionExists(tileset.Terrains, terrainID) {
+				return false
+			}
+		}
+		expectedTilemap := renderTerrainTilemap(*cel.TerrainMap, tileset)
+		if !bytes.Equal(expectedTilemap, cel.Tilemap.Tiles) {
+			return false
+		}
+	}
 	rendered := renderTilemapCache(cel.Width, cel.Height, *cel.Tilemap, tileset)
 	return bytes.Equal(rendered, cel.Pixels)
+}
+
+func terrainDefinitionExists(definitions []TerrainDefinition, id int) bool {
+	for _, definition := range definitions {
+		if definition.ID == id {
+			return true
+		}
+	}
+	return false
 }
 
 func findTileset(tilesets []Tileset, id string) (Tileset, bool) {
@@ -880,46 +1211,478 @@ func findTileset(tilesets []Tileset, id string) (Tileset, bool) {
 }
 
 func renderTilemapCache(width, height int, tilemap TilemapData, tileset Tileset) []byte {
+	tileset = tilesetForTilemap(tileset, tilemap)
 	output := make([]byte, width*height*4)
 	tiles := make(map[int]Tile, len(tileset.Tiles))
 	for _, tile := range tileset.Tiles {
 		tiles[tile.ID] = tile
 	}
-	for cellY := 0; cellY < tilemap.Rows; cellY++ {
-		for cellX := 0; cellX < tilemap.Columns; cellX++ {
-			value := binary.LittleEndian.Uint32(tilemap.Tiles[(cellY*tilemap.Columns+cellX)*4:])
-			tile, exists := tiles[int(value&tileIndexMask)]
-			if !exists || value&tileIndexMask == 0 {
+	layout := tilemapLayoutFor(tileset, tilemap.Columns, tilemap.Rows)
+	cells := make([]terrainCell, 0, tilemap.Columns*tilemap.Rows)
+	for row := 0; row < tilemap.Rows; row++ {
+		for column := 0; column < tilemap.Columns; column++ {
+			cells = append(cells, terrainCell{column: column, row: row})
+		}
+	}
+	sort.SliceStable(cells, func(left, right int) bool {
+		return tilemapCellComesBefore(tileset, layout, cells[left], cells[right])
+	})
+	for _, cell := range cells {
+		cellIndex := (cell.row*tilemap.Columns + cell.column) * 4
+		value := binary.LittleEndian.Uint32(tilemap.Tiles[cellIndex:])
+		tile, exists := tiles[int(value&tileIndexMask)]
+		if !exists || value&tileIndexMask == 0 {
+			continue
+		}
+		originX, originY := tilemapImageOrigin(tileset, layout, cell)
+		startX, startY := int(math.Round(originX)), int(math.Round(originY))
+		for y := 0; y < tileset.TileHeight; y++ {
+			targetY := startY + y
+			if targetY < 0 || targetY >= height {
 				continue
 			}
-			for y := 0; y < tileset.TileHeight; y++ {
-				targetY := cellY*tileset.TileHeight + y
-				if targetY < 0 || targetY >= height {
+			for x := 0; x < tileset.TileWidth; x++ {
+				targetX := startX + x
+				if targetX < 0 || targetX >= width {
 					continue
 				}
-				for x := 0; x < tileset.TileWidth; x++ {
-					targetX := cellX*tileset.TileWidth + x
-					if targetX < 0 || targetX >= width {
-						continue
-					}
-					sourceX, sourceY := x, y
-					if value&tileFlipDiagonal != 0 {
-						sourceX, sourceY = sourceY, sourceX
-					}
-					if value&tileFlipX != 0 {
-						sourceX = tileset.TileWidth - 1 - sourceX
-					}
-					if value&tileFlipY != 0 {
-						sourceY = tileset.TileHeight - 1 - sourceY
-					}
-					sourceIndex := (sourceY*tileset.TileWidth + sourceX) * 4
-					targetIndex := (targetY*width + targetX) * 4
-					copy(output[targetIndex:targetIndex+4], tile.Pixels[sourceIndex:sourceIndex+4])
+				sourceX, sourceY := x, y
+				if value&tileFlipDiagonal != 0 {
+					sourceX, sourceY = sourceY, sourceX
 				}
+				if value&tileFlipX != 0 {
+					sourceX = tileset.TileWidth - 1 - sourceX
+				}
+				if value&tileFlipY != 0 {
+					sourceY = tileset.TileHeight - 1 - sourceY
+				}
+				sourceIndex := (sourceY*tileset.TileWidth + sourceX) * 4
+				targetIndex := (targetY*width + targetX) * 4
+				if tileset.Grid.Kind == TileGridOrthogonal {
+					copy(output[targetIndex:targetIndex+4], tile.Pixels[sourceIndex:sourceIndex+4])
+					continue
+				}
+				sourceAlpha := tile.Pixels[sourceIndex+3]
+				if sourceAlpha == 0 {
+					continue
+				}
+				if tile.Indexes != nil {
+					copy(output[targetIndex:targetIndex+4], tile.Pixels[sourceIndex:sourceIndex+4])
+					continue
+				}
+				targetAlpha := output[targetIndex+3]
+				if sourceAlpha == 255 || targetAlpha == 0 {
+					copy(output[targetIndex:targetIndex+4], tile.Pixels[sourceIndex:sourceIndex+4])
+					continue
+				}
+				sa, da := int64(sourceAlpha), int64(targetAlpha)
+				aNumerator := sa*255 + da*(255-sa)
+				for channel := 0; channel < 3; channel++ {
+					source := int64(tile.Pixels[sourceIndex+channel])
+					destination := int64(output[targetIndex+channel])
+					numerator := source*sa*255 + destination*da*(255-sa)
+					output[targetIndex+channel] = byte(math.Floor(float64(numerator)/float64(aNumerator) + 0.5))
+				}
+				output[targetIndex+3] = byte(math.Floor(float64(aNumerator)/255 + 0.5))
 			}
 		}
 	}
 	return output
+}
+
+func validTilemapGeometry(width, height int, tilemap TilemapData, tileset Tileset) bool {
+	if !validTilemapGridOffset(tilemap, tileset.Grid) {
+		return false
+	}
+	tileset = tilesetForTilemap(tileset, tilemap)
+	if tilemap.Columns <= 0 || tilemap.Rows <= 0 || tileset.TileWidth <= 0 || tileset.TileHeight <= 0 {
+		return false
+	}
+	if tileset.Grid.Kind == TileGridOrthogonal {
+		return tilemap.Columns == (width+tileset.TileWidth-1)/tileset.TileWidth && tilemap.Rows == (height+tileset.TileHeight-1)/tileset.TileHeight
+	}
+	expectedWidth, expectedHeight := tilemapPixelSize(tileset, tilemap.Columns, tilemap.Rows)
+	return width == expectedWidth && height == expectedHeight
+}
+
+func validTilemapGridOffset(tilemap TilemapData, grid TilesetGrid) bool {
+	if tilemap.GridOffset == "" {
+		return true
+	}
+	if grid.Kind != TileGridHexagonal {
+		return false
+	}
+	if grid.Orientation == "pointy" {
+		return tilemap.GridOffset == "odd-r" || tilemap.GridOffset == "even-r"
+	}
+	return tilemap.GridOffset == "odd-q" || tilemap.GridOffset == "even-q"
+}
+
+func tilesetForTilemap(tileset Tileset, tilemap TilemapData) Tileset {
+	if tilemap.GridOffset != "" && tileset.Grid.Kind == TileGridHexagonal {
+		tileset.Grid.Offset = tilemap.GridOffset
+	}
+	return tileset
+}
+
+type tilemapLayout struct {
+	offsetX float64
+	offsetY float64
+}
+
+func tilemapPixelSize(tileset Tileset, columns, rows int) (int, int) {
+	if columns <= 0 || rows <= 0 {
+		return 0, 0
+	}
+	if tileset.Grid.Kind == TileGridOrthogonal {
+		return columns * tileset.TileWidth, rows * tileset.TileHeight
+	}
+	layout := tilemapLayoutFor(tileset, columns, rows)
+	maxX, maxY := 0.0, 0.0
+	for _, cell := range tilemapBoundsCells(tileset, columns, rows) {
+		originX, originY := tilemapImageOrigin(tileset, layout, cell)
+		if originX+float64(tileset.TileWidth) > maxX {
+			maxX = originX + float64(tileset.TileWidth)
+		}
+		if originY+float64(tileset.TileHeight) > maxY {
+			maxY = originY + float64(tileset.TileHeight)
+		}
+	}
+	return int(math.Ceil(maxX)), int(math.Ceil(maxY))
+}
+
+func tilemapLayoutFor(tileset Tileset, columns, rows int) tilemapLayout {
+	if tileset.Grid.Kind == TileGridOrthogonal {
+		return tilemapLayout{}
+	}
+	minX, minY := math.Inf(1), math.Inf(1)
+	for _, cell := range tilemapBoundsCells(tileset, columns, rows) {
+		x, y := tilemapBaseImageOrigin(tileset, cell)
+		if x < minX {
+			minX = x
+		}
+		if y < minY {
+			minY = y
+		}
+	}
+	return tilemapLayout{offsetX: -minX, offsetY: -minY}
+}
+
+func tilemapCornerCells(columns, rows int) []terrainCell {
+	return []terrainCell{
+		{column: 0, row: 0},
+		{column: columns - 1, row: 0},
+		{column: 0, row: rows - 1},
+		{column: columns - 1, row: rows - 1},
+	}
+}
+
+func tilemapBoundsCells(tileset Tileset, columns, rows int) []terrainCell {
+	if tileset.Grid.Kind != TileGridHexagonal {
+		return tilemapCornerCells(columns, rows)
+	}
+	columnCandidates := tilemapBoundaryIndices(columns)
+	rowCandidates := tilemapBoundaryIndices(rows)
+	cells := make([]terrainCell, 0, len(columnCandidates)*len(rowCandidates))
+	for _, row := range rowCandidates {
+		for _, column := range columnCandidates {
+			cells = append(cells, terrainCell{column: column, row: row})
+		}
+	}
+	return cells
+}
+
+func tilemapBoundaryIndices(size int) []int {
+	if size <= 0 {
+		return nil
+	}
+	if size <= 4 {
+		indices := make([]int, size)
+		for index := range indices {
+			indices[index] = index
+		}
+		return indices
+	}
+	return []int{0, 1, size - 2, size - 1}
+}
+
+func tilemapImageOrigin(tileset Tileset, layout tilemapLayout, cell terrainCell) (float64, float64) {
+	x, y := tilemapBaseImageOrigin(tileset, cell)
+	return x + layout.offsetX, y + layout.offsetY
+}
+
+func tilemapBaseImageOrigin(tileset Tileset, cell terrainCell) (float64, float64) {
+	switch tileset.Grid.Kind {
+	case TileGridOrthogonal:
+		return float64(cell.column) * float64(tileset.TileWidth), float64(cell.row) * float64(tileset.TileHeight)
+	case TileGridIsometric:
+		cellWidth, cellHeight := float64(tileset.Grid.CellWidth), float64(tileset.Grid.CellHeight)
+		return float64(cell.column-cell.row)*cellWidth/2 - float64(tileset.Grid.AnchorX), float64(cell.column+cell.row)*cellHeight/2 + cellHeight - float64(tileset.Grid.AnchorY)
+	case TileGridHexagonal:
+		width, height := float64(tileset.TileWidth), float64(tileset.TileHeight)
+		axial := offsetToAxial(tileset.Grid, cell)
+		if tileset.Grid.Orientation == "pointy" {
+			return width * (float64(axial.column) + float64(axial.row)/2), height * 0.75 * float64(axial.row)
+		}
+		return width * 0.75 * float64(axial.column), height * (float64(axial.row) + float64(axial.column)/2)
+	default:
+		return 0, 0
+	}
+}
+
+func tilemapCellComesBefore(tileset Tileset, layout tilemapLayout, left, right terrainCell) bool {
+	if tileset.Grid.Kind == TileGridIsometric {
+		leftDepth := left.column + left.row
+		rightDepth := right.column + right.row
+		if leftDepth != rightDepth {
+			return leftDepth < rightDepth
+		}
+	} else if tileset.Grid.Kind == TileGridHexagonal {
+		_, leftY := tilemapImageOrigin(tileset, layout, left)
+		_, rightY := tilemapImageOrigin(tileset, layout, right)
+		if leftY != rightY {
+			return leftY < rightY
+		}
+	}
+	if left.row != right.row {
+		return left.row < right.row
+	}
+	return left.column < right.column
+}
+
+type terrainCell struct {
+	column int
+	row    int
+}
+
+func renderTerrainTilemap(terrainMap TerrainMapData, tileset Tileset) []byte {
+	output := make([]byte, terrainMap.Columns*terrainMap.Rows*4)
+	for row := 0; row < terrainMap.Rows; row++ {
+		for column := 0; column < terrainMap.Columns; column++ {
+			terrainID := int(binary.LittleEndian.Uint16(terrainMap.Terrains[(row*terrainMap.Columns+column)*2:]))
+			value := resolveTerrainTile(terrainMap, tileset.Terrains, tileset.Grid, column, row, terrainID)
+			binary.LittleEndian.PutUint32(output[(row*terrainMap.Columns+column)*4:], value)
+		}
+	}
+	return output
+}
+
+func resolveTerrainTile(terrainMap TerrainMapData, definitions []TerrainDefinition, grid TilesetGrid, column, row, terrainID int) uint32 {
+	if terrainID == terrainUnspecifiedID || terrainID == terrainEmptyID {
+		return 0
+	}
+	definition, exists := findTerrainDefinition(definitions, terrainID)
+	if !exists {
+		return 0
+	}
+	mask := terrainMaskAt(terrainMap, definition, grid, column, row)
+	rule, exists := findTerrainRule(definition.Rules, mask)
+	if !exists {
+		return 0
+	}
+	return chooseTerrainCandidate(rule.Candidates, terrainMap.Seed, column, row)
+}
+
+func findTerrainDefinition(definitions []TerrainDefinition, id int) (TerrainDefinition, bool) {
+	for _, definition := range definitions {
+		if definition.ID == id {
+			return definition, true
+		}
+	}
+	return TerrainDefinition{}, false
+}
+
+func terrainMaskAt(terrainMap TerrainMapData, definition TerrainDefinition, grid TilesetGrid, column, row int) uint32 {
+	mask := uint32(0)
+	for index, neighbor := range terrainNeighbors(grid, definition.NeighborMode, column, row) {
+		resolved, boundary := resolveTerrainBoundary(terrainMap, definition.Boundary, neighbor)
+		if boundary == terrainBoundarySame {
+			mask |= uint32(1) << index
+			continue
+		}
+		if boundary == terrainBoundaryOutside {
+			continue
+		}
+		neighborID := int(binary.LittleEndian.Uint16(terrainMap.Terrains[(resolved.row*terrainMap.Columns+resolved.column)*2:]))
+		if neighborID == definition.ID {
+			mask |= uint32(1) << index
+		}
+	}
+	if definition.NeighborMode == TerrainNeighborBlob8 {
+		return normalizeBlobMask(mask)
+	}
+	return mask
+}
+
+// normalizeBlobMask removes diagonal blob8 bits that are not supported by
+// both adjoining cardinal neighbors. Bits are ordered N, NE, E, SE, S, SW, W, NW.
+func normalizeBlobMask(mask uint32) uint32 {
+	normalized := mask
+	for _, corner := range []uint{1, 3, 5, 7} {
+		edges := (uint32(1) << (corner - 1)) | (uint32(1) << ((corner + 1) % 8))
+		if mask&edges != edges {
+			normalized &^= uint32(1) << corner
+		}
+	}
+	return normalized
+}
+
+type terrainBoundaryResult uint8
+
+const (
+	terrainBoundaryInside terrainBoundaryResult = iota
+	terrainBoundarySame
+	terrainBoundaryOutside
+)
+
+func resolveTerrainBoundary(terrainMap TerrainMapData, boundary TerrainBoundary, cell terrainCell) (terrainCell, terrainBoundaryResult) {
+	if cell.column >= 0 && cell.column < terrainMap.Columns && cell.row >= 0 && cell.row < terrainMap.Rows {
+		return cell, terrainBoundaryInside
+	}
+	switch boundary {
+	case TerrainBoundarySame:
+		return cell, terrainBoundarySame
+	case TerrainBoundaryWrap:
+		cell.column = terrainModulo(cell.column, terrainMap.Columns)
+		cell.row = terrainModulo(cell.row, terrainMap.Rows)
+		return cell, terrainBoundaryInside
+	default:
+		return cell, terrainBoundaryOutside
+	}
+}
+
+func terrainNeighbors(grid TilesetGrid, mode TerrainNeighborMode, column, row int) []terrainCell {
+	if mode == TerrainNeighborBlob8 {
+		return []terrainCell{
+			{column: column, row: row - 1},
+			{column: column + 1, row: row - 1},
+			{column: column + 1, row: row},
+			{column: column + 1, row: row + 1},
+			{column: column, row: row + 1},
+			{column: column - 1, row: row + 1},
+			{column: column - 1, row: row},
+			{column: column - 1, row: row - 1},
+		}
+	}
+	if mode == TerrainNeighborEdge6 {
+		axial := offsetToAxial(grid, terrainCell{column: column, row: row})
+		directions := [...]terrainCell{{column: 1, row: 0}, {column: 1, row: -1}, {column: 0, row: -1}, {column: -1, row: 0}, {column: -1, row: 1}, {column: 0, row: 1}}
+		neighbors := make([]terrainCell, 0, len(directions))
+		for _, direction := range directions {
+			neighbors = append(neighbors, axialToOffset(grid, terrainCell{column: axial.column + direction.column, row: axial.row + direction.row}))
+		}
+		return neighbors
+	}
+	return []terrainCell{
+		{column: column, row: row - 1},
+		{column: column + 1, row: row},
+		{column: column, row: row + 1},
+		{column: column - 1, row: row},
+	}
+}
+
+func offsetToAxial(grid TilesetGrid, cell terrainCell) terrainCell {
+	parity := terrainParity(cell.row)
+	if grid.Kind == TileGridHexagonal && (grid.Offset == "odd-r" || grid.Offset == "even-r") {
+		if grid.Offset == "odd-r" {
+			return terrainCell{column: cell.column - (cell.row-parity)/2, row: cell.row}
+		}
+		return terrainCell{column: cell.column - (cell.row+parity)/2, row: cell.row}
+	}
+	parity = terrainParity(cell.column)
+	if grid.Offset == "odd-q" {
+		return terrainCell{column: cell.column, row: cell.row - (cell.column-parity)/2}
+	}
+	return terrainCell{column: cell.column, row: cell.row - (cell.column+parity)/2}
+}
+
+func axialToOffset(grid TilesetGrid, cell terrainCell) terrainCell {
+	if grid.Offset == "odd-r" {
+		return terrainCell{column: cell.column + (cell.row-terrainParity(cell.row))/2, row: cell.row}
+	}
+	if grid.Offset == "even-r" {
+		return terrainCell{column: cell.column + (cell.row+terrainParity(cell.row))/2, row: cell.row}
+	}
+	if grid.Offset == "odd-q" {
+		return terrainCell{column: cell.column, row: cell.row + (cell.column-terrainParity(cell.column))/2}
+	}
+	return terrainCell{column: cell.column, row: cell.row + (cell.column+terrainParity(cell.column))/2}
+}
+
+func terrainParity(value int) int {
+	modulo := value % 2
+	if modulo < 0 {
+		return -modulo
+	}
+	return modulo
+}
+
+func terrainModulo(value, divisor int) int {
+	result := value % divisor
+	if result < 0 {
+		result += divisor
+	}
+	return result
+}
+
+func findTerrainRule(rules []TerrainRule, mask uint32) (TerrainRule, bool) {
+	var fallback TerrainRule
+	fallbackFound := false
+	for _, rule := range rules {
+		if rule.Mask == mask {
+			return rule, true
+		}
+		if !fallbackFound || rule.Mask < fallback.Mask {
+			fallback = rule
+			fallbackFound = true
+		}
+	}
+	if !fallbackFound {
+		return TerrainRule{}, false
+	}
+	for _, rule := range rules {
+		if rule.Mask == 0 {
+			return rule, true
+		}
+	}
+	return fallback, true
+}
+
+func chooseTerrainCandidate(candidates []TerrainCandidate, seed int64, column, row int) uint32 {
+	totalWeight := float64(0)
+	for _, candidate := range candidates {
+		totalWeight += candidate.Weight
+	}
+	if math.IsNaN(totalWeight) || math.IsInf(totalWeight, 0) || totalWeight <= 0 {
+		return 0
+	}
+	target := float64(terrainHash(seed, column, row)) / 4294967296.0 * totalWeight
+	for _, candidate := range candidates {
+		if target < candidate.Weight {
+			return uint32(candidate.TileID) | uint32(candidate.Flags)
+		}
+		target -= candidate.Weight
+	}
+	last := candidates[len(candidates)-1]
+	return uint32(last.TileID) | uint32(last.Flags)
+}
+
+func terrainHash(seed int64, column, row int) uint32 {
+	hash := uint32(2166136261) ^ uint32(seed)
+	hash = hashTerrainInteger(hash, column)
+	hash = hashTerrainInteger(hash, row)
+	hash ^= hash >> 16
+	hash *= uint32(0x85ebca6b)
+	hash ^= hash >> 13
+	hash *= uint32(0xc2b2ae35)
+	hash ^= hash >> 16
+	return hash
+}
+
+func hashTerrainInteger(hash uint32, value int) uint32 {
+	hash ^= uint32(value)
+	hash *= uint32(0x01000193)
+	return hash
 }
 
 func expectedPixelBytes(width, height int) (int, bool) {
@@ -965,10 +1728,10 @@ func validColorProfile(profile ColorProfile) bool {
 	}
 }
 
-func validateTilesets(tilesets []Tileset, colorMode string) (map[string]bool, error) {
+func validateTilesets(tilesets []Tileset, colorMode string, palette Palette) (map[string]bool, error) {
 	ids := make(map[string]bool, len(tilesets))
 	for _, tileset := range tilesets {
-		if !validCelID(tileset.ID) || ids[tileset.ID] || strings.TrimSpace(tileset.Name) == "" || tileset.TileWidth <= 0 || tileset.TileWidth > maxCanvasDimension || tileset.TileHeight <= 0 || tileset.TileHeight > maxCanvasDimension || tileset.Tiles == nil {
+		if !validCelID(tileset.ID) || ids[tileset.ID] || strings.TrimSpace(tileset.Name) == "" || tileset.TileWidth <= 0 || tileset.TileWidth > maxCanvasDimension || tileset.TileHeight <= 0 || tileset.TileHeight > maxCanvasDimension || !validTilesetGridForTileSize(tileset.Grid, tileset.TileWidth, tileset.TileHeight) || tileset.Terrains == nil || tileset.Tiles == nil {
 			return nil, fmt.Errorf("invalid tileset")
 		}
 		ids[tileset.ID] = true
@@ -976,14 +1739,131 @@ func validateTilesets(tilesets []Tileset, colorMode string) (map[string]bool, er
 		for _, tile := range tileset.Tiles {
 			pixelBytes, dimensionsOK := expectedPixelBytes(tileset.TileWidth, tileset.TileHeight)
 			indexBytes, indexDimensionsOK := expectedIndexBytes(tileset.TileWidth, tileset.TileHeight)
-			indexesValid := indexDimensionsOK && ((colorMode == ColorModeIndexed && tile.Indexes != nil && len(tile.Indexes) == indexBytes) || (colorMode != ColorModeIndexed && tile.Indexes == nil))
+			indexesValid := indexDimensionsOK && ((colorMode == ColorModeIndexed && tile.Indexes != nil && len(tile.Indexes) == indexBytes && indexedCacheMatches(tile.Indexes, tile.Pixels, palette)) || (colorMode != ColorModeIndexed && tile.Indexes == nil))
 			if tile.ID <= 0 || uint64(tile.ID) > uint64(tileIndexMask) || tileIDs[tile.ID] || !dimensionsOK || len(tile.Pixels) != pixelBytes || !indexesValid {
 				return nil, fmt.Errorf("invalid tileset")
 			}
 			tileIDs[tile.ID] = true
 		}
+		if !validateTerrainDefinitions(tileset.Terrains, tileset.Grid, tileIDs) {
+			return nil, fmt.Errorf("invalid tileset")
+		}
 	}
 	return ids, nil
+}
+
+func indexedCacheMatches(indexes, pixels []byte, palette Palette) bool {
+	if len(pixels) != len(indexes)*4 {
+		return false
+	}
+	for pixel, paletteIndex := range indexes {
+		if int(paletteIndex) >= len(palette.Colors) {
+			return false
+		}
+		value := palette.Colors[paletteIndex]
+		rgb, err := strconv.ParseUint(value[1:7], 16, 24)
+		if err != nil {
+			return false
+		}
+		alpha := uint64(255)
+		if len(value) == 9 {
+			alpha, err = strconv.ParseUint(value[7:9], 16, 8)
+			if err != nil {
+				return false
+			}
+		}
+		if int(paletteIndex) == palette.TransparentIndex {
+			alpha = 0
+		}
+		offset := pixel * 4
+		if pixels[offset+3] != byte(alpha) {
+			return false
+		}
+		if alpha != 0 && (pixels[offset] != byte(rgb>>16) || pixels[offset+1] != byte(rgb>>8) || pixels[offset+2] != byte(rgb)) {
+			return false
+		}
+	}
+	return true
+}
+
+func validateTerrainDefinitions(definitions []TerrainDefinition, grid TilesetGrid, tileIDs map[int]bool) bool {
+	ids := make(map[int]bool, len(definitions))
+	for _, definition := range definitions {
+		if definition.ID <= 0 || definition.ID > maxTerrainID || ids[definition.ID] || strings.TrimSpace(definition.Name) == "" || !validHexColor(definition.Color) || !validTerrainNeighborMode(definition.NeighborMode, grid) || !validTerrainBoundary(definition.Boundary) || definition.Rules == nil {
+			return false
+		}
+		ids[definition.ID] = true
+		masks := make(map[uint32]bool, len(definition.Rules))
+		maximumMask := terrainMaximumMask(definition.NeighborMode)
+		for _, rule := range definition.Rules {
+			if (rule.decoded && !rule.maskPresent) || rule.Mask > maximumMask || (definition.NeighborMode == TerrainNeighborBlob8 && normalizeBlobMask(rule.Mask) != rule.Mask) || masks[rule.Mask] || len(rule.Candidates) == 0 {
+				return false
+			}
+			masks[rule.Mask] = true
+			for _, candidate := range rule.Candidates {
+				flags := uint64(candidate.Flags)
+				if (candidate.decoded && !candidate.flagsPresent) || candidate.TileID <= 0 || uint64(candidate.TileID) > uint64(tileIndexMask) || !tileIDs[candidate.TileID] || candidate.Flags < -0x80000000 || candidate.Flags > 0xffffffff || uint32(flags)&^tileFlagMask != 0 || math.IsNaN(candidate.Weight) || math.IsInf(candidate.Weight, 0) || candidate.Weight <= 0 {
+					return false
+				}
+			}
+		}
+	}
+	return true
+}
+
+func validTerrainNeighborMode(mode TerrainNeighborMode, grid TilesetGrid) bool {
+	switch mode {
+	case TerrainNeighborEdge4:
+		return grid.Kind == TileGridOrthogonal || grid.Kind == TileGridIsometric
+	case TerrainNeighborBlob8:
+		return grid.Kind == TileGridOrthogonal
+	case TerrainNeighborEdge6:
+		return grid.Kind == TileGridHexagonal
+	default:
+		return false
+	}
+}
+
+func validTerrainBoundary(boundary TerrainBoundary) bool {
+	return boundary == TerrainBoundaryEmpty || boundary == TerrainBoundarySame || boundary == TerrainBoundaryWrap
+}
+
+func terrainMaximumMask(mode TerrainNeighborMode) uint32 {
+	switch mode {
+	case TerrainNeighborEdge6:
+		return 0x3f
+	case TerrainNeighborBlob8:
+		return 0xff
+	default:
+		return 0x0f
+	}
+}
+
+func validTilesetGrid(grid TilesetGrid) bool {
+	switch grid.Kind {
+	case TileGridOrthogonal:
+		return grid.CellWidth == 0 && grid.CellHeight == 0 && grid.AnchorX == 0 && grid.AnchorY == 0 && grid.Orientation == "" && grid.Offset == ""
+	case TileGridIsometric:
+		return grid.CellWidth > 0 && grid.CellWidth <= maxTilesetGridDimension && grid.CellHeight > 0 && grid.CellHeight <= maxTilesetGridDimension && grid.AnchorX >= 0 && grid.AnchorX <= maxTilesetGridDimension && grid.AnchorY >= 0 && grid.AnchorY <= maxTilesetGridDimension && grid.Orientation == "" && grid.Offset == ""
+	case TileGridHexagonal:
+		if grid.CellWidth != 0 || grid.CellHeight != 0 || grid.AnchorX != 0 || grid.AnchorY != 0 {
+			return false
+		}
+		if grid.Orientation == "pointy" {
+			return grid.Offset == "odd-r" || grid.Offset == "even-r"
+		}
+		if grid.Orientation == "flat" {
+			return grid.Offset == "odd-q" || grid.Offset == "even-q"
+		}
+	}
+	return false
+}
+
+func validTilesetGridForTileSize(grid TilesetGrid, tileWidth, tileHeight int) bool {
+	if !validTilesetGrid(grid) || tileWidth <= 0 || tileHeight <= 0 {
+		return false
+	}
+	return grid.Kind != TileGridIsometric || (grid.AnchorX <= tileWidth && grid.AnchorY <= tileHeight)
 }
 
 func validLayerRole(role LayerRole) bool {
@@ -1171,14 +2051,20 @@ func validateManifest(stored manifest, files map[string]*zip.File) error {
 		return fmt.Errorf("invalid color profile")
 	}
 	placeholderTilesets := make([]Tileset, 0, len(stored.Tilesets))
-	allPaths := make(map[string]bool)
+	allPaths := map[string]bool{"manifest.json": true}
+	if files["thumbnail.png"] != nil {
+		allPaths["thumbnail.png"] = true
+	}
+	if stored.ColorProfile.Path != "" {
+		allPaths[stored.ColorProfile.Path] = true
+	}
 	tilesetIDs := make(map[string]bool, len(stored.Tilesets))
 	for _, storedTileset := range stored.Tilesets {
-		if !validCelID(storedTileset.ID) || tilesetIDs[storedTileset.ID] || strings.TrimSpace(storedTileset.Name) == "" || storedTileset.TileWidth <= 0 || storedTileset.TileWidth > maxCanvasDimension || storedTileset.TileHeight <= 0 || storedTileset.TileHeight > maxCanvasDimension || storedTileset.Tiles == nil {
+		if !validCelID(storedTileset.ID) || tilesetIDs[storedTileset.ID] || strings.TrimSpace(storedTileset.Name) == "" || storedTileset.TileWidth <= 0 || storedTileset.TileWidth > maxCanvasDimension || storedTileset.TileHeight <= 0 || storedTileset.TileHeight > maxCanvasDimension || !validTilesetGridForTileSize(storedTileset.Grid, storedTileset.TileWidth, storedTileset.TileHeight) || storedTileset.Terrains == nil || storedTileset.Tiles == nil {
 			return fmt.Errorf("invalid tileset")
 		}
 		tilesetIDs[storedTileset.ID] = true
-		placeholder := Tileset{ID: storedTileset.ID, Name: storedTileset.Name, TileWidth: storedTileset.TileWidth, TileHeight: storedTileset.TileHeight, Tiles: []Tile{}}
+		placeholder := Tileset{ID: storedTileset.ID, Name: storedTileset.Name, TileWidth: storedTileset.TileWidth, TileHeight: storedTileset.TileHeight, Grid: storedTileset.Grid, Terrains: storedTileset.Terrains, Tiles: []Tile{}}
 		tileIDs := make(map[int]bool, len(storedTileset.Tiles))
 		for _, storedTile := range storedTileset.Tiles {
 			expectedPath := fmt.Sprintf("tilesets/%s/%d.png", storedTileset.ID, storedTile.ID)
@@ -1217,6 +2103,9 @@ func validateManifest(stored manifest, files map[string]*zip.File) error {
 				}
 				return nil
 			}()})
+		}
+		if !validateTerrainDefinitions(storedTileset.Terrains, storedTileset.Grid, tileIDs) {
+			return fmt.Errorf("invalid tileset")
 		}
 		placeholderTilesets = append(placeholderTilesets, placeholder)
 	}
@@ -1269,14 +2158,26 @@ func validateManifest(stored manifest, files map[string]*zip.File) error {
 		file := files[cel.Path]
 		indexFile := files[cel.IndexPath]
 		tilemapFile := files[cel.TilemapPath]
+		terrainMapFile := files[cel.TerrainMapPath]
 		_, dimensionsOK := expectedPixelBytes(cel.Width, cel.Height)
 		expectedTilemapColumns, expectedTilemapRows := 0, 0
+		tilemapGeometryValid := layer.Kind != LayerKindTilemap
 		if layer.Kind == LayerKindTilemap {
 			tileset := placeholderTilesetsByID(placeholderTilesets, layer.TilesetID)
-			expectedTilemapColumns = (cel.Width + tileset.TileWidth - 1) / tileset.TileWidth
-			expectedTilemapRows = (cel.Height + tileset.TileHeight - 1) / tileset.TileHeight
+			expectedTilemapColumns, expectedTilemapRows = cel.TilemapColumns, cel.TilemapRows
+			if tileset.Grid.Kind == TileGridOrthogonal {
+				expectedTilemapColumns = (cel.Width + tileset.TileWidth - 1) / tileset.TileWidth
+				expectedTilemapRows = (cel.Height + tileset.TileHeight - 1) / tileset.TileHeight
+			}
+			tilemapGeometryValid = validTilemapGeometry(cel.Width, cel.Height, TilemapData{Columns: cel.TilemapColumns, Rows: cel.TilemapRows, GridOffset: cel.TilemapGridOffset}, tileset)
 		}
-		if !validCelID(cel.ID) || !validCelID(cel.LinkID) || celIDs[cel.ID] || !layerExists || (layer.Kind != LayerKindImage && layer.Kind != LayerKindTilemap) || !frames[cel.FrameID] || celRefs[reference] || !dimensionsOK || !validCelManifestGeometry(cel) || !validCelOpacity(cel.Opacity) || !validCelZIndex(cel.ZIndex) || !validCelLayerProperties(layer.Role, cel.Opacity, cel.ZIndex) || cel.Path != expectedPath || paths[cel.Path] || cel.IndexPath != expectedIndexPath || (cel.IndexPath != "" && indexPaths[cel.IndexPath]) || cel.TilemapPath != expectedTilemapPath || (layer.Kind == LayerKindTilemap && (cel.TilemapColumns != expectedTilemapColumns || cel.TilemapRows != expectedTilemapRows)) || (layer.Kind != LayerKindTilemap && (cel.TilemapColumns != 0 || cel.TilemapRows != 0)) {
+		expectedTerrainMapPath := ""
+		if layer.Kind == LayerKindTilemap {
+			expectedTerrainMapPath = "terrainmaps/" + cel.ID + ".bin"
+		}
+		terrainMapFieldsValid := (cel.TerrainMapPath == "" && cel.TerrainMapColumns == 0 && cel.TerrainMapRows == 0 && cel.TerrainMapSeed == 0 && !cel.terrainMapSeedPresent) || (layer.Kind == LayerKindTilemap && cel.TerrainMapPath == expectedTerrainMapPath && cel.TerrainMapColumns == expectedTilemapColumns && cel.TerrainMapRows == expectedTilemapRows && cel.terrainMapSeedPresent)
+		offsetFieldsValid := (cel.TilemapGridOffset == "" && !cel.tilemapOffsetPresent) || (layer.Kind == LayerKindTilemap && cel.tilemapOffsetPresent)
+		if !validCelID(cel.ID) || !validCelID(cel.LinkID) || celIDs[cel.ID] || !layerExists || (layer.Kind != LayerKindImage && layer.Kind != LayerKindTilemap) || !frames[cel.FrameID] || celRefs[reference] || !dimensionsOK || !validCelManifestGeometry(cel) || !validCelOpacity(cel.Opacity) || !validCelZIndex(cel.ZIndex) || !validCelLayerProperties(layer.Role, cel.Opacity, cel.ZIndex) || cel.Path != expectedPath || paths[cel.Path] || allPaths[cel.Path] || cel.IndexPath != expectedIndexPath || (cel.IndexPath != "" && (indexPaths[cel.IndexPath] || allPaths[cel.IndexPath])) || cel.TilemapPath != expectedTilemapPath || !tilemapGeometryValid || !offsetFieldsValid || (layer.Kind != LayerKindTilemap && (cel.TilemapColumns != 0 || cel.TilemapRows != 0)) || !terrainMapFieldsValid || (cel.TerrainMapPath != "" && allPaths[cel.TerrainMapPath]) {
 			return fmt.Errorf("invalid cel")
 		}
 		if file == nil {
@@ -1306,7 +2207,28 @@ func validateManifest(stored manifest, files map[string]*zip.File) error {
 				return fmt.Errorf("invalid cel")
 			}
 		}
-		if previous, exists := links[cel.LinkID]; exists && (previous.width != cel.Width || previous.height != cel.Height || previous.tilemap.Columns != cel.TilemapColumns || previous.tilemap.Rows != cel.TilemapRows) {
+		if cel.TerrainMapPath != "" {
+			if terrainMapFile == nil {
+				return fmt.Errorf("project is missing cel terrain map %q", cel.TerrainMapPath)
+			}
+			expectedBytes := expectedTilemapColumns * expectedTilemapRows * 2
+			if terrainMapFile.UncompressedSize64 != uint64(expectedBytes) || terrainMapFile.UncompressedSize64 > uint64(maxTerrainMapBytes) {
+				return fmt.Errorf("cel terrain map %q dimensions do not match manifest", terrainMapFile.Name)
+			}
+		}
+		currentTilemap := (*TilemapData)(nil)
+		if cel.TilemapPath != "" {
+			currentTilemap = &TilemapData{Columns: cel.TilemapColumns, Rows: cel.TilemapRows, GridOffset: cel.TilemapGridOffset}
+		}
+		currentTerrainMap := (*TerrainMapData)(nil)
+		if cel.TerrainMapPath != "" {
+			terrainData, terrainErr := readZipFile(terrainMapFile, maxTerrainMapBytes)
+			if terrainErr != nil {
+				return terrainErr
+			}
+			currentTerrainMap = &TerrainMapData{Columns: cel.TerrainMapColumns, Rows: cel.TerrainMapRows, Seed: cel.TerrainMapSeed, Terrains: terrainData}
+		}
+		if previous, exists := links[cel.LinkID]; exists && (previous.width != cel.Width || previous.height != cel.Height || !equalTilemaps(previous.tilemap, currentTilemap) || !equalTerrainMaps(previous.terrainMap, currentTerrainMap)) {
 			return fmt.Errorf("invalid cel")
 		}
 		celIDs[cel.ID], celRefs[reference], paths[cel.Path], indexPaths[cel.IndexPath] = true, true, true, cel.IndexPath != ""
@@ -1317,8 +2239,16 @@ func validateManifest(stored manifest, files map[string]*zip.File) error {
 		if cel.TilemapPath != "" {
 			allPaths[cel.TilemapPath] = true
 		}
+		if cel.TerrainMapPath != "" {
+			allPaths[cel.TerrainMapPath] = true
+		}
 		if _, exists := links[cel.LinkID]; !exists {
-			links[cel.LinkID] = celLink{width: cel.Width, height: cel.Height, tilemap: &TilemapData{Columns: cel.TilemapColumns, Rows: cel.TilemapRows}}
+			links[cel.LinkID] = celLink{width: cel.Width, height: cel.Height, tilemap: currentTilemap, terrainMap: currentTerrainMap}
+		}
+	}
+	for name := range files {
+		if !allPaths[name] {
+			return fmt.Errorf("invalid project entry %q", name)
 		}
 	}
 	return nil

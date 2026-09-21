@@ -53,7 +53,7 @@ function createIndexedTilemapFixture() {
 }
 
 describe("palette operations", () => {
-  it("relocates transparency once for shared linked buffers and retains appearance, history and v4 data", () => {
+  it("relocates transparency once for shared linked buffers and retains appearance, history and v5 data", () => {
     const document = createDocument({width: 3, height: 1, colorMode: "indexed", palette: ["#00000000", "#ff0000ff", "#00ff0080"]});
     const cel = getCel(document, document.activeLayerId, document.activeFrameId)!;
     cel.indexes!.set([0, 1, 2]);

@@ -35,7 +35,7 @@ func New(dispatch func(context.Context, string, json.RawMessage) (json.RawMessag
 	}
 
 	server := mcp.NewServer(
-		&mcp.Implementation{Name: "pixtorio", Title: "Pixtorio", Version: "v4.0.0"},
+		&mcp.Implementation{Name: "pixtorio", Title: "Pixtorio", Version: "v5.0.0"},
 		&mcp.ServerOptions{Logger: slog.New(slog.NewTextHandler(io.Discard, nil))},
 	)
 
@@ -54,8 +54,8 @@ func New(dispatch func(context.Context, string, json.RawMessage) (json.RawMessag
 			MIMEType: "text/plain",
 			Text: "Keep the Pixtorio desktop open; the stdio process forwards requests to its running editor. " +
 				"Use list_documents before document operations; documentId values are tab IDs and paths must be absolute. " +
-				"Pixtorio projects use strict .pixio v4; read_pixels and read_indexes are bounded to 16384 pixels. " +
-				"Use edit_document with an ordered operations array and type discriminators for layers, sparse Cels, tilesets, tilemaps, tags, slices, guides, and settings. " +
+				"Pixtorio projects use strict .pixio v5; read_pixels and read_indexes are bounded to 16384 pixels. " +
+				"Use edit_document with an ordered operations array and type discriminators for layers, sparse Cels, tilesets, tilemaps, Terrain rules/maps, tags, slices, guides, and settings. " +
 				"get_preview returns a PNG image. Save and export paths are not overwritten unless overwrite is true. " +
 				"Edits ignore the UI selection mask and clear stale selections after success. " +
 				"Busy pointer gestures, drawing, playback, dialogs, text input, or UI saves are rejected; finish them and retry.",
@@ -535,9 +535,10 @@ func editOperationSchemas() []any {
 			"tileId":    boundedIntegerSchema("Tile ID.", 1, 0x1fffffff, nil),
 		}, []string{"type", "tilesetId", "tileId"}),
 		objectSchema(map[string]any{
-			"type":    constStringSchema("set_tile_cells", "Operation type: replace tilemap cell values."),
-			"layerId": stringSchema("Optional tilemap layer ID."),
-			"frameId": stringSchema("Optional frame ID."),
+			"type":          constStringSchema("set_tile_cells", "Operation type: replace tilemap cell values."),
+			"layerId":       stringSchema("Optional tilemap layer ID."),
+			"frameId":       stringSchema("Optional frame ID."),
+			"detachTerrain": booleanSchema("Detach Terrain authority from the complete linked Cel group before changing cells."),
 			"cells": map[string]any{
 				"type": "array", "minItems": 1, "maxItems": maxSetPixels,
 				"items": objectSchema(map[string]any{

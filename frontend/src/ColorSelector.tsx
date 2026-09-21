@@ -1,12 +1,14 @@
-import {useEffect, useRef} from "react";
-import {hexToHsv, hsvToHex, selectorColorAt, tintShadeToneColor, type ColorSelectorMode, type TintShadeToneCell} from "./editor/colorSelector";
+import {useEffect, useRef, useState} from "react";
+import {hexToHsv, hsvToHex, selectorColorAt, tintShadeToneColor, wheelSelectorGeometry, type ColorSelectorMode, type TintShadeToneCell} from "./editor/colorSelector";
 import {hexToRGBA} from "./editor/pixels";
 
-const canvasWidth = 196;
-const canvasHeight = 92;
+const defaultCanvasWidth = 240;
+const defaultCanvasHeight = 112;
+const wheelCanvasHeight = 252;
 
 export function ColorSelector({mode, color, onChange, label}: {mode: ColorSelectorMode; color: string; onChange: (color: string) => void; label: string}) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const [resolutionRevision, setResolutionRevision] = useState(0);
   const variantBaseRef = useRef(color);
   const variantCellRef = useRef<TintShadeToneCell | null>(null);
   const selfUpdateRef = useRef(false);
@@ -20,10 +22,33 @@ export function ColorSelector({mode, color, onChange, label}: {mode: ColorSelect
     variantCellRef.current = null;
   }
   selfUpdateRef.current = false;
+
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const resize = () => {
+      const bounds = canvas.getBoundingClientRect();
+      if (bounds.width < 1 || bounds.height < 1) return;
+      const ratio = Math.max(1, Math.min(3, window.devicePixelRatio || 1));
+      const width = Math.max(1, Math.round(bounds.width * ratio));
+      const height = Math.max(1, Math.round(bounds.height * ratio));
+      if (canvas.width === width && canvas.height === height) return;
+      canvas.width = width;
+      canvas.height = height;
+      setResolutionRevision((value) => value + 1);
+    };
+    resize();
+    if (typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(resize);
+    observer.observe(canvas);
+    return () => observer.disconnect();
+  }, [mode]);
+
   useEffect(() => {
     const canvas = canvasRef.current;
     const context = canvas?.getContext("2d");
     if (!canvas || !context) return;
+    const geometry = mode === "wheel" ? wheelSelectorGeometry(canvas.width, canvas.height) : null;
     const image = context.createImageData(canvas.width, canvas.height);
     for (let y = 0; y < canvas.height; y += 1) {
       for (let x = 0; x < canvas.width; x += 1) {
@@ -34,25 +59,35 @@ export function ColorSelector({mode, color, onChange, label}: {mode: ColorSelect
           continue;
         }
         const rgba = hexToRGBA(selected);
-        image.data.set([rgba[0], rgba[1], rgba[2], 255], offset);
+        let alpha = 255;
+        if (geometry && y < geometry.valueStripTop) {
+          const distance = Math.hypot(x - geometry.centerX, y - geometry.centerY);
+          alpha = Math.round(Math.max(0, Math.min(1, geometry.radius - distance + 0.5)) * 255);
+        }
+        image.data.set([rgba[0], rgba[1], rgba[2], alpha], offset);
       }
     }
     context.clearRect(0, 0, canvas.width, canvas.height);
     context.putImageData(image, 0, 0);
 
     const hsv = hexToHsv(color);
+    const displayScale = canvas.width / Math.max(1, canvas.getBoundingClientRect().width || defaultCanvasWidth);
     if (mode === "spectrum") {
-      drawMarker(context, hsv.s * (canvas.width - 1), (1 - hsv.v) * (canvas.height - 1));
-    } else if (mode === "wheel") {
-      const strip = Math.min(14, Math.max(8, Math.floor(canvas.height * 0.16)));
-      const wheelHeight = canvas.height - strip - 2;
-      const radius = Math.max(1, Math.min(canvas.width, wheelHeight) / 2 - 1);
+      drawMarker(context, hsv.s * (canvas.width - 1), (1 - hsv.v) * (canvas.height - 1), displayScale);
+    } else if (geometry) {
       const radians = hsv.h * Math.PI / 180;
-      drawMarker(context, canvas.width / 2 + Math.cos(radians) * radius * hsv.s, wheelHeight / 2 + Math.sin(radians) * radius * hsv.s);
+      drawMarker(context, geometry.centerX + Math.cos(radians) * geometry.radius * hsv.s, geometry.centerY + Math.sin(radians) * geometry.radius * hsv.s, displayScale);
       context.save();
+      context.beginPath();
+      context.arc(geometry.centerX, geometry.centerY, geometry.radius, 0, Math.PI * 2);
+      context.strokeStyle = "rgb(255 255 255 / 28%)";
+      context.lineWidth = Math.max(1, displayScale);
+      context.stroke();
       context.strokeStyle = hsv.v > 0.5 ? "#151619" : "#ffffff";
-      context.lineWidth = 1;
-      context.strokeRect(Math.round(hsv.v * (canvas.width - 1)) - 2.5, canvas.height - strip, 5, strip - 1);
+      context.lineWidth = Math.max(1, displayScale);
+      const indicatorWidth = Math.max(4, Math.round(4 * displayScale));
+      const indicatorX = Math.round(hsv.v * (canvas.width - 1)) - indicatorWidth / 2;
+      context.strokeRect(indicatorX, geometry.valueStripTop, indicatorWidth, Math.max(1, geometry.valueStripHeight - 1));
       context.restore();
     } else if (variantCellRef.current) {
       const cellWidth = canvas.width / 7;
@@ -66,7 +101,7 @@ export function ColorSelector({mode, color, onChange, label}: {mode: ColorSelect
       context.strokeRect(variantCellRef.current.column * cellWidth + 2.5, variantCellRef.current.row * cellHeight + 2.5, cellWidth - 5, cellHeight - 5);
       context.restore();
     }
-  }, [color, mode]);
+  }, [color, mode, resolutionRevision]);
 
   const update = (event: React.PointerEvent<HTMLCanvasElement>) => {
     const rect = event.currentTarget.getBoundingClientRect();
@@ -111,28 +146,29 @@ export function ColorSelector({mode, color, onChange, label}: {mode: ColorSelect
   return <canvas
     ref={canvasRef}
     className={`color-selector-canvas is-${mode}`}
-    width={canvasWidth}
-    height={canvasHeight}
+    width={defaultCanvasWidth}
+    height={mode === "wheel" ? wheelCanvasHeight : defaultCanvasHeight}
     tabIndex={0}
     role="slider"
     aria-label={label}
+    aria-valuetext={color.toUpperCase()}
     onKeyDown={keyboard}
     onPointerDown={(event) => { event.currentTarget.setPointerCapture(event.pointerId); update(event); }}
     onPointerMove={(event) => { if (event.currentTarget.hasPointerCapture(event.pointerId)) update(event); }}
   />;
 }
 
-function drawMarker(context: CanvasRenderingContext2D, x: number, y: number) {
+function drawMarker(context: CanvasRenderingContext2D, x: number, y: number, scale: number) {
   context.save();
   context.beginPath();
-  context.arc(x, y, 3.5, 0, Math.PI * 2);
+  context.arc(x, y, 3.5 * scale, 0, Math.PI * 2);
   context.strokeStyle = "#ffffff";
-  context.lineWidth = 2;
+  context.lineWidth = 2 * scale;
   context.stroke();
   context.beginPath();
-  context.arc(x, y, 4.5, 0, Math.PI * 2);
+  context.arc(x, y, 4.5 * scale, 0, Math.PI * 2);
   context.strokeStyle = "#202124";
-  context.lineWidth = 1;
+  context.lineWidth = Math.max(1, scale);
   context.stroke();
   context.restore();
 }

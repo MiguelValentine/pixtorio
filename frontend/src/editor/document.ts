@@ -1,4 +1,7 @@
-export const documentFormatVersion = 4 as const;
+import type {TerrainDefinition, TerrainMapData} from "./terrain";
+import {tilemapPixelSize} from "./tilemapGeometry";
+
+export const documentFormatVersion = 5 as const;
 
 export type ColorMode = "rgba" | "grayscale" | "indexed" | "bitmap";
 export type LayerKind = "image" | "group" | "tilemap";
@@ -39,17 +42,36 @@ export interface Tile {
   indexes?: Uint8Array;
 }
 
+export type TilesetGrid =
+  | {kind: "orthogonal"}
+  | {
+    kind: "isometric";
+    cellWidth: number;
+    cellHeight: number;
+    anchorX: number;
+    anchorY: number;
+  }
+  | {
+    kind: "hexagonal";
+    orientation: "pointy" | "flat";
+    offset: "odd-r" | "even-r" | "odd-q" | "even-q";
+  };
+
 export interface Tileset {
   id: string;
   name: string;
   tileWidth: number;
   tileHeight: number;
+  grid: TilesetGrid;
+  terrains: TerrainDefinition[];
   tiles: Tile[];
 }
 
 export interface TilemapData {
   columns: number;
   rows: number;
+  /** Optional per-map hex offset when shared maps require different parity layouts. */
+  gridOffset?: "odd-r" | "even-r" | "odd-q" | "even-q";
   /** Tile index plus the high-bit flip flags declared above. */
   tiles: Uint32Array;
 }
@@ -101,6 +123,8 @@ export interface Cel {
   indexes?: Uint8Array;
   /** Authoritative tile cells on tilemap layers. RGBA pixels are a render cache. */
   tilemap?: TilemapData;
+  /** Authoritative logical Terrain cells when Terrain painting is enabled. */
+  terrainmap?: TerrainMapData;
 }
 
 export interface SliceKey {
@@ -154,7 +178,7 @@ export interface DocumentSettings {
 }
 
 export interface PixelDocument {
-  formatVersion: 4;
+  formatVersion: 5;
   name: string;
   width: number;
   height: number;
@@ -319,6 +343,10 @@ export function ensureCel(document: PixelDocument, layerId = document.activeLaye
       const columns = Math.ceil(document.width / tileset.tileWidth);
       const rows = Math.ceil(document.height / tileset.tileHeight);
       cel.tilemap = {columns, rows, tiles: new Uint32Array(columns * rows)};
+      const size = tilemapPixelSize(tileset, cel.tilemap);
+      cel.width = size.width;
+      cel.height = size.height;
+      cel.pixels = new Uint8ClampedArray(size.width * size.height * 4);
     }
     if (layer.role === "background") {
       const color = parseHexRGBA(document.palette.colors.find((_, index) => index !== document.palette.transparentIndex) ?? "#000000ff", [0, 0, 0, 255]);
@@ -569,6 +597,7 @@ export function duplicateLayer(document: PixelDocument, layerId = document.activ
   const linkedBuffers = new Map<string, Uint8ClampedArray>();
   const linkedIndexes = new Map<string, Uint8Array>();
   const linkedTilemaps = new Map<string, Uint32Array>();
+  const linkedTerrains = new Map<string, Uint16Array>();
   for (const layer of duplicateLayers) {
     if (!isCelLayer(layer)) continue;
     const sourceLayerID = sourceLayerIDsByDuplicateID.get(layer.id);
@@ -602,7 +631,16 @@ export function duplicateLayer(document: PixelDocument, layerId = document.activ
           }
           tilemap = {...sourceCel.tilemap, tiles};
         }
-        cel = {...sourceCel, id: createID("cel"), linkId, layerId: layer.id, pixels, indexes, tilemap};
+        let terrainmap: TerrainMapData | undefined;
+        if (sourceCel.terrainmap) {
+          let terrains = linkedTerrains.get(sourceCel.linkId);
+          if (!terrains) {
+            terrains = sourceCel.terrainmap.terrains.slice();
+            linkedTerrains.set(sourceCel.linkId, terrains);
+          }
+          terrainmap = {...sourceCel.terrainmap, terrains};
+        }
+        cel = {...sourceCel, id: createID("cel"), linkId, layerId: layer.id, pixels, indexes, tilemap, terrainmap};
       } else continue;
       document.cels[celKey(layer.id, frame.id)] = cel;
     }
@@ -700,6 +738,7 @@ interface SharedCelBuffers {
   pixels: Uint8ClampedArray;
   indexes?: Uint8Array;
   tilemap?: TilemapData;
+  terrainmap?: TerrainMapData;
 }
 
 /**
@@ -727,6 +766,7 @@ function copyFrameCels(document: PixelDocument, sourceFrameId: string, targetFra
         pixels: source.pixels,
         indexes: source.indexes,
         tilemap: source.tilemap,
+        terrainmap: source.terrainmap,
       };
       if (layer.role === "background") {
         linked.opacity = 1;
@@ -745,6 +785,9 @@ function copyFrameCels(document: PixelDocument, sourceFrameId: string, targetFra
         tilemap: source.tilemap
           ? {...source.tilemap, tiles: source.tilemap.tiles.slice()}
           : undefined,
+        terrainmap: source.terrainmap
+          ? {...source.terrainmap, terrains: source.terrainmap.terrains.slice()}
+          : undefined,
       };
       copiedBuffers.set(source.linkId, buffers);
     }
@@ -757,6 +800,7 @@ function copyFrameCels(document: PixelDocument, sourceFrameId: string, targetFra
       pixels: buffers.pixels,
       indexes: buffers.indexes,
       tilemap: buffers.tilemap,
+      terrainmap: buffers.terrainmap,
     };
   }
 }
@@ -800,6 +844,7 @@ export function duplicateFrames(document: PixelDocument, frameIds: readonly stri
   const linkedBuffers = new Map<string, Uint8ClampedArray>();
   const linkedIndexes = new Map<string, Uint8Array>();
   const linkedTilemaps = new Map<string, Uint32Array>();
+  const linkedTerrainmaps = new Map<string, Uint16Array>();
 
   for (let selectedIndex = 0; selectedIndex < selectedFrames.length; selectedIndex += 1) {
     const sourceFrame = selectedFrames[selectedIndex];
@@ -821,6 +866,7 @@ export function duplicateFrames(document: PixelDocument, frameIds: readonly stri
           pixels: sourceCel.pixels,
           indexes: sourceCel.indexes,
           tilemap: sourceCel.tilemap,
+          terrainmap: sourceCel.terrainmap,
         };
       } else {
         let linkId = linkIDs.get(sourceCel.linkId);
@@ -851,6 +897,16 @@ export function duplicateFrames(document: PixelDocument, frameIds: readonly stri
                 const tiles = sourceCel.tilemap!.tiles.slice();
                 linkedTilemaps.set(sourceCel.linkId, tiles);
                 return tiles;
+              })(),
+            }
+            : undefined,
+          terrainmap: sourceCel.terrainmap
+            ? {
+              ...sourceCel.terrainmap,
+              terrains: linkedTerrainmaps.get(sourceCel.linkId) ?? (() => {
+                const terrains = sourceCel.terrainmap!.terrains.slice();
+                linkedTerrainmaps.set(sourceCel.linkId, terrains);
+                return terrains;
               })(),
             }
             : undefined,
@@ -1011,7 +1067,8 @@ export function linkCels(document: PixelDocument, layerId: string, frameIds: rea
   source.linkId = linkId;
   let changed = false;
   for (const cel of targets) {
-    if (cel.linkId !== linkId || cel.pixels !== source.pixels) changed = true;
+    if (cel.linkId !== linkId || cel.pixels !== source.pixels
+      || cel.tilemap !== source.tilemap || cel.terrainmap !== source.terrainmap) changed = true;
     cel.linkId = linkId;
     cel.x = source.x;
     cel.y = source.y;
@@ -1020,6 +1077,7 @@ export function linkCels(document: PixelDocument, layerId: string, frameIds: rea
     cel.pixels = source.pixels;
     cel.indexes = source.indexes;
     cel.tilemap = source.tilemap;
+    cel.terrainmap = source.terrainmap;
   }
   return changed;
 }
@@ -1035,6 +1093,7 @@ export function unlinkCels(document: PixelDocument, layerId: string, frameIds: r
     cel.pixels = cel.pixels.slice();
     cel.indexes = cel.indexes?.slice();
     cel.tilemap = cel.tilemap ? {...cel.tilemap, tiles: cel.tilemap.tiles.slice()} : undefined;
+    cel.terrainmap = cel.terrainmap ? {...cel.terrainmap, terrains: cel.terrainmap.terrains.slice()} : undefined;
     changed = true;
   }
   return changed;
@@ -1048,6 +1107,7 @@ export function restoreLinkedCelBuffers(document: PixelDocument) {
   const buffers = new Map<string, Uint8ClampedArray>();
   const indexBuffers = new Map<string, Uint8Array>();
   const tileBuffers = new Map<string, Uint32Array>();
+  const terrainBuffers = new Map<string, Uint16Array>();
   for (const cel of Object.values(document.cels)) {
     const existing = buffers.get(cel.linkId);
     if (existing) cel.pixels = existing;
@@ -1061,6 +1121,11 @@ export function restoreLinkedCelBuffers(document: PixelDocument) {
       const existingTiles = tileBuffers.get(cel.linkId);
       if (existingTiles) cel.tilemap.tiles = existingTiles;
       else tileBuffers.set(cel.linkId, cel.tilemap.tiles);
+    }
+    if (cel.terrainmap) {
+      const existingTerrains = terrainBuffers.get(cel.linkId);
+      if (existingTerrains) cel.terrainmap.terrains = existingTerrains;
+      else terrainBuffers.set(cel.linkId, cel.terrainmap.terrains);
     }
   }
 }
@@ -1373,7 +1438,13 @@ export function cropDocument(document: PixelDocument, x: number, y: number, widt
 
   const transformed = new Map<string, Uint8ClampedArray>();
   const transformedIndexes = new Map<string, Uint8Array>();
+  const tilemapLayerIDs = new Set(document.layers.filter(isTilemapLayer).map((layer) => layer.id));
   for (const cel of Object.values(document.cels)) {
+    if (tilemapLayerIDs.has(cel.layerId) && cel.tilemap) {
+      cel.x -= x;
+      cel.y -= y;
+      continue;
+    }
     let pixels = transformed.get(cel.linkId);
     if (!pixels) {
       pixels = new Uint8ClampedArray(width * height * 4);
@@ -1398,7 +1469,6 @@ export function cropDocument(document: PixelDocument, x: number, y: number, widt
   translateSlices(document, -x, -y, width, height);
   document.width = width;
   document.height = height;
-  rebuildTilemapData(document);
   return true;
 }
 
@@ -1417,7 +1487,13 @@ export function resizeDocument(
 
   const transformed = new Map<string, Uint8ClampedArray>();
   const transformedIndexes = new Map<string, Uint8Array>();
+  const tilemapLayerIDs = new Set(document.layers.filter(isTilemapLayer).map((layer) => layer.id));
   for (const cel of Object.values(document.cels)) {
+    if (tilemapLayerIDs.has(cel.layerId) && cel.tilemap) {
+      cel.x += offsetX;
+      cel.y += offsetY;
+      continue;
+    }
     let pixels = transformed.get(cel.linkId);
     if (!pixels) {
       pixels = new Uint8ClampedArray(width * height * 4);
@@ -1442,7 +1518,6 @@ export function resizeDocument(
   translateSlices(document, offsetX, offsetY, width, height);
   document.width = width;
   document.height = height;
-  rebuildTilemapData(document);
   return true;
 }
 
@@ -1494,7 +1569,8 @@ function intersectRect(left: PixelBounds, right: PixelBounds): PixelBounds | nul
 export function cloneDocument(document: PixelDocument): PixelDocument {
   const linkedBuffers = new Map<string, Uint8ClampedArray>();
   const linkedIndexes = new Map<string, Uint8Array>();
-  const linkedTilemaps = new Map<string, Uint32Array>();
+  const linkedTilemaps = new Map<string, TilemapData>();
+  const linkedTerrainmaps = new Map<string, TerrainMapData>();
   return {
     ...document,
     colorProfile: {
@@ -1505,6 +1581,14 @@ export function cloneDocument(document: PixelDocument): PixelDocument {
     palette: {...document.palette, colors: [...document.palette.colors]},
     tilesets: document.tilesets.map((tileset) => ({
       ...tileset,
+      grid: {...tileset.grid},
+      terrains: tileset.terrains.map((terrain) => ({
+        ...terrain,
+        rules: terrain.rules.map((rule) => ({
+          ...rule,
+          candidates: rule.candidates.map((candidate) => ({...candidate})),
+        })),
+      })),
       tiles: tileset.tiles.map((tile) => ({
         ...tile,
         pixels: tile.pixels.slice(),
@@ -1540,14 +1624,21 @@ export function cloneDocument(document: PixelDocument): PixelDocument {
       }
       let tilemap: TilemapData | undefined;
       if (cel.tilemap) {
-        let tiles = linkedTilemaps.get(cel.linkId);
-        if (!tiles) {
-          tiles = cel.tilemap.tiles.slice();
-          linkedTilemaps.set(cel.linkId, tiles);
+        tilemap = linkedTilemaps.get(cel.linkId);
+        if (!tilemap) {
+          tilemap = {...cel.tilemap, tiles: cel.tilemap.tiles.slice()};
+          linkedTilemaps.set(cel.linkId, tilemap);
         }
-        tilemap = {...cel.tilemap, tiles};
       }
-      return [key, {...cel, pixels, indexes, tilemap}];
+      let terrainmap: TerrainMapData | undefined;
+      if (cel.terrainmap) {
+        terrainmap = linkedTerrainmaps.get(cel.linkId);
+        if (!terrainmap) {
+          terrainmap = {...cel.terrainmap, terrains: cel.terrainmap.terrains.slice()};
+          linkedTerrainmaps.set(cel.linkId, terrainmap);
+        }
+      }
+      return [key, {...cel, pixels, indexes, tilemap, terrainmap}];
     })),
   };
 }
@@ -1627,11 +1718,14 @@ export function estimateDocumentBytes(document: PixelDocument) {
   const pixelBytes = Object.values(document.cels).reduce((total, cel) => {
     if (countedLinks.has(cel.linkId)) return total;
     countedLinks.add(cel.linkId);
-    return total + cel.pixels.byteLength + (cel.indexes?.byteLength ?? 0) + (cel.tilemap?.tiles.byteLength ?? 0);
+    return total + cel.pixels.byteLength + (cel.indexes?.byteLength ?? 0)
+      + (cel.tilemap?.tiles.byteLength ?? 0) + (cel.terrainmap?.terrains.byteLength ?? 0);
   }, 0);
   const tilesetBytes = document.tilesets.reduce((total, tileset) => total + tileset.tiles.reduce(
     (tileTotal, tile) => tileTotal + tile.pixels.byteLength + (tile.indexes?.byteLength ?? 0) + 48,
-    tileset.name.length * 2 + 96,
+    tileset.name.length * 2 + tileset.terrains.reduce((terrainTotal, terrain) => terrainTotal
+      + terrain.name.length * 2 + terrain.color.length * 2
+      + terrain.rules.reduce((ruleTotal, rule) => ruleTotal + 24 + rule.candidates.length * 24, 0), 0) + 96,
   ), 0);
   const metadataBytes = document.name.length * 2
     + document.colorProfile.name.length * 2
@@ -1738,7 +1832,7 @@ function copyCelIndexes(
 
 /**
  * Re-tiles the rendered Cel caches after a document-size operation. Tile ids
- * are intentionally regenerated because v4 treats the tile cells, not legacy
+ * are intentionally regenerated because v5 treats the tile cells, not legacy
  * ids, as authoritative project content.
  */
 export function rebuildTilemapData(document: PixelDocument) {
@@ -1746,6 +1840,9 @@ export function rebuildTilemapData(document: PixelDocument) {
   for (const tileset of document.tilesets) {
     const layers = tilemapLayers.filter((layer) => layer.tilesetId === tileset.id);
     if (layers.length === 0) continue;
+    // Raster document transforms regenerate Tile IDs. Terrain rules and maps
+    // reference those IDs and must not survive as stale authority.
+    tileset.terrains = [];
     const tiles: Tile[] = [];
     const tileByBytes = new Map<string, number>();
     const linked = new Map<string, {tilemap: TilemapData; pixels: Uint8ClampedArray; indexes?: Uint8Array}>();

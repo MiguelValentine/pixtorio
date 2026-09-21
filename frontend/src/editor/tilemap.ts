@@ -9,7 +9,25 @@ import {
   type Tile,
   type TilemapData,
   type Tileset,
+  type TilesetGrid,
 } from "./document";
+import type {TerrainDefinition} from "./terrain";
+import {compareCellsForRendering} from "./tileGrid";
+import {
+  tileCellImageOrigin,
+  tileCellsPixelBounds,
+  tilemapCellAtPixel,
+  tilemapPixelSize,
+  tilesetGridLayout,
+} from "./tilemapGeometry";
+
+export {
+  tileCellImageOrigin,
+  tileCellsPixelBounds,
+  tilemapCellAtPixel,
+  tilemapPixelSize,
+  tilesetGridLayout,
+} from "./tilemapGeometry";
 
 // Re-export the encoding constants from the tilemap-facing module so callers
 // do not need to know which document module owns the binary representation.
@@ -23,6 +41,8 @@ export interface CreateTilesetOptions {
   name?: string;
   tileWidth: number;
   tileHeight: number;
+  grid?: TilesetGrid;
+  terrains?: readonly TerrainDefinition[];
   tiles?: readonly Tile[];
 }
 
@@ -107,6 +127,8 @@ export function createTileset(
     name: options.name ?? "Tileset",
     tileWidth: options.tileWidth,
     tileHeight: options.tileHeight,
+    grid: options.grid ? cloneTilesetGrid(options.grid) : {kind: "orthogonal"},
+    terrains: (options.terrains ?? []).map(cloneTerrainDefinition),
     tiles: (options.tiles ?? []).map(cloneTile),
   };
   validateTileset(tileset);
@@ -119,6 +141,7 @@ export function validateTileset(tileset: Tileset): true {
   if (typeof tileset.id !== "string" || tileset.id.length === 0) throw new Error("Tileset id is required");
   if (typeof tileset.name !== "string") throw new Error("Tileset name is invalid");
   assertTileDimensions(tileset.tileWidth, tileset.tileHeight);
+  validateTilesetGrid(tileset.grid, tileset.tileWidth, tileset.tileHeight);
   if (!Array.isArray(tileset.tiles)) throw new Error("Tileset tiles are invalid");
   const expectedPixels = tileset.tileWidth * tileset.tileHeight * 4;
   const ids = new Set<number>();
@@ -140,7 +163,12 @@ export function validateTileset(tileset: Tileset): true {
 
 export function cloneTileset(tileset: Tileset): Tileset {
   validateTileset(tileset);
-  return {...tileset, tiles: tileset.tiles.map(cloneTile)};
+  return {
+    ...tileset,
+    grid: cloneTilesetGrid(tileset.grid),
+    terrains: tileset.terrains.map(cloneTerrainDefinition),
+    tiles: tileset.tiles.map(cloneTile),
+  };
 }
 
 export function findTile(tileset: Tileset, tileId: number): Tile | null {
@@ -241,6 +269,22 @@ export function validateTilemapData(tilemap: TilemapData): true {
   if (!(tilemap.tiles instanceof Uint32Array) || tilemap.tiles.length !== tilemap.columns * tilemap.rows) {
     throw new Error("Tilemap cells are invalid");
   }
+  if (tilemap.gridOffset !== undefined
+    && tilemap.gridOffset !== "odd-r" && tilemap.gridOffset !== "even-r"
+    && tilemap.gridOffset !== "odd-q" && tilemap.gridOffset !== "even-q") {
+    throw new Error("Tilemap grid offset is invalid");
+  }
+  return true;
+}
+
+export function validateTilemapGridOffset(tilemap: TilemapData, tileset: Tileset): true {
+  validateTilemapData(tilemap);
+  if (tilemap.gridOffset === undefined) return true;
+  if (tileset.grid.kind !== "hexagonal"
+    || (tileset.grid.orientation === "pointy" && !tilemap.gridOffset.endsWith("-r"))
+    || (tileset.grid.orientation === "flat" && !tilemap.gridOffset.endsWith("-q"))) {
+    throw new Error("Tilemap grid offset does not match the Tileset grid");
+  }
   return true;
 }
 
@@ -330,15 +374,25 @@ export function renderTilemapCel(
   validateTileset(tileset);
   if (!cel.tilemap) return new Uint8ClampedArray(cel.width * cel.height * 4);
   validateTilemapData(cel.tilemap);
+  validateTilemapGridOffset(cel.tilemap, tileset);
   if (!Number.isInteger(cel.width) || !Number.isInteger(cel.height) || cel.width <= 0 || cel.height <= 0) throw new Error("Cel dimensions are invalid");
   const output = new Uint8ClampedArray(cel.width * cel.height * 4);
-  for (let cellY = 0; cellY < cel.tilemap.rows; cellY += 1) {
-    for (let cellX = 0; cellX < cel.tilemap.columns; cellX += 1) {
+  const overlapping = tileset.grid.kind !== "orthogonal";
+  const palettePixel = new Uint8ClampedArray(4);
+  const layout = tilesetGridLayout(tileset, cel.tilemap);
+  const cells = Array.from({length: cel.tilemap.rows * cel.tilemap.columns}, (_, index) => ({
+    column: index % cel.tilemap!.columns,
+    row: Math.floor(index / cel.tilemap!.columns),
+  })).sort((left, right) => compareCellsForRendering(layout, left, right));
+  for (const cell of cells) {
+      const cellX = cell.column;
+      const cellY = cell.row;
       const value = cel.tilemap.tiles[cellY * cel.tilemap.columns + cellX];
       const tile = findTile(tileset, value);
       if (!tile) continue;
-      const startX = cellX * tileset.tileWidth;
-      const startY = cellY * tileset.tileHeight;
+      const start = tileCellImageOrigin(tileset, cel.tilemap, {column: cellX, row: cellY});
+      const startX = Math.round(start.x);
+      const startY = Math.round(start.y);
       for (let y = 0; y < tileset.tileHeight; y += 1) {
         const targetY = startY + y;
         if (targetY < 0 || targetY >= cel.height) continue;
@@ -349,15 +403,46 @@ export function renderTilemapCel(
           const targetIndex = (targetY * cel.width + targetX) * 4;
           const sourcePixel = source.y * tileset.tileWidth + source.x;
           if (tile.indexes && options.palette) {
-            writePalettePixel(output, targetIndex, tile.indexes[sourcePixel], options.palette, options.transparentIndex ?? 0);
+            if (overlapping) {
+              writePalettePixel(palettePixel, 0, tile.indexes[sourcePixel], options.palette, options.transparentIndex ?? 0);
+              if (palettePixel[3] !== 0) output.set(palettePixel, targetIndex);
+            } else {
+              writePalettePixel(output, targetIndex, tile.indexes[sourcePixel], options.palette, options.transparentIndex ?? 0);
+            }
+          } else if (overlapping) {
+            compositeTilePixel(output, targetIndex, tile.pixels, sourcePixel * 4, tile.indexes !== undefined);
           } else {
             output.set(tile.pixels.subarray(sourcePixel * 4, sourcePixel * 4 + 4), targetIndex);
           }
         }
       }
-    }
   }
   return output;
+}
+
+function compositeTilePixel(
+  output: Uint8ClampedArray,
+  target: number,
+  source: Uint8ClampedArray,
+  offset: number,
+  indexed: boolean,
+) {
+  const sourceAlpha = source[offset + 3];
+  if (sourceAlpha === 0) return;
+  const destinationAlpha = output[target + 3];
+  if (indexed || sourceAlpha === 255 || destinationAlpha === 0) {
+    output.set(source.subarray(offset, offset + 4), target);
+    return;
+  }
+  // Integer alpha numerator keeps byte rounding identical to the Go renderer.
+  const alphaNumerator = sourceAlpha * 255 + destinationAlpha * (255 - sourceAlpha);
+  for (let channel = 0; channel < 3; channel += 1) {
+    output[target + channel] = Math.round((
+      source[offset + channel] * sourceAlpha * 255
+      + output[target + channel] * destinationAlpha * (255 - sourceAlpha)
+    ) / alphaNumerator);
+  }
+  output[target + 3] = Math.round(alphaNumerator / 255);
 }
 
 export function renderTilemapCelIntoCache(cel: Cel, tileset: Tileset, options: RenderTilemapOptions = {}): Uint8ClampedArray {
@@ -436,6 +521,7 @@ export function convertImageCelToTilemap(
   grid: ImageCelConversionOptions,
 ): ConvertedImageCel {
   validateTileset(tileset);
+  if (tileset.grid.kind !== "orthogonal") throw new Error("Image conversion currently requires an orthogonal tileset");
   const tileWidth = grid.tileWidth;
   const tileHeight = grid.tileHeight;
   assertTileDimensions(tileWidth, tileHeight);
@@ -550,6 +636,14 @@ export function cleanupTileset(
       references.set(id, (references.get(id) ?? 0) + 1);
     }
   }
+  for (const terrain of tileset.terrains) {
+    for (const rule of terrain.rules) {
+      for (const candidate of rule.candidates) {
+        if (!tileByID.has(candidate.tileId)) throw new Error(`Terrain references unknown tile ${candidate.tileId}`);
+        references.set(candidate.tileId, (references.get(candidate.tileId) ?? 0) + 1);
+      }
+    }
+  }
 
   const canonicalByPayload: Tile[] = [];
   const tileIDMap = new Map<number, number>();
@@ -591,7 +685,20 @@ export function cleanupTileset(
     }
     return {...tilemap, tiles: cells};
   });
-  const nextTileset: Tileset = {...tileset, tiles: retainedTiles};
+  const nextTileset: Tileset = {
+    ...tileset,
+    tiles: retainedTiles,
+    terrains: tileset.terrains.map((terrain) => ({
+      ...terrain,
+      rules: terrain.rules.map((rule) => ({
+        ...rule,
+        candidates: rule.candidates.map((candidate) => ({
+          ...candidate,
+          tileId: tileIDMap.get(candidate.tileId)!,
+        })),
+      })),
+    })),
+  };
   const changed = removedTileIDs.length > 0 || deduplicatedTileIDs.length > 0
     || remappedTilemaps.some((next, index) => !bytesEqual(next.tiles, uniqueTilemaps[index].tiles));
   return {
@@ -614,6 +721,7 @@ export function cleanupTilesetInPlace(
 ): TilesetCleanupResult {
   const result = cleanupTileset(tileset, tilemaps);
   tileset.tiles = result.tileset.tiles;
+  tileset.terrains = result.tileset.terrains;
   const seen = new Set<TilemapData>();
   for (let index = 0; index < tilemaps.length; index += 1) {
     const tilemap = tilemaps[index];
@@ -653,9 +761,17 @@ export function drawTilemapPixelInPlace(
   if (!Number.isInteger(pixelX) || !Number.isInteger(pixelY) || pixelX < 0 || pixelY < 0 || pixelX >= cel.width || pixelY >= cel.height) {
     throw new Error("Tile pixel position is outside the Cel");
   }
-  const cellX = Math.floor(pixelX / tileset.tileWidth);
-  const cellY = Math.floor(pixelY / tileset.tileHeight);
+  const cell = tilemapCellAtPixel(tileset, cel.tilemap, pixelX, pixelY);
+  const cellX = cell.column;
+  const cellY = cell.row;
   if (cellX >= cel.tilemap.columns || cellY >= cel.tilemap.rows) throw new Error("Tile pixel position is outside the tilemap");
+  if (cellX < 0 || cellY < 0) throw new Error("Tile pixel position is outside the tilemap");
+  const cellOrigin = tileCellImageOrigin(tileset, cel.tilemap, cell);
+  const localX = Math.floor(pixelX - cellOrigin.x);
+  const localY = Math.floor(pixelY - cellOrigin.y);
+  if (localX < 0 || localY < 0 || localX >= tileset.tileWidth || localY >= tileset.tileHeight) {
+    throw new Error("Tile pixel position is outside the tile image");
+  }
   const cellOffset = cellY * cel.tilemap.columns + cellX;
   const oldValue = cel.tilemap.tiles[cellOffset];
   const oldId = tileValueIndex(oldValue);
@@ -678,8 +794,6 @@ export function drawTilemapPixelInPlace(
     cel.tilemap.tiles[cellOffset] = (tile.id | tileValueFlags(oldValue)) >>> 0;
   }
   if (!tile) throw new Error("Unable to allocate tile");
-  const localX = pixelX % tileset.tileWidth;
-  const localY = pixelY % tileset.tileHeight;
   const activeValue = cel.tilemap.tiles[cellOffset];
   const source = sourcePixelForTileValue(activeValue, localX, localY, tileset.tileWidth, tileset.tileHeight);
   const sourcePixel = source.y * tileset.tileWidth + source.x;
@@ -722,6 +836,41 @@ export function synchronizeTile(tile: Tile, palette: readonly string[], transpar
 
 function cloneTile(tile: Tile): Tile {
   return {...tile, pixels: tile.pixels.slice(), ...(tile.indexes ? {indexes: tile.indexes.slice()} : {})};
+}
+
+function cloneTilesetGrid(grid: TilesetGrid): TilesetGrid {
+  return {...grid};
+}
+
+function cloneTerrainDefinition(terrain: TerrainDefinition): TerrainDefinition {
+  return {
+    ...terrain,
+    rules: terrain.rules.map((rule) => ({
+      ...rule,
+      candidates: rule.candidates.map((candidate) => ({...candidate})),
+    })),
+  };
+}
+
+function validateTilesetGrid(grid: TilesetGrid, tileWidth: number, tileHeight: number) {
+  if (!grid || typeof grid !== "object") throw new Error("Tileset grid is required");
+  if (grid.kind === "orthogonal") return;
+  if (grid.kind === "isometric") {
+    if (!Number.isInteger(grid.cellWidth) || grid.cellWidth <= 0 || grid.cellWidth > 4096
+      || !Number.isInteger(grid.cellHeight) || grid.cellHeight <= 0 || grid.cellHeight > 4096
+      || !Number.isInteger(grid.anchorX) || grid.anchorX < 0 || grid.anchorX > tileWidth
+      || !Number.isInteger(grid.anchorY) || grid.anchorY < 0 || grid.anchorY > tileHeight) {
+      throw new Error("Tileset isometric grid is invalid");
+    }
+    return;
+  }
+  if (grid.kind !== "hexagonal"
+    || (grid.orientation !== "pointy" && grid.orientation !== "flat")
+    || (grid.offset !== "odd-r" && grid.offset !== "even-r" && grid.offset !== "odd-q" && grid.offset !== "even-q")
+    || (grid.orientation === "pointy" && grid.offset !== "odd-r" && grid.offset !== "even-r")
+    || (grid.orientation === "flat" && grid.offset !== "odd-q" && grid.offset !== "even-q")) {
+    throw new Error("Tileset grid is invalid");
+  }
 }
 
 function cloneCel(cel: Cel): Cel {

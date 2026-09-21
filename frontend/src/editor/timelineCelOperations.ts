@@ -79,6 +79,7 @@ interface LinkGroupBuffers {
   pixels: Uint8ClampedArray;
   indexes?: Uint8Array;
   tilemap?: Cel["tilemap"];
+  terrainmap?: Cel["terrainmap"];
 }
 
 /**
@@ -185,6 +186,7 @@ export function transferTimelineCels(
         pixels: plan.source.pixels,
         indexes: plan.source.indexes,
         tilemap: plan.source.tilemap,
+        terrainmap: plan.source.terrainmap,
       } satisfies Cel;
       return normalizeTargetCel(linked, plan.targetLayer);
     }
@@ -198,6 +200,9 @@ export function transferTimelineCels(
         tilemap: plan.source.tilemap
           ? {...plan.source.tilemap, tiles: plan.source.tilemap.tiles.slice()}
           : undefined,
+        terrainmap: plan.source.terrainmap
+          ? {...plan.source.terrainmap, terrains: plan.source.terrainmap.terrains.slice()}
+          : undefined,
       };
       copiedGroups.set(plan.source.linkId, group);
     }
@@ -210,6 +215,7 @@ export function transferTimelineCels(
       pixels: group.pixels,
       indexes: group.indexes,
       tilemap: group.tilemap,
+      terrainmap: group.terrainmap,
     } satisfies Cel;
     return normalizeTargetCel(copied, plan.targetLayer);
   });

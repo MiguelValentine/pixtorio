@@ -50,8 +50,58 @@ import {
 } from "./document";
 import {convertImageLayerToTilemap} from "./tilemap";
 import {setPixel} from "./pixels";
+import {createTerrainMapData} from "./terrain";
 
 describe("createDocument", () => {
+  it("copies Terrain links within duplicated layers without aliasing the source layer", () => {
+    const document = createDocument({width: 2, height: 2});
+    const converted = convertImageLayerToTilemap(document, document.activeLayerId, {tileWidth: 1, tileHeight: 1});
+    document.layers[0] = converted.layer;
+    document.tilesets = [converted.tileset];
+    const source = converted.cels[0];
+    source.terrainmap = createTerrainMapData(2, 2, 41);
+    source.terrainmap.terrains.set([0, 65535, 0, 65535]);
+    document.cels = {[celKey(source.layerId, source.frameId)]: source};
+    const frame = addFrame(document);
+    expect(linkCels(document, source.layerId, document.frames.map((item) => item.id), source.frameId)).toBe(true);
+    expect(getCel(document, source.layerId, frame.id)!.terrainmap).toBe(source.terrainmap);
+    const before = cloneDocument(document);
+    const duplicate = duplicateLayer(document, source.layerId)!;
+    const first = getCel(document, duplicate.id, source.frameId)!;
+    const second = getCel(document, duplicate.id, frame.id)!;
+    expect(first.terrainmap!.terrains).toBe(second.terrainmap!.terrains);
+    expect(first.terrainmap!.terrains).not.toBe(source.terrainmap.terrains);
+    expect(first.terrainmap).toEqual(source.terrainmap);
+    first.terrainmap!.terrains[0] = 65535;
+    expect(second.terrainmap!.terrains[0]).toBe(65535);
+    expect(source.terrainmap.terrains[0]).toBe(0);
+    const history = new CommandHistory<PixelDocument>();
+    history.commit(new DocumentStateCommand(before, document, "Duplicate Terrain Layer"));
+    history.undo(document);
+    expect(document.layers).toHaveLength(1);
+    history.redo(document);
+    const restored = getCel(document, duplicate.id, source.frameId)!;
+    expect(restored.terrainmap!.terrains).toBe(getCel(document, duplicate.id, frame.id)!.terrainmap!.terrains);
+    expect(restored.terrainmap!.terrains).not.toBe(getCel(document, source.layerId, source.frameId)!.terrainmap!.terrains);
+  });
+
+  it("linking and unlinking Cels preserves Terrain authority and removes stale Terrain maps", () => {
+    const document = createDocument({width: 2, height: 2});
+    const source = getActiveCel(document);
+    source.terrainmap = createTerrainMapData(2, 2, 17);
+    const frame = addFrame(document);
+    const target = getActiveCel(document);
+    const frameIDs = document.frames.map((item) => item.id);
+    expect(linkCels(document, source.layerId, frameIDs, source.frameId)).toBe(true);
+    expect(target.terrainmap).toBe(source.terrainmap);
+    expect(unlinkCels(document, source.layerId, [frame.id])).toBe(true);
+    expect(target.terrainmap).toEqual(source.terrainmap);
+    expect(target.terrainmap!.terrains).not.toBe(source.terrainmap.terrains);
+    source.terrainmap = undefined;
+    expect(linkCels(document, source.layerId, frameIDs, source.frameId)).toBe(true);
+    expect(target.terrainmap).toBeUndefined();
+  });
+
   it("creates one editable RGBA cel", () => {
     const document = createDocument({name: "sprite.pixio", width: 16, height: 12});
     const cel = getActiveCel(document);
@@ -916,6 +966,32 @@ describe("document cloning", () => {
 });
 
 describe("cropDocument", () => {
+  it("preserves authoritative tile and Terrain cells while translating a partial tilemap Cel", () => {
+    const document = createDocument({width: 4, height: 4});
+    const converted = convertImageLayerToTilemap(document, document.activeLayerId, {tileWidth: 2, tileHeight: 2});
+    document.layers[0] = converted.layer;
+    document.tilesets = [converted.tileset];
+    document.cels = {[celKey(converted.layer.id, document.activeFrameId)]: converted.cels[0]};
+    const cel = getActiveCel(document);
+    cel.terrainmap = createTerrainMapData(cel.tilemap!.columns, cel.tilemap!.rows, 23);
+    cel.terrainmap.terrains.set([1, 0, 0, 1]);
+    cel.x = 1;
+    cel.y = 1;
+    const tilemap = cel.tilemap;
+    const terrainmap = cel.terrainmap;
+    const pixels = cel.pixels;
+
+    expect(cropDocument(document, 1, 1, 2, 2)).toBe(true);
+    expect(cel.x).toBe(0);
+    expect(cel.y).toBe(0);
+    expect(cel.width).toBe(4);
+    expect(cel.height).toBe(4);
+    expect(cel.tilemap).toBe(tilemap);
+    expect(cel.terrainmap).toBe(terrainmap);
+    expect(cel.pixels).toBe(pixels);
+    expect([...cel.terrainmap!.terrains]).toEqual([1, 0, 0, 1]);
+  });
+
   it("crops every cel consistently and rejects invalid crop boundaries", () => {
     const document = createTwoLayerDocument();
     const first = getCel(document, document.layers[0].id, document.activeFrameId)!;
@@ -961,7 +1037,7 @@ describe("cropDocument", () => {
     ]);
   });
 
-  it("rebuilds authoritative tile cells after cropping", () => {
+  it("keeps stable authoritative tile IDs and clips the translated cache at composition time", () => {
     const document = createDocument({width: 4, height: 2});
     const source = getActiveCel(document);
     setPixel(source.pixels, 4, 2, 2, 0, [255, 0, 0, 255]);
@@ -972,15 +1048,40 @@ describe("cropDocument", () => {
 
     expect(cropDocument(document, 2, 0, 2, 2)).toBe(true);
     const cel = getActiveCel(document);
-    expect(cel.tilemap?.columns).toBe(1);
+    expect(cel.x).toBe(-2);
+    expect(cel.tilemap?.columns).toBe(2);
     expect(cel.tilemap?.rows).toBe(1);
-    expect([...cel.tilemap!.tiles]).toEqual([1]);
-    expect(document.tilesets[0].tiles).toHaveLength(1);
-    expect([...cel.pixels.subarray(0, 4)]).toEqual([255, 0, 0, 255]);
+    expect([...cel.tilemap!.tiles]).toEqual([1, 2]);
+    expect(document.tilesets[0].tiles).toHaveLength(2);
+    expect([...compositeFrame(document).subarray(0, 4)]).toEqual([255, 0, 0, 255]);
   });
 });
 
 describe("resizeDocument", () => {
+  it("preserves tilemap and Terrain authority while moving the Cel with the canvas anchor", () => {
+    const document = createDocument({width: 4, height: 4});
+    const converted = convertImageLayerToTilemap(document, document.activeLayerId, {tileWidth: 2, tileHeight: 2});
+    document.layers[0] = converted.layer;
+    document.tilesets = [converted.tileset];
+    document.cels = {[celKey(converted.layer.id, document.activeFrameId)]: converted.cels[0]};
+    const cel = getActiveCel(document);
+    cel.terrainmap = createTerrainMapData(cel.tilemap!.columns, cel.tilemap!.rows, 29);
+    cel.terrainmap.terrains.set([1, 0, 0, 1]);
+    const tilemap = cel.tilemap;
+    const terrainmap = cel.terrainmap;
+    const pixels = cel.pixels;
+
+    expect(resizeDocument(document, 6, 6, "right", "bottom")).toBe(true);
+    expect(cel.x).toBe(2);
+    expect(cel.y).toBe(2);
+    expect(cel.width).toBe(4);
+    expect(cel.height).toBe(4);
+    expect(cel.tilemap).toBe(tilemap);
+    expect(cel.terrainmap).toBe(terrainmap);
+    expect(cel.pixels).toBe(pixels);
+    expect([...cel.terrainmap!.terrains]).toEqual([1, 0, 0, 1]);
+  });
+
   it("expands with the requested anchor while preserving cel pixels", () => {
     const document = createDocument({width: 2, height: 2});
     const cel = getActiveCel(document);

@@ -1,4 +1,4 @@
-import {useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type DragEvent as ReactDragEvent, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent} from "react";
+import {useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type DragEvent as ReactDragEvent, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type ReactNode} from "react";
 import {GIFEncoder, applyPalette, quantize} from "gifenc";
 import {createPortal, flushSync} from "react-dom";
 import {
@@ -12,6 +12,7 @@ import {
   X,
   BoxSelect,
   Circle,
+  ClipboardPaste,
   Copy,
   Crop,
   Diamond,
@@ -54,6 +55,7 @@ import {
   RotateCw,
   Save,
   SaveAll,
+  Scissors,
   Scaling,
   Settings,
   Slash,
@@ -76,7 +78,7 @@ import {
   WandSparkles,
   type LucideIcon,
 } from "lucide-react";
-import {ClearRecovery, ClipboardReadImage, ClipboardWriteImage, ImportPNG, ImportPNGSequence, LoadRecovery, OpenPixio, OpenPixioPath, OpenStartupProject, SaveGIFWithOptions, SavePackedAtlas, SavePixio, SavePixioPath, SavePNGWithOptions, SavePNGSequence, SaveRecovery, SetWindowCloseState} from "../wailsjs/go/main/App";
+import {ClearRecovery, ClipboardReadImage, ClipboardWriteImage, ImportPNG, ImportPNGSequence, LoadRecovery, OpenPixio, OpenPixioPath, OpenStartupProject, OpenTilemapData, SaveGIFWithOptions, SavePackedAtlas, SavePixio, SavePixioPath, SavePNGWithOptions, SavePNGSequence, SaveRecovery, SaveTilemapData, SetWindowCloseState} from "../wailsjs/go/main/App";
 import {ClipboardGetText, ClipboardSetText, EventsOn, WindowFullscreen, WindowIsFullscreen, WindowUnfullscreen} from "../wailsjs/runtime/runtime";
 import {useConstrainedMenuStyle} from "./menuPositioning";
 import {ClaimMCPCommand, CompleteMCPCommand, SetMCPReady} from "../wailsjs/go/main/App";
@@ -96,6 +98,7 @@ import type {ColorSelectorMode} from "./editor/colorSelector";
 import type {BrushPresetSettings} from "./editor/brushPresets";
 import {captureSelectionBrush} from "./editor/selectionBrush";
 import {patternBrushTools, type PatternBrush, type PatternAlignment} from "./editor/tools";
+import {getToolGroup, toolGroups, type ToolGroup} from "./editor/toolGroups";
 import {identityCurvePoints} from "./editor/curveEditor";
 import type {CurvePoint} from "./editor/adjustments";
 import "./App.css";
@@ -169,6 +172,7 @@ import {
   type SliceKeyUpdate,
   type TagDirection,
   type PixelDocument,
+  type Tileset,
   type TilemapData,
   type LayerRole,
 } from "./editor/document";
@@ -181,9 +185,80 @@ import {
   drawTilemapPixelInPlace,
   renderTilemapCelIntoCache,
   setTileCellInPlace,
+  sourcePixelForTileValue,
+  tileFlipDiagonal,
+  tileFlipX,
+  tileFlipY,
+  tileValueFlags,
+  tileValueIndex,
+  tileCellsPixelBounds,
+  tileCellImageOrigin,
+  tilemapCellAtPixel,
+  tilemapPixelSize,
+  tilesetGridLayout,
   type TilePixelSyncMode,
 } from "./editor/tilemap";
-import {constrainColorToMode, convertDocumentColorMode, exportPaletteText, extractPalette, parsePaletteText, refreshIndexedDocument, refreshTilemapCaches, sortPalette, syncIndexedCel, type DitherMode, type PaletteFileFormat} from "./editor/colorModes";
+import {cellPolygon, compareCellsForRendering, expandCellRegion, gridLineSegments, type TileCell, type TileGridLayout} from "./editor/tileGrid";
+import {
+  applyTileStamp,
+  copyTilemapSelection,
+  createTileStamp,
+  createTilemapSelection,
+  cutTilemapSelection,
+  flipTileStamp,
+  flipTilemapSelection,
+  floodFillTilemap,
+  moveTilemapSelection,
+  pasteTilemapClipboard,
+  pickTileCell,
+  rotateTileStamp,
+  rotateTilemapSelection,
+  tileLineCells,
+  tileRectangleCells,
+  type TilemapClipboard,
+  type TilemapEditResult,
+  type TilemapSelection,
+  type TileStamp,
+} from "./editor/tilemapTools";
+import {transformTilemapGrid} from "./editor/tilemapTransforms";
+import {replaceCelTerrainAuthority} from "./editor/tilemapAuthority";
+import {createTilemapSelectionPredicate} from "./editor/tilemapSelectionClip";
+import {crossesTiledBoundary, wrappedLinePoints, wrapTiledPoint} from "./editor/tiledPointer";
+import {normalizeImportedTilePixels} from "./editor/tilemapImportColors";
+import {
+  exportTilemapCsv,
+  exportTilemapJson,
+  importTilemapCsv,
+  importTilemapJson,
+} from "./editor/tilemapInterchange";
+import {importTilesetBundleIntoDocument} from "./editor/tilesetBundle";
+import {
+  createTerrainMapData,
+  createTerrainRuleTemplate,
+  normalizeBlobMask,
+  recalculateTerrainCells,
+  terrainAffectedCells,
+  terrainEmpty,
+  terrainRuleDiagnostic,
+  type TerrainBoundary,
+  type TerrainNeighborMode,
+} from "./editor/terrain";
+import {
+  createTerrainStamp,
+  flipTerrainStamp,
+  rotateTerrainStamp,
+  terrainFloodFill,
+  terrainLineCells,
+  terrainPicker,
+  terrainRectangleCells,
+  transformTerrainSelection,
+  type TerrainStamp,
+} from "./editor/terrainTools";
+import {mapTiledCellTargets, mapTiledTerrainStampTargets, mapTiledTileStampTargets} from "./editor/tilemapTiledStamp";
+import {TerrainPreviewPanel} from "./editor/TerrainPreviewPanel";
+import {TilesetReferencesPanel} from "./editor/TilesetReferencesPanel";
+import {collectTilesetReferences} from "./editor/tilesetReferences";
+import {constrainColorToMode, convertDocumentColorMode, exportPaletteText, extractPalette, indexPixels, parsePaletteText, refreshIndexedDocument, refreshTilemapCaches, sortPalette, syncIndexedCel, type DitherMode, type PaletteFileFormat} from "./editor/colorModes";
 import {
   alphaDisplayMaximum,
   alphaFromDisplay,
@@ -218,7 +293,7 @@ import {
 import {buildSpriteSheet, exportAtlasMetadata, exportSpriteSheetMetadata, packAtlas, sliceSpriteSheet, validPNGImportDimensions, type SpriteSheetImportLayout} from "./editor/gameAssets";
 import {deleteSlices, moveSlices, resizeSliceKeys, reuseSliceColor, scaleSlices} from "./editor/sliceOperations";
 import {touchedSliceIds} from "./editor/sliceHitTesting";
-import {DocumentStateCommand, CommandHistory, defaultHistoryLimitBytes, PixelEditCommand} from "./editor/history";
+import {DocumentStateCommand, CommandHistory, defaultHistoryLimitBytes, PixelEditCommand, TerrainCellsCommand, TilemapCellsCommand} from "./editor/history";
 import {assignCommandShortcut, commandForShortcutEvent, defaultCommandShortcuts, documentOptionalCommandIDs, formatShortcutForPlatform, normalizeShortcut, shortcutFromEvent, type CommandShortcutID} from "./editor/shortcuts";
 import {adjacentFocusedFrameId, focusTagIdForFrame, focusedFrameIdAtEntry, focusedFrameRange, tagContainsFrame} from "./editor/timelineFocus";
 import {deserializePixelClipboard, enqueueSerialTask, orderFrameIDs, serializePixelClipboard} from "./editor/appHelpers";
@@ -227,8 +302,9 @@ import {canCopyFramesToDocument, canCopyLayersToDocument, copyFramesToDocument, 
 import {pasteClipboardAsNewLayer, selectionToNewLayer as applySelectionToNewLayer} from "./editor/editOperations";
 import {applyLayerProperties, existingCelsForLayers, linkedCelsForSelection, type LayerPropertyUpdate} from "./editor/layerProperties";
 import {LayerThumbnail} from "./editor/LayerThumbnail";
+import {TerrainMaskEditor} from "./editor/TerrainMaskEditor";
 import {FrameCompositeCache} from "./editor/compositingCache";
-import {PixelCanvas, type SelectionMode} from "./editor/PixelCanvas";
+import {PixelCanvas, type CanvasContextTarget, type SelectionMode} from "./editor/PixelCanvas";
 import {createPatch, hexToRGBA, rgbaToHex} from "./editor/pixels";
 import {
   clearSelection,
@@ -295,6 +371,24 @@ const tools: Array<{id: ToolID; icon: LucideIcon}> = [
   {id: "slice", icon: SliceIcon},
   {id: "text", icon: Type},
 ];
+const toolDefinitionByID = new Map(tools.map((tool) => [tool.id, tool]));
+
+type EditorContextTarget =
+  | {kind: "document"; tabId: string}
+  | {kind: "layer"; layerId: string}
+  | {kind: "frame"; frameId: string}
+  | {kind: "cel"; layerId: string; frameId: string}
+  | {kind: "slice"; sliceId: string}
+  | {kind: "tile"; tileId: number}
+  | {kind: "guide"; guideId: string}
+  | {kind: "tag"; tagId: string}
+  | {kind: "panel"; panel: "inspector" | "timeline"};
+
+interface EditorContextMenuState {
+  target: EditorContextTarget;
+  left: number;
+  top: number;
+}
 
 const brushSizeTools = new Set<ToolID>([
   "pencil", "eraser", "line", "rectangle", "ellipse", "curve", "polyline", "polygon", "spray", "blur", "jumble", "contour",
@@ -752,23 +846,31 @@ function rgbaWithAlpha(color: string, alphaPercent: number): RGBA {
   return [red, green, blue, Math.round(Math.max(0, Math.min(100, alphaPercent)) * 2.55)];
 }
 
-function integerLinePoints(from: {x: number; y: number}, to: {x: number; y: number}) {
-  const points: Array<{x: number; y: number}> = [];
-  let x = from.x;
-  let y = from.y;
-  const deltaX = Math.abs(to.x - from.x);
-  const deltaY = Math.abs(to.y - from.y);
-  const stepX = from.x < to.x ? 1 : -1;
-  const stepY = from.y < to.y ? 1 : -1;
-  let error = deltaX - deltaY;
-  while (true) {
-    points.push({x, y});
-    if (x === to.x && y === to.y) break;
-    const doubled = error * 2;
-    if (doubled > -deltaY) { error -= deltaY; x += stepX; }
-    if (doubled < deltaX) { error += deltaX; y += stepY; }
+function terrainBrushCells(
+  grid: TileGridLayout,
+  center: {column: number; row: number},
+  radius: number,
+  shape: "native" | "square",
+) {
+  const rings = Math.max(0, Math.round(radius));
+  if (rings === 0) return [center];
+  if (grid.kind === "hexagonal" || shape === "native") return expandCellRegion(grid, [center], rings);
+  const cells: Array<{column: number; row: number}> = [];
+  for (let row = center.row - rings; row <= center.row + rings; row += 1) {
+    for (let column = center.column - rings; column <= center.column + rings; column += 1) {
+      cells.push({column, row});
+    }
   }
-  return points;
+  return cells;
+}
+
+function terrainScatterAllows(seed: number, column: number, row: number, percent: number) {
+  if (percent >= 100) return true;
+  let hash = (2166136261 ^ (seed >>> 0)) >>> 0;
+  hash = Math.imul(hash ^ (column >>> 0), 0x01000193) >>> 0;
+  hash = Math.imul(hash ^ (row >>> 0), 0x01000193) >>> 0;
+  hash ^= hash >>> 16;
+  return hash % 100 < Math.max(0, Math.round(percent));
 }
 
 function paletteColorFromEditor(color: string, alphaPercent: number) {
@@ -1600,6 +1702,15 @@ function App() {
   const tilemapEditBeforeRef = useRef<PixelDocument | null>(null);
   const tilemapLastPointRef = useRef<{x: number; y: number} | null>(null);
   const tilemapEditChangedRef = useRef(false);
+  const tilemapAuthorityDeclinedRef = useRef(false);
+  const tilemapPromptEndedGestureRef = useRef(false);
+  const tilemapCellChangesRef = useRef(new Map<number, {before: number; after: number}>());
+  const terrainCellChangesRef = useRef(new Map<number, {before: number; after: number}>());
+  const tilemapGestureStartCellRef = useRef<{x: number; y: number} | null>(null);
+  const tilemapGestureStartPointRef = useRef<{x: number; y: number} | null>(null);
+  const tileSelectionDragRef = useRef<{selection: TilemapSelection; start: {x: number; y: number}} | null>(null);
+  const tilesetSelectionDragRef = useRef<{start: HTMLButtonElement; moved: boolean} | null>(null);
+  const tilesetSelectionSuppressClickRef = useRef(false);
   const celMoveSessionRef = useRef<CelMoveSession | null>(null);
   const timelineCelDragRef = useRef<TimelineCelDragSession | null>(null);
   const mcpInteractionGuardRef = useRef<(() => boolean) | null>(null);
@@ -1630,11 +1741,30 @@ function App() {
   const shiftPixelsMenuRef = useRef<HTMLDivElement | null>(null);
   const imageEffectsAnchorRef = useRef<HTMLDivElement | null>(null);
   const imageEffectsMenuRef = useRef<HTMLDivElement | null>(null);
+  const toolGroupMenuRef = useRef<HTMLDivElement | null>(null);
+  const toolGroupLongPressTimerRef = useRef<number | null>(null);
+  const toolGroupSuppressClickRef = useRef<string | null>(null);
+  const contextMenuRef = useRef<HTMLDivElement | null>(null);
   const documentTabsRef = useRef<HTMLDivElement | null>(null);
   const timelineLayersRef = useRef<HTMLDivElement | null>(null);
   const timelineFramesRef = useRef<HTMLDivElement | null>(null);
   const timelineScrollSyncRef = useRef(false);
   const [revision, setRevision] = useState(0);
+  const activeTileGridLines = useMemo(() => {
+    if (!activeTileset || !activeCel?.tilemap) return [];
+    const layout = tilesetGridLayout(activeTileset, activeCel.tilemap);
+    const positionedLayout = {
+      ...layout,
+      originX: (layout.originX ?? 0) + activeCel.x,
+      originY: (layout.originY ?? 0) + activeCel.y,
+    };
+    return gridLineSegments(positionedLayout, {
+      minColumn: 0,
+      minRow: 0,
+      maxColumn: activeCel.tilemap.columns - 1,
+      maxRow: activeCel.tilemap.rows - 1,
+    });
+  }, [activeCel, activeTileset, revision]);
   const [displayDirtyBounds, setDisplayDirtyBounds] = useState<PixelBounds | null>(null);
   const pixelRenderRef = useRef<{frameRequest: number | null; bounds: PixelBounds | null}>({frameRequest: null, bounds: null});
   const [, setUIRevision] = useState(0);
@@ -1660,10 +1790,186 @@ function App() {
   const previousBrushSizeRef = useRef(brushSize);
   const [brushStabilizer, setBrushStabilizer] = useState(0);
   const [brushAngle, setBrushAngle] = useState(0);
-  const [tilemapDrawMode, setTilemapDrawMode] = useState<"tiles" | "pixels">("tiles");
+  const [selectedTool, setSelectedTool] = useState<ToolID>("pencil");
+  const [tilemapDrawMode, setTilemapDrawMode] = useState<"tiles" | "pixels" | "terrain">("tiles");
+  const [tilemapToolMode, setTilemapToolMode] = useState<"pencil" | "picker" | "fill" | "line" | "rectangle" | "stamp" | "select">("pencil");
+  const [tileRectangleFilled, setTileRectangleFilled] = useState(false);
+  const [tileStamp, setTileStamp] = useState<TileStamp | null>(null);
+  const [tileCellSelection, setTileCellSelection] = useState<TilemapSelection | null>(null);
+  const [tileCellClipboard, setTileCellClipboard] = useState<TilemapClipboard | null>(null);
+  const [tileStampEmptyMode, setTileStampEmptyMode] = useState<"overwrite" | "skip">("overwrite");
   const [tilePixelSyncMode, setTilePixelSyncMode] = useState<TilePixelSyncMode>("auto");
   const [selectedTileID, setSelectedTileID] = useState(0);
+  const [selectedTileIDs, setSelectedTileIDs] = useState<number[]>([]);
+  const [tileSearch, setTileSearch] = useState("");
+  const [tileTerrainFilter, setTileTerrainFilter] = useState(0);
+  const [tilePreviewSize, setTilePreviewSize] = useState(48);
+  const [tileSelectionAnchorID, setTileSelectionAnchorID] = useState<number | null>(null);
+  const [tileClipboard, setTileClipboard] = useState<Tileset["tiles"]>([]);
+  const tileClipboardSourceRef = useRef<{tabID: string; tilesetID: string; width: number; height: number} | null>(null);
+  const tileCellClipboardSourceRef = useRef<{tabID: string; tilesetID: string} | null>(null);
+  const [selectedTileFlags, setSelectedTileFlags] = useState(0);
+  const [tilemapHoverCell, setTilemapHoverCell] = useState<TileCell | null>(null);
+  const [selectedTerrainID, setSelectedTerrainID] = useState(0);
+  const [terrainToolMode, setTerrainToolMode] = useState<"brush" | "picker" | "fill" | "line" | "rectangle" | "stamp">("brush");
+  const [terrainRectangleFilled, setTerrainRectangleFilled] = useState(false);
+  const [terrainStamp, setTerrainStamp] = useState<TerrainStamp | null>(null);
+  const [terrainStampEmptyMode, setTerrainStampEmptyMode] = useState<"overwrite" | "skip">("overwrite");
+  const [terrainBrushRadius, setTerrainBrushRadius] = useState(0);
+  const [terrainBrushShape, setTerrainBrushShape] = useState<"native" | "square">("native");
+  const [terrainScatterPercent, setTerrainScatterPercent] = useState(100);
+  const [terrainRuleMaskDraft, setTerrainRuleMaskDraft] = useState(0);
+  const [terrainRuleWeightDraft, setTerrainRuleWeightDraft] = useState(1);
+  useEffect(() => {
+    setTileCellSelection(null);
+    setTilemapHoverCell(null);
+    tileSelectionDragRef.current = null;
+  }, [activeTab.id, activeCel?.id, activeTileset?.id]);
+  useEffect(() => {
+    const clearTilesetDrag = () => {
+      tilesetSelectionDragRef.current = null;
+    };
+    window.addEventListener("pointerup", clearTilesetDrag);
+    window.addEventListener("blur", clearTilesetDrag);
+    return () => {
+      window.removeEventListener("pointerup", clearTilesetDrag);
+      window.removeEventListener("blur", clearTilesetDrag);
+    };
+  }, []);
+  const effectiveSelectedTerrainID = activeTileset?.terrains.some((terrain) => terrain.id === selectedTerrainID)
+    ? selectedTerrainID
+    : activeTileset?.terrains[0]?.id ?? 0;
+  const activeTerrain = activeTileset?.terrains.find((terrain) => terrain.id === effectiveSelectedTerrainID) ?? null;
+  const activeTerrainDiagnostic = activeTerrain && activeTileset ? terrainRuleDiagnostic(activeTerrain, {
+    tileIds: activeTileset.tiles.map((tile) => tile.id),
+    tileWidth: activeTileset.tileWidth,
+    tileHeight: activeTileset.tileHeight,
+  }) : null;
   const effectiveSelectedTileID = activeTileset?.tiles.some((tile) => tile.id === selectedTileID) ? selectedTileID : 0;
+  const effectiveSelectedTileIDs = activeTileset
+    ? selectedTileIDs.filter((id) => activeTileset.tiles.some((tile) => tile.id === id))
+    : [];
+  const tileUsage = useMemo(() => {
+    const counts = new Map<number, {cells: number; rules: number; terrainIDs: number[]}>();
+    if (!activeTileset) return counts;
+    for (const tile of activeTileset.tiles) counts.set(tile.id, {cells: 0, rules: 0, terrainIDs: []});
+    const layerIDs = new Set(pixelDocument.layers
+      .filter((layer) => layer.kind === "tilemap" && layer.tilesetId === activeTileset.id)
+      .map((layer) => layer.id));
+    for (const cel of Object.values(pixelDocument.cels)) {
+      if (!layerIDs.has(cel.layerId) || !cel.tilemap) continue;
+      for (const value of cel.tilemap.tiles) {
+        const entry = counts.get(tileValueIndex(value));
+        if (entry) entry.cells += 1;
+      }
+    }
+    for (const terrain of activeTileset.terrains) {
+      for (const rule of terrain.rules) {
+        for (const candidate of rule.candidates) {
+          const entry = counts.get(candidate.tileId);
+          if (!entry) continue;
+          entry.rules += 1;
+          if (!entry.terrainIDs.includes(terrain.id)) entry.terrainIDs.push(terrain.id);
+        }
+      }
+    }
+    return counts;
+  }, [activeTileset, pixelDocument.cels, pixelDocument.layers, revision]);
+  const tiledStampGeometry = useMemo(() => activeTileset && activeCel?.tilemap ? {
+    tileset: activeTileset,
+    tilemap: activeCel.tilemap,
+    celOffset: {x: activeCel.x, y: activeCel.y},
+    documentSize: {width: pixelDocument.width, height: pixelDocument.height},
+    tiledX: pixelDocument.settings.tiledX,
+    tiledY: pixelDocument.settings.tiledY,
+  } : null, [activeTileset, activeCel, revision, pixelDocument.width, pixelDocument.height,
+    pixelDocument.settings.tiledX, pixelDocument.settings.tiledY]);
+  const tileCellOverlays = useMemo(() => {
+    if (!activeTileset || !activeCel?.tilemap) return [];
+    const tilemap = activeCel.tilemap;
+    const inside = (cell: TileCell) => cell.column >= 0 && cell.row >= 0
+      && cell.column < tilemap.columns && cell.row < tilemap.rows;
+    const layout = tilesetGridLayout(activeTileset, tilemap);
+    const positionedLayout = {
+      ...layout,
+      originX: (layout.originX ?? 0) + activeCel.x,
+      originY: (layout.originY ?? 0) + activeCel.y,
+    };
+    let primary: TileCell[] = tileCellSelection
+      ? Array.from({length: tileCellSelection.width * tileCellSelection.height}, (_, index) => ({
+        column: tileCellSelection.x + index % tileCellSelection.width,
+        row: tileCellSelection.y + Math.floor(index / tileCellSelection.width),
+      }))
+      : tilemapHoverCell ? [tilemapHoverCell] : [];
+    if (tiledStampGeometry && tilemapHoverCell && tilemapDrawMode === "tiles" && tilemapToolMode === "stamp" && tileStamp) {
+      primary = mapTiledTileStampTargets(tiledStampGeometry, tilemapHoverCell, tileStamp,
+        {emptyMode: tileStampEmptyMode}).map(({cell}) => cell);
+    } else if (tiledStampGeometry && tilemapHoverCell && tilemapDrawMode === "terrain" && terrainToolMode === "stamp" && terrainStamp) {
+      primary = mapTiledTerrainStampTargets(tiledStampGeometry, tilemapHoverCell, terrainStamp,
+        {emptyMode: terrainStampEmptyMode}).map(({cell}) => cell);
+    } else if (tilemapHoverCell && tilemapDrawMode === "terrain" && terrainToolMode === "brush") {
+      primary = terrainBrushShape === "square" && activeTileset.grid.kind !== "hexagonal"
+        ? Array.from({length: (terrainBrushRadius * 2 + 1) ** 2}, (_, index) => ({
+          column: tilemapHoverCell.column + index % (terrainBrushRadius * 2 + 1) - terrainBrushRadius,
+          row: tilemapHoverCell.row + Math.floor(index / (terrainBrushRadius * 2 + 1)) - terrainBrushRadius,
+        }))
+        : expandCellRegion(layout, [tilemapHoverCell], terrainBrushRadius);
+      if (tiledStampGeometry) {
+        primary = mapTiledCellTargets(tiledStampGeometry, primary.map((cell) => ({cell, value: 0})))
+          .map(({cell}) => cell);
+      }
+    }
+    const acceptsCell = createTilemapSelectionPredicate(activeTab.selection, activeTileset, tilemap.columns, tilemap.rows,
+      {celX: activeCel.x, celY: activeCel.y, gridOffset: tilemap.gridOffset});
+    primary = primary.filter((cell) => inside(cell) && (tileCellSelection || acceptsCell(cell)));
+    const primaryKeys = new Set(primary.map((cell) => `${cell.column}:${cell.row}`));
+    const affected = tilemapDrawMode === "terrain"
+      ? terrainAffectedCells(tilemap, activeTileset.terrains, layout, primary)
+        .filter((cell) => !primaryKeys.has(`${cell.column}:${cell.row}`))
+      : [];
+    return [
+      ...affected.map((cell) => ({points: cellPolygon(positionedLayout, cell), kind: "affected" as const})),
+      ...primary.map((cell) => ({points: cellPolygon(positionedLayout, cell), kind: "primary" as const})),
+    ];
+  }, [activeCel, activeTab.selection, activeTileset, revision, terrainBrushRadius, terrainBrushShape, terrainStamp, terrainToolMode, tileCellSelection, tileStamp, tilemapDrawMode, tilemapHoverCell, tilemapToolMode, tiledStampGeometry, tileStampEmptyMode, terrainStampEmptyMode]);
+  const tileImagePreviews = useMemo(() => {
+    if (!activeTileset || !activeCel?.tilemap || !tilemapHoverCell
+      || tilemapDrawMode !== "tiles" || selectedTool === "eraser"
+      || tilemapToolMode === "picker" || tilemapToolMode === "select") return [];
+    const entries = tilemapToolMode === "stamp" && tileStamp && tiledStampGeometry
+      ? mapTiledTileStampTargets(tiledStampGeometry, tilemapHoverCell, tileStamp, {emptyMode: tileStampEmptyMode})
+      : [{cell: tilemapHoverCell, value: (effectiveSelectedTileID | selectedTileFlags) >>> 0}];
+    const layout = tilesetGridLayout(activeTileset, activeCel.tilemap);
+    const acceptsCell = createTilemapSelectionPredicate(activeTab.selection, activeTileset,
+      activeCel.tilemap.columns, activeCel.tilemap.rows,
+      {celX: activeCel.x, celY: activeCel.y, gridOffset: activeCel.tilemap.gridOffset});
+    return entries
+      .filter(({cell, value}) => value !== 0
+        && cell.column >= 0 && cell.row >= 0
+        && cell.column < activeCel.tilemap!.columns && cell.row < activeCel.tilemap!.rows && acceptsCell(cell))
+      .sort((left, right) => compareCellsForRendering(layout, left.cell, right.cell))
+      .flatMap(({cell, value}) => {
+        const tile = activeTileset.tiles.find((candidate) => candidate.id === tileValueIndex(value));
+        if (!tile) return [];
+        const pixels = new Uint8ClampedArray(tile.pixels.length);
+        for (let y = 0; y < activeTileset.tileHeight; y += 1) {
+          for (let x = 0; x < activeTileset.tileWidth; x += 1) {
+            const source = sourcePixelForTileValue(value, x, y, activeTileset.tileWidth, activeTileset.tileHeight);
+            const target = (y * activeTileset.tileWidth + x) * 4;
+            const offset = (source.y * activeTileset.tileWidth + source.x) * 4;
+            pixels.set(tile.pixels.subarray(offset, offset + 4), target);
+          }
+        }
+        const origin = tileCellImageOrigin(activeTileset, activeCel.tilemap!, cell);
+        return [{
+          x: activeCel.x + origin.x,
+          y: activeCel.y + origin.y,
+          width: activeTileset.tileWidth,
+          height: activeTileset.tileHeight,
+          pixels,
+        }];
+      });
+  }, [activeCel, activeTileset, effectiveSelectedTileID, selectedTileFlags, selectedTool, tileStamp, tilemapDrawMode, tilemapHoverCell, tilemapToolMode, tiledStampGeometry, tileStampEmptyMode, activeTab.selection]);
   const [inkMode, setInkMode] = useState<InkMode>("simple");
   const [gradientDither, setGradientDither] = useState<GradientDither>("none");
   const [gradientType, setGradientType] = useState<GradientType>("linear");
@@ -1704,7 +2010,9 @@ function App() {
   const [sliceScaleX, setSliceScaleX] = useState(100);
   const [sliceScaleY, setSliceScaleY] = useState(100);
   const [selectedPaletteIndex, setSelectedPaletteIndex] = useState(0);
-  const [selectedTool, setSelectedTool] = useState<ToolID>("pencil");
+  const [openToolGroupID, setOpenToolGroupID] = useState<string | null>(null);
+  const [toolGroupMenuPosition, setToolGroupMenuPosition] = useState({left: 0, top: 0});
+  const [preferredToolByGroup, setPreferredToolByGroup] = useState<Record<string, ToolID>>({});
   const [moveAutoSelect, setMoveAutoSelect] = useState(false);
   const [renamingLayerId, setRenamingLayerId] = useState<string | null>(null);
   const [layerNameDraft, setLayerNameDraft] = useState("");
@@ -1747,7 +2055,7 @@ function App() {
   const [commandShortcutAssignments, setCommandShortcutAssignments] = useState<Record<CommandShortcutID, string>>(storedCommandShortcutAssignments);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
-  const [lightTheme, setLightTheme] = useState(preferences.general.theme === "light");
+  const [lightTheme, setLightTheme] = useState(true);
   const [language, setLanguage] = useState<Language>(initialLanguageRef.current);
   const [recoveryReady, setRecoveryReady] = useState(false);
   const [isFileMenuOpen, setIsFileMenuOpen] = useState(false);
@@ -1758,6 +2066,7 @@ function App() {
   const [isViewMenuOpen, setIsViewMenuOpen] = useState(false);
   const [isImageEffectsMenuOpen, setIsImageEffectsMenuOpen] = useState(false);
   const [isPaletteMenuOpen, setIsPaletteMenuOpen] = useState(false);
+  const [contextMenu, setContextMenu] = useState<EditorContextMenuState | null>(null);
   const [inspectorVisible, setInspectorVisible] = useState(() => readWorkspaceVisibility(localStorage).inspectorVisible ?? defaultWorkspaceVisibility.inspectorVisible);
   const [timelineVisible, setTimelineVisible] = useState(() => readWorkspaceVisibility(localStorage).timelineVisible ?? defaultWorkspaceVisibility.timelineVisible);
   const [canvasOnly, setCanvasOnly] = useState(() => readWorkspaceCanvasOnly(localStorage));
@@ -1924,7 +2233,61 @@ function App() {
     else if (!activeTab.transformPivot) activeTab.transformPivot = {x: next.x + next.width / 2, y: next.y + next.height / 2};
     setActiveTabValue({selection: next});
   }, [activeTab.selection, setActiveTabValue]);
+  const clearToolGroupLongPress = useCallback(() => {
+    if (toolGroupLongPressTimerRef.current === null) return;
+    window.clearTimeout(toolGroupLongPressTimerRef.current);
+    toolGroupLongPressTimerRef.current = null;
+  }, []);
+  const openToolGroupMenu = useCallback((group: ToolGroup, anchor: HTMLButtonElement) => {
+    if (group.tools.length < 2) return;
+    const bounds = anchor.getBoundingClientRect();
+    const scale = preferences.general.uiScale / 100;
+    const menuHeight = group.tools.length * 34 + 10;
+    setToolGroupMenuPosition({
+      left: Math.min(window.innerWidth / scale - 184, bounds.right / scale + 6),
+      top: Math.max(8, Math.min(window.innerHeight / scale - menuHeight - 8, bounds.top / scale)),
+    });
+    setOpenToolGroupID(group.id);
+  }, [preferences.general.uiScale]);
+  const beginToolGroupLongPress = useCallback((group: ToolGroup, event: ReactPointerEvent<HTMLButtonElement>) => {
+    if (event.button !== 0 || group.tools.length < 2) return;
+    clearToolGroupLongPress();
+    const anchor = event.currentTarget;
+    toolGroupLongPressTimerRef.current = window.setTimeout(() => {
+      toolGroupLongPressTimerRef.current = null;
+      toolGroupSuppressClickRef.current = group.id;
+      openToolGroupMenu(group, anchor);
+    }, 420);
+  }, [clearToolGroupLongPress, openToolGroupMenu]);
+  useEffect(() => () => clearToolGroupLongPress(), [clearToolGroupLongPress]);
+  useEffect(() => {
+    if (!openToolGroupID) toolGroupSuppressClickRef.current = null;
+  }, [openToolGroupID]);
+  const showContextMenu = useCallback((target: EditorContextTarget, clientX: number, clientY: number) => {
+    const scale = Math.max(0.01, preferences.general.uiScale / 100);
+    setContextMenu({
+      target,
+      left: clientX / scale,
+      top: clientY / scale,
+    });
+  }, [preferences.general.uiScale]);
+  const openContextMenu = useCallback((event: ReactMouseEvent, target: EditorContextTarget) => {
+    event.preventDefault();
+    event.stopPropagation();
+    showContextMenu(target, event.clientX, event.clientY);
+  }, [showContextMenu]);
+  const openKeyboardContextMenu = useCallback((event: ReactKeyboardEvent<HTMLElement>, target: EditorContextTarget) => {
+    if (event.key !== "ContextMenu" && !(event.shiftKey && event.key === "F10")) return false;
+    event.preventDefault();
+    event.stopPropagation();
+    const bounds = event.currentTarget.getBoundingClientRect();
+    showContextMenu(target, bounds.left + Math.min(24, bounds.width / 2), bounds.top + Math.min(24, bounds.height / 2));
+    return true;
+  }, [showContextMenu]);
   const activateTool = useCallback((tool: ToolID) => {
+    const group = getToolGroup(tool);
+    if (group) setPreferredToolByGroup((current) => current[group.id] === tool ? current : {...current, [group.id]: tool});
+    setOpenToolGroupID(null);
     setSelectedTool(tool);
     if (tool === "transform" && activeTab.selection) {
       activeTab.transformPivot = {
@@ -2501,6 +2864,56 @@ function App() {
     window.addEventListener("pointerdown", closeOnOutsidePointer);
     return () => window.removeEventListener("pointerdown", closeOnOutsidePointer);
   }, [isPaletteMenuOpen]);
+
+  useEffect(() => {
+    if (!openToolGroupID) return;
+    const closeOnOutsidePointer = (event: PointerEvent) => {
+      if (!toolGroupMenuRef.current?.contains(event.target as Node)) setOpenToolGroupID(null);
+    };
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setOpenToolGroupID(null);
+    };
+    window.addEventListener("pointerdown", closeOnOutsidePointer);
+    window.addEventListener("keydown", closeOnEscape);
+    return () => {
+      window.removeEventListener("pointerdown", closeOnOutsidePointer);
+      window.removeEventListener("keydown", closeOnEscape);
+    };
+  }, [openToolGroupID]);
+
+  useLayoutEffect(() => {
+    if (!contextMenu || !contextMenuRef.current) return;
+    const scale = Math.max(0.01, preferences.general.uiScale / 100);
+    const bounds = contextMenuRef.current.getBoundingClientRect();
+    const maximumLeft = Math.max(8, window.innerWidth / scale - bounds.width / scale - 8);
+    const maximumTop = Math.max(8, window.innerHeight / scale - bounds.height / scale - 8);
+    const left = Math.max(8, Math.min(maximumLeft, contextMenu.left));
+    const top = Math.max(8, Math.min(maximumTop, contextMenu.top));
+    if (left !== contextMenu.left || top !== contextMenu.top) {
+      setContextMenu((current) => current ? {...current, left, top} : current);
+    }
+  }, [contextMenu, preferences.general.uiScale]);
+
+  useEffect(() => {
+    if (!contextMenu) return;
+    const closeOnPointer = (event: PointerEvent) => {
+      if (!contextMenuRef.current?.contains(event.target as Node)) setContextMenu(null);
+    };
+    const closeOnKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setContextMenu(null);
+    };
+    const close = () => setContextMenu(null);
+    window.addEventListener("pointerdown", closeOnPointer);
+    window.addEventListener("keydown", closeOnKey);
+    window.addEventListener("resize", close);
+    window.addEventListener("blur", close);
+    return () => {
+      window.removeEventListener("pointerdown", closeOnPointer);
+      window.removeEventListener("keydown", closeOnKey);
+      window.removeEventListener("resize", close);
+      window.removeEventListener("blur", close);
+    };
+  }, [contextMenu]);
 
   const updateTabScrollState = useCallback(() => {
     const container = documentTabsRef.current;
@@ -4669,9 +5082,239 @@ function App() {
     activeTab.selectedLayerIds = [layer.id];
     activeTab.layerSelectionAnchorId = layer.id;
     setSelectedTileID(0);
+    setSelectedTileIDs([]);
     setTabCommandScope(activeTab, "layer");
     return true;
   });
+
+  const createSharedTilemapLayer = () => mutateDocument("Add Shared Tilemap Layer", () => {
+    if (!activeTileset) return false;
+    const layer = addTilemapLayer(pixelDocument, activeTileset.id, language === "zh" ? "共享图块地图" : "Shared Tilemap");
+    if (!layer) return false;
+    activeTab.selectedLayerIds = [layer.id];
+    activeTab.layerSelectionAnchorId = layer.id;
+    setTabCommandScope(activeTab, "layer");
+    return true;
+  });
+
+  const renameActiveTileset = () => {
+    if (!activeTileset) return;
+    const name = window.prompt(language === "zh" ? "图块集名称" : "Tileset name", activeTileset.name)?.trim();
+    if (!name || name === activeTileset.name) return;
+    mutateDocument("Rename Tileset", () => {
+      activeTileset.name = name;
+      return true;
+    });
+  };
+
+  const activeTilesetReferences = useMemo(() => {
+    return collectTilesetReferences(pixelDocument, activeTileset?.id ?? "");
+  }, [activeTileset, pixelDocument, revision]);
+
+  const rebuildTilesetGridCaches = (tileset: Tileset) => {
+    const layerIDs = new Set(pixelDocument.layers
+      .filter((layer) => layer.kind === "tilemap" && layer.tilesetId === tileset.id)
+      .map((layer) => layer.id));
+    for (const cel of Object.values(pixelDocument.cels)) {
+      if (!layerIDs.has(cel.layerId) || !cel.tilemap) continue;
+      const size = tilemapPixelSize(tileset, cel.tilemap);
+      cel.width = size.width;
+      cel.height = size.height;
+      if (cel.terrainmap) {
+        const allCells = Array.from({length: cel.terrainmap.terrains.length}, (_, index) => ({
+          column: index % cel.terrainmap!.columns,
+          row: Math.floor(index / cel.terrainmap!.columns),
+        }));
+        recalculateTerrainCells(
+          cel.terrainmap,
+          tileset.terrains,
+          tilesetGridLayout(tileset, cel.tilemap),
+          cel.tilemap.tiles,
+          allCells,
+        );
+      }
+    }
+    refreshTilemapCaches(pixelDocument);
+  };
+
+  const assignActiveLayerTileset = (tilesetID: string) => mutateDocument("Change Layer Tileset", () => {
+    if (activeLayer.kind !== "tilemap" || activeLayer.tilesetId === tilesetID) return false;
+    const tileset = pixelDocument.tilesets.find((candidate) => candidate.id === tilesetID);
+    if (!tileset) return false;
+    activeLayer.tilesetId = tileset.id;
+    const validTileIDs = new Set(tileset.tiles.map((tile) => tile.id));
+    for (const cel of Object.values(pixelDocument.cels)) {
+      if (cel.layerId !== activeLayer.id || !cel.tilemap) continue;
+      for (let index = 0; index < cel.tilemap.tiles.length; index += 1) {
+        if (!validTileIDs.has(tileValueIndex(cel.tilemap.tiles[index]))) cel.tilemap.tiles[index] = 0;
+      }
+      delete cel.tilemap.gridOffset;
+      cel.terrainmap = undefined;
+      const size = tilemapPixelSize(tileset, cel.tilemap);
+      cel.width = size.width;
+      cel.height = size.height;
+    }
+    rebuildTilesetGridCaches(tileset);
+    setSelectedTileID(0);
+    setSelectedTileIDs([]);
+    setSelectedTerrainID(0);
+    return true;
+  });
+
+  const createBlankTilesetForLayer = () => mutateDocument("Create Tileset", () => {
+    if (activeLayer.kind !== "tilemap") return false;
+    const tileset = createTileset({
+      name: language === "zh" ? "新图块集" : "New Tileset",
+      tileWidth: activeTileset?.tileWidth ?? pixelDocument.settings.gridWidth,
+      tileHeight: activeTileset?.tileHeight ?? pixelDocument.settings.gridHeight,
+      grid: activeTileset ? {...activeTileset.grid} : {kind: "orthogonal"},
+    });
+    pixelDocument.tilesets.push(tileset);
+    activeLayer.tilesetId = tileset.id;
+    for (const cel of Object.values(pixelDocument.cels)) {
+      if (cel.layerId !== activeLayer.id || !cel.tilemap) continue;
+      cel.tilemap.tiles.fill(0);
+      delete cel.tilemap.gridOffset;
+      cel.terrainmap = undefined;
+      const size = tilemapPixelSize(tileset, cel.tilemap);
+      cel.width = size.width;
+      cel.height = size.height;
+    }
+    rebuildTilesetGridCaches(tileset);
+    setSelectedTileID(0);
+    setSelectedTileIDs([]);
+    setSelectedTerrainID(0);
+    return true;
+  });
+
+  const duplicateActiveTileset = () => mutateDocument("Duplicate Tileset", () => {
+    if (!activeTileset || activeLayer.kind !== "tilemap") return false;
+    const copy = createTileset({
+      name: `${activeTileset.name} ${language === "zh" ? "副本" : "Copy"}`,
+      tileWidth: activeTileset.tileWidth,
+      tileHeight: activeTileset.tileHeight,
+      grid: {...activeTileset.grid},
+      terrains: activeTileset.terrains,
+      tiles: activeTileset.tiles,
+    });
+    pixelDocument.tilesets.push(copy);
+    activeLayer.tilesetId = copy.id;
+    rebuildTilesetGridCaches(copy);
+    return true;
+  });
+
+  const deleteActiveTileset = () => {
+    if (!activeTileset) return;
+    const fallback = pixelDocument.tilesets.find((candidate) => candidate.id !== activeTileset.id);
+    if (!fallback) {
+      setStatus(language === "zh" ? "不能删除项目中的最后一个图块集" : "The last Tileset in a project cannot be deleted");
+      return;
+    }
+    const message = language === "zh"
+      ? `删除“${activeTileset.name}”将把 ${activeTilesetReferences.layers.length} 个图层切换到“${fallback.name}”，并清除不兼容单元格与地形。继续吗？`
+      : `Delete "${activeTileset.name}"? ${activeTilesetReferences.layers.length} layers will switch to "${fallback.name}", and incompatible cells and Terrain data will be cleared.`;
+    if (!window.confirm(message)) return;
+    mutateDocument("Delete Tileset", () => {
+      const layerIDs = new Set(pixelDocument.layers
+        .filter((layer) => layer.kind === "tilemap" && layer.tilesetId === activeTileset.id)
+        .map((layer) => layer.id));
+      const validTileIDs = new Set(fallback.tiles.map((tile) => tile.id));
+      for (const layer of pixelDocument.layers) {
+        if (layerIDs.has(layer.id)) layer.tilesetId = fallback.id;
+      }
+      for (const cel of Object.values(pixelDocument.cels)) {
+        if (!layerIDs.has(cel.layerId) || !cel.tilemap) continue;
+        for (let index = 0; index < cel.tilemap.tiles.length; index += 1) {
+          if (!validTileIDs.has(tileValueIndex(cel.tilemap.tiles[index]))) cel.tilemap.tiles[index] = 0;
+        }
+        delete cel.tilemap.gridOffset;
+        cel.terrainmap = undefined;
+        const size = tilemapPixelSize(fallback, cel.tilemap);
+        cel.width = size.width;
+        cel.height = size.height;
+      }
+      pixelDocument.tilesets.splice(pixelDocument.tilesets.indexOf(activeTileset), 1);
+      rebuildTilesetGridCaches(fallback);
+      setSelectedTileID(0);
+      setSelectedTileIDs([]);
+      setSelectedTerrainID(0);
+      return true;
+    });
+  };
+
+  const updateActiveTilesetGrid = (value: string) => mutateDocument("Change Tilemap Grid", () => {
+    if (!activeTileset) return false;
+    const nextGrid = value === "isometric"
+      ? {
+        kind: "isometric" as const,
+        cellWidth: activeTileset.tileWidth,
+        cellHeight: activeTileset.tileHeight,
+        anchorX: Math.round(activeTileset.tileWidth / 2),
+        anchorY: activeTileset.tileHeight,
+      }
+      : value === "hex-pointy-odd"
+        ? {kind: "hexagonal" as const, orientation: "pointy" as const, offset: "odd-r" as const}
+        : value === "hex-pointy-even"
+          ? {kind: "hexagonal" as const, orientation: "pointy" as const, offset: "even-r" as const}
+          : value === "hex-flat-odd"
+            ? {kind: "hexagonal" as const, orientation: "flat" as const, offset: "odd-q" as const}
+            : value === "hex-flat-even"
+              ? {kind: "hexagonal" as const, orientation: "flat" as const, offset: "even-q" as const}
+              : {kind: "orthogonal" as const};
+    if (JSON.stringify(nextGrid) === JSON.stringify(activeTileset.grid)) return false;
+    activeTileset.grid = nextGrid;
+    const layerIDs = new Set(pixelDocument.layers
+      .filter((layer) => layer.kind === "tilemap" && layer.tilesetId === activeTileset.id)
+      .map((layer) => layer.id));
+    for (const cel of Object.values(pixelDocument.cels)) {
+      if (layerIDs.has(cel.layerId) && cel.tilemap) delete cel.tilemap.gridOffset;
+    }
+    for (const terrain of activeTileset.terrains) {
+      terrain.neighborMode = nextGrid.kind === "hexagonal" ? "edge6" : "edge4";
+      const maximumMask = terrain.neighborMode === "edge6" ? 0x3f : 0x0f;
+      terrain.rules = terrain.rules.filter((rule) => rule.mask <= maximumMask);
+    }
+    rebuildTilesetGridCaches(activeTileset);
+    return true;
+  });
+
+  const updateActiveIsometricGrid = (
+    field: "cellWidth" | "cellHeight" | "anchorX" | "anchorY",
+    value: number,
+  ) => mutateDocument("Change Isometric Grid", () => {
+    if (!activeTileset || activeTileset.grid.kind !== "isometric" || !Number.isFinite(value)) return false;
+    const next = Math.round(value);
+    const maximum = field === "anchorX"
+      ? activeTileset.tileWidth
+      : field === "anchorY"
+        ? activeTileset.tileHeight
+        : 4096;
+    const minimum = field === "cellWidth" || field === "cellHeight" ? 1 : 0;
+    const clamped = Math.max(minimum, Math.min(maximum, next));
+    if (activeTileset.grid[field] === clamped) return false;
+    activeTileset.grid = {...activeTileset.grid, [field]: clamped};
+    rebuildTilesetGridCaches(activeTileset);
+    return true;
+  });
+
+  const updateActiveHexSideLength = (value: number) => {
+    if (!activeTileset || activeTileset.grid.kind !== "hexagonal" || !Number.isFinite(value)) return;
+    const side = Math.max(1, Math.min(1024, Math.round(value)));
+    if (activeTileset.tiles.length > 0 || tilemapBuffersForTileset(activeTileset.id).some((tilemap) => tilemap.tiles.some((cell) => cell !== 0))) {
+      setStatus(language === "zh" ? "仅空图块集可以修改六边形边长" : "Hex side length can only change on an empty Tileset");
+      return;
+    }
+    mutateDocument("Change Hex Side Length", () => {
+      if (activeTileset.grid.kind !== "hexagonal") return false;
+      const width = activeTileset.grid.orientation === "pointy" ? Math.max(1, Math.round(Math.sqrt(3) * side)) : side * 2;
+      const height = activeTileset.grid.orientation === "pointy" ? side * 2 : Math.max(1, Math.round(Math.sqrt(3) * side));
+      if (width === activeTileset.tileWidth && height === activeTileset.tileHeight) return false;
+      activeTileset.tileWidth = width;
+      activeTileset.tileHeight = height;
+      rebuildTilesetGridCaches(activeTileset);
+      return true;
+    });
+  };
 
   const convertActiveLayerToTiles = () => mutateDocument("Convert Layer to Tilemap", () => {
     if (!isImageLayer(activeLayer)) return false;
@@ -4689,6 +5332,7 @@ function App() {
     activeTab.selectedLayerIds = [result.layer.id];
     activeTab.layerSelectionAnchorId = result.layer.id;
     setSelectedTileID(result.tileset.tiles[0]?.id ?? 0);
+    setSelectedTileIDs(result.tileset.tiles[0] ? [result.tileset.tiles[0].id] : []);
     setTabCommandScope(activeTab, "layer");
     return true;
   });
@@ -4719,49 +5363,1161 @@ function App() {
       nextID = result.tile.id;
       return result.created;
     });
-    if (nextID) setSelectedTileID(nextID);
+    if (nextID) {
+      setSelectedTileID(nextID);
+      setSelectedTileIDs([nextID]);
+    }
+  };
+
+  const importTilesetPNG = async () => {
+    if (!activeTileset) return;
+    try {
+      const decoded = hasWailsAppBridge()
+        ? await ImportPNG(language).then((payload) => payload ? parsePNGResponse(payload) : null)
+        : await chooseBrowserFile("image/png").then((file) => file ? decodeBrowserPNG(file) : null);
+      if (!decoded) return;
+      const readOffset = (label: string, fallback: number) => {
+        const value = window.prompt(label, String(fallback));
+        return value === null ? null : Math.max(0, Math.round(Number(value) || 0));
+      };
+      const readSize = (label: string, fallback: number) => {
+        const value = window.prompt(label, String(fallback));
+        if (value === null) return null;
+        const size = Math.round(Number(value));
+        if (!Number.isFinite(size) || size < 1 || size > 2048) throw new Error(`${label} must be from 1 to 2048`);
+        return size;
+      };
+      const tileWidth = readSize(language === "zh" ? "图块宽度" : "Tile width", activeTileset.tileWidth);
+      if (tileWidth === null) return;
+      const tileHeight = readSize(language === "zh" ? "图块高度 / 视觉高度" : "Tile / visual height", activeTileset.tileHeight);
+      if (tileHeight === null) return;
+      const changesDimensions = tileWidth !== activeTileset.tileWidth || tileHeight !== activeTileset.tileHeight;
+      if (changesDimensions && (activeTileset.tiles.length > 0 || tilemapBuffersForTileset(activeTileset.id).some((tilemap) => tilemap.tiles.some((value) => value !== 0)))) {
+        throw new Error("Tile dimensions can only change while the Tileset and its maps are empty");
+      }
+      const offsetX = readOffset(language === "zh" ? "水平偏移" : "Offset X", 0);
+      if (offsetX === null) return;
+      const offsetY = readOffset(language === "zh" ? "垂直偏移" : "Offset Y", 0);
+      if (offsetY === null) return;
+      const paddingX = readOffset(language === "zh" ? "水平间距" : "Padding X", 0);
+      if (paddingX === null) return;
+      const paddingY = readOffset(language === "zh" ? "垂直间距" : "Padding Y", 0);
+      if (paddingY === null) return;
+      const transparentColor = window.prompt(
+        language === "zh" ? "透明色（留空表示保留原 Alpha，格式 #RRGGBB）" : "Transparent color (blank keeps source alpha, format #RRGGBB)",
+        "",
+      );
+      if (transparentColor === null) return;
+      if (transparentColor !== "" && !/^#[\da-f]{6}$/i.test(transparentColor)) throw new Error("Transparent color must use #RRGGBB");
+      const sourcePixels = decoded.pixels.slice();
+      if (transparentColor) {
+        const [red, green, blue] = [
+          Number.parseInt(transparentColor.slice(1, 3), 16),
+          Number.parseInt(transparentColor.slice(3, 5), 16),
+          Number.parseInt(transparentColor.slice(5, 7), 16),
+        ];
+        for (let offset = 0; offset < sourcePixels.length; offset += 4) {
+          if (sourcePixels[offset] === red && sourcePixels[offset + 1] === green && sourcePixels[offset + 2] === blue) {
+            sourcePixels[offset + 3] = 0;
+          }
+        }
+      }
+      const sliced = sliceSpriteSheet(sourcePixels, decoded.width, decoded.height, {
+        frameWidth: tileWidth,
+        frameHeight: tileHeight,
+        layout: "matrix",
+        offsetX,
+        offsetY,
+        paddingX,
+        paddingY,
+      });
+      let selected = 0;
+      mutateDocument("Import Tileset PNG", () => {
+        activeTileset.tileWidth = tileWidth;
+        activeTileset.tileHeight = tileHeight;
+        if (activeTileset.grid.kind === "isometric") {
+          activeTileset.grid.anchorX = Math.min(activeTileset.grid.anchorX, tileWidth);
+          activeTileset.grid.anchorY = Math.min(activeTileset.grid.anchorY, tileHeight);
+        }
+        let changed = false;
+        for (const pixels of sliced.frames) {
+          const normalized = normalizeImportedTilePixels(pixels, tileWidth, tileHeight,
+            pixelDocument.colorMode, pixelDocument.palette);
+          const result = addTileInPlace(activeTileset, normalized.pixels, normalized.indexes);
+          if (!selected) selected = result.tile.id;
+          changed = result.created || changed;
+        }
+        rebuildTilesetGridCaches(activeTileset);
+        return changed;
+      });
+      if (selected) {
+        setSelectedTileID(selected);
+        setSelectedTileIDs([selected]);
+      }
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Tileset import failed");
+    }
+  };
+
+  const exportTilesetBundle = async () => {
+    if (!activeTileset || !activeCel?.tilemap || activeTileset.tiles.length === 0) return;
+    try {
+      const columns = Math.max(1, Math.ceil(Math.sqrt(activeTileset.tiles.length)));
+      const sheet = buildSpriteSheet(
+        activeTileset.tiles.map((tile) => tile.pixels),
+        activeTileset.tileWidth,
+        activeTileset.tileHeight,
+        {layout: "grid", columns, scale: 1, borderPadding: 0, framePadding: 0},
+      );
+      const stem = `${activeTileset.name.trim().replace(/[^\w.-]+/g, "-") || "tileset"}-tiles`;
+      const metadata = exportTilemapJson({
+        tileset: activeTileset,
+        tilemap: activeCel.tilemap,
+        terrainmap: activeCel.terrainmap,
+        cel: activeCel,
+        tilesetImage: {
+          file: `${stem}.png`,
+          width: sheet.width,
+          height: sheet.height,
+          tiles: activeTileset.tiles.map((tile, index) => ({tileId: tile.id, ...sheet.frames[index]})),
+        },
+      });
+      if (hasWailsAppBridge()) {
+        const path = await SavePackedAtlas(sheet.width, sheet.height, bytesToBase64(sheet.pixels), metadata, true, language);
+        if (path) setStatus(`${language === "zh" ? "已导出" : "Exported"} ${path}`);
+      } else {
+        downloadBlob(await browserPNGBlob(sheet.width, sheet.height, sheet.pixels), `${stem}.png`);
+        downloadBlob(new Blob([metadata], {type: "application/json"}), `${stem}.json`);
+      }
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Tileset export failed");
+    }
+  };
+
+  const importTilesetBundle = async () => {
+    if (!activeTileset || !activeCel?.tilemap) return;
+    try {
+      let metadataName: string;
+      let metadataText: string;
+      if (hasWailsAppBridge()) {
+        const payload = await OpenTilemapData(language);
+        if (!payload) return;
+        const decoded = JSON.parse(payload) as {name?: unknown; content?: unknown};
+        if (typeof decoded.name !== "string" || typeof decoded.content !== "string") throw new Error("Tileset metadata response is invalid");
+        metadataName = decoded.name;
+        metadataText = decoded.content;
+      } else {
+        const file = await chooseBrowserFile(".json,application/json");
+        if (!file) return;
+        metadataName = file.name;
+        metadataText = await file.text();
+      }
+      const imported = importTilemapJson(metadataText);
+      if (!imported.tilesetImage) throw new Error("Tileset metadata does not contain PNG rectangles");
+      const image = hasWailsAppBridge()
+        ? await ImportPNG(language).then((payload) => payload ? parsePNGResponse(payload) : null)
+        : await chooseBrowserFile("image/png").then((file) => file ? decodeBrowserPNG(file) : null);
+      if (!image) return;
+      if (image.name !== imported.tilesetImage.file) {
+        throw new Error(`Tileset metadata ${metadataName} expects ${imported.tilesetImage.file}, received ${image.name}`);
+      }
+      if (image.width !== imported.tilesetImage.width || image.height !== imported.tilesetImage.height) {
+        throw new Error("Tileset PNG dimensions do not match its metadata");
+      }
+      let selection = {selectedTileId: 0, selectedTerrainId: 0};
+      mutateDocument("Import Tileset Bundle", () => {
+        selection = importTilesetBundleIntoDocument(
+          pixelDocument,
+          activeTileset.id,
+          activeCel.id,
+          imported,
+          image,
+        );
+        return true;
+      });
+      setSelectedTileID(selection.selectedTileId);
+      setSelectedTileIDs(selection.selectedTileId ? [selection.selectedTileId] : []);
+      setSelectedTerrainID(selection.selectedTerrainId);
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Tileset bundle import failed");
+    }
+  };
+
+  const exportActiveTilemapData = async (format: "json" | "csv") => {
+    if (!activeTileset || !activeCel?.tilemap) return;
+    try {
+      const content = format === "json"
+        ? exportTilemapJson({
+          tileset: activeTileset,
+          tilemap: activeCel.tilemap,
+          terrainmap: activeCel.terrainmap,
+          cel: activeCel,
+        })
+        : exportTilemapCsv({
+          tileset: activeTileset,
+          tilemap: activeCel.tilemap,
+          terrainmap: activeCel.terrainmap,
+          cel: activeCel,
+        });
+      const stem = `${displayProjectName(pixelDocument.name).replace(/\.pixio$/i, "")}-${activeLayer.name.replace(/\s+/g, "-")}`;
+      if (hasWailsAppBridge()) {
+        const path = await SaveTilemapData(content, format, stem, language);
+        if (path) setStatus(`${language === "zh" ? "已导出" : "Exported"} ${path}`);
+      } else {
+        downloadBlob(new Blob([content], {type: format === "json" ? "application/json" : "text/csv;charset=utf-8"}), `${stem}.${format}`);
+      }
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Tilemap export failed");
+    }
+  };
+
+  const importActiveTilemapData = async () => {
+    if (!activeTileset || !activeCel?.tilemap) return;
+    try {
+      let name: string;
+      let content: string;
+      if (hasWailsAppBridge()) {
+        const payload = await OpenTilemapData(language);
+        if (!payload) return;
+        const decoded = JSON.parse(payload) as {name?: unknown; content?: unknown};
+        if (typeof decoded.name !== "string" || typeof decoded.content !== "string") throw new Error("Tilemap file response is invalid");
+        name = decoded.name;
+        content = decoded.content;
+      } else {
+        const file = await chooseBrowserFile(".json,.csv,application/json,text/csv");
+        if (!file) return;
+        name = file.name;
+        content = await file.text();
+      }
+      mutateDocument("Import Tilemap Data", () => {
+        if (name.toLowerCase().endsWith(".csv")) {
+          const tilemap = importTilemapCsv(content, {tileset: activeTileset});
+          const activeGridOffset = activeCel.tilemap?.gridOffset;
+          if (activeGridOffset) tilemap.gridOffset = activeGridOffset;
+          const size = tilemapPixelSize(activeTileset, tilemap);
+          activeCel.tilemap = tilemap;
+          activeCel.terrainmap = undefined;
+          activeCel.width = size.width;
+          activeCel.height = size.height;
+        } else {
+          const imported = importTilemapJson(content);
+          if (imported.tileset.tileWidth !== activeTileset.tileWidth
+            || imported.tileset.tileHeight !== activeTileset.tileHeight
+            || imported.tileset.tileIds.some((id) => !activeTileset.tiles.some((tile) => tile.id === id))) {
+            throw new Error("Imported tilemap does not match the active Tileset");
+          }
+          activeTileset.grid = {...imported.tileset.grid};
+          activeTileset.terrains = imported.tileset.terrains.map((terrain) => ({
+            ...terrain,
+            rules: terrain.rules.map((rule) => ({
+              ...rule,
+              candidates: rule.candidates.map((candidate) => ({...candidate})),
+            })),
+          }));
+          activeCel.tilemap = {...imported.tilemap, tiles: imported.tilemap.tiles.slice()};
+          activeCel.terrainmap = imported.terrainmap ? {
+            columns: imported.terrainmap.columns,
+            rows: imported.terrainmap.rows,
+            seed: imported.terrainmap.seed,
+            terrains: imported.terrainmap.cells.slice(),
+          } : undefined;
+          activeCel.x = imported.cel.x;
+          activeCel.y = imported.cel.y;
+          activeCel.width = imported.cel.width;
+          activeCel.height = imported.cel.height;
+        }
+        renderTilemapCelIntoCache(activeCel, activeTileset, {
+          palette: pixelDocument.colorMode === "indexed" ? pixelDocument.palette.colors : undefined,
+          transparentIndex: pixelDocument.palette.transparentIndex,
+        });
+        if (pixelDocument.colorMode === "indexed") syncIndexedCel(pixelDocument, activeCel);
+        for (const linked of Object.values(pixelDocument.cels)) {
+          if (linked.id === activeCel.id || linked.linkId !== activeCel.linkId) continue;
+          linked.tilemap = activeCel.tilemap;
+          linked.terrainmap = activeCel.terrainmap;
+          linked.pixels = activeCel.pixels;
+          linked.indexes = activeCel.indexes;
+          linked.width = activeCel.width;
+          linked.height = activeCel.height;
+        }
+        return true;
+      });
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Tilemap import failed");
+    }
   };
 
   const deleteSelectedTile = () => {
-    if (!activeTileset || effectiveSelectedTileID === 0) return;
+    if (!activeTileset) return;
+    const tileIDs = effectiveSelectedTileIDs.length > 0
+      ? effectiveSelectedTileIDs
+      : effectiveSelectedTileID === 0 ? [] : [effectiveSelectedTileID];
+    if (tileIDs.length === 0) return;
+    const affected = tileIDs.reduce((total, tileID) => {
+      const usage = tileUsage.get(tileID);
+      return {cells: total.cells + (usage?.cells ?? 0), rules: total.rules + (usage?.rules ?? 0)};
+    }, {cells: 0, rules: 0});
+    if (affected.rules > 0) {
+      setStatus(language === "zh"
+        ? `无法删除：${affected.rules} 条地形规则、${affected.cells} 个地图单元格受影响`
+        : `Cannot delete: ${affected.rules} Terrain rules and ${affected.cells} map cells are affected`);
+      return;
+    }
+    if (affected.cells > 0 && !window.confirm(language === "zh"
+      ? `删除后将清空 ${affected.cells} 个地图单元格。继续吗？`
+      : `Deleting these tiles will clear ${affected.cells} map cells. Continue?`)) return;
     mutateDocument("Delete Tile", () => {
       const cels = Object.values(pixelDocument.cels).filter((cel) => {
         const layer = getLayerByID(pixelDocument, cel.layerId);
         return layer?.kind === "tilemap" && layer.tilesetId === activeTileset.id && cel.tilemap;
       });
-      if (!deleteTileInPlace(activeTileset, effectiveSelectedTileID, cels.flatMap((cel) => cel.tilemap ? [cel.tilemap] : []))) return false;
+      let changed = false;
+      const tilemaps = cels.flatMap((cel) => cel.tilemap ? [cel.tilemap] : []);
+      for (const tileID of tileIDs) changed = deleteTileInPlace(activeTileset, tileID, tilemaps) || changed;
+      if (!changed) return false;
       for (const cel of cels) renderTilemapCelIntoCache(cel, activeTileset, {
         palette: pixelDocument.colorMode === "indexed" ? pixelDocument.palette.colors : undefined,
         transparentIndex: pixelDocument.palette.transparentIndex,
       });
       setSelectedTileID(0);
+      setSelectedTileIDs([]);
       return true;
     });
   };
 
+  const duplicateSelectedTiles = () => mutateDocument("Duplicate Tiles", () => {
+    if (!activeTileset) return false;
+    const selected = new Set(effectiveSelectedTileIDs.length > 0 ? effectiveSelectedTileIDs : [effectiveSelectedTileID]);
+    const source = activeTileset.tiles.filter((tile) => selected.has(tile.id));
+    if (source.length === 0) return false;
+    const used = new Set(activeTileset.tiles.map((tile) => tile.id));
+    const copies = source.map((tile) => {
+      let id = 1;
+      while (used.has(id)) id += 1;
+      if (id > 0x1fffffff) throw new Error("Tileset has reached its tile limit");
+      used.add(id);
+      return {...tile, id, pixels: tile.pixels.slice(), indexes: tile.indexes?.slice()};
+    });
+    const insertIndex = Math.max(...source.map((tile) => activeTileset.tiles.indexOf(tile))) + 1;
+    activeTileset.tiles.splice(insertIndex, 0, ...copies);
+    setSelectedTileIDs(copies.map((tile) => tile.id));
+    setSelectedTileID(copies[0].id);
+    return true;
+  });
+
+  const copySelectedTiles = () => {
+    if (!activeTileset) return;
+    const selected = new Set(effectiveSelectedTileIDs.length > 0 ? effectiveSelectedTileIDs : [effectiveSelectedTileID]);
+    const copied = activeTileset.tiles
+      .filter((tile) => selected.has(tile.id))
+      .map((tile) => ({...tile, pixels: tile.pixels.slice(), indexes: tile.indexes?.slice()}));
+    setTileClipboard(copied);
+    tileClipboardSourceRef.current = {
+      tabID: activeTab.id,
+      tilesetID: activeTileset.id,
+      width: activeTileset.tileWidth,
+      height: activeTileset.tileHeight,
+    };
+    setStatus(language === "zh" ? `已复制 ${copied.length} 个图块` : `Copied ${copied.length} tiles`);
+  };
+
+  const updateTilesetBoxSelection = (start: HTMLButtonElement, end: HTMLButtonElement) => {
+    const container = end.closest(".tile-swatch-grid");
+    if (!container) return;
+    const startRect = start.getBoundingClientRect();
+    const endRect = end.getBoundingClientRect();
+    const left = Math.min(startRect.left, endRect.left);
+    const right = Math.max(startRect.right, endRect.right);
+    const top = Math.min(startRect.top, endRect.top);
+    const bottom = Math.max(startRect.bottom, endRect.bottom);
+    const ids = Array.from(container.querySelectorAll<HTMLButtonElement>("[data-tile-id]")).flatMap((button) => {
+      const bounds = button.getBoundingClientRect();
+      const centerX = bounds.left + bounds.width / 2;
+      const centerY = bounds.top + bounds.height / 2;
+      const id = Number(button.dataset.tileId);
+      return centerX >= left && centerX <= right && centerY >= top && centerY <= bottom && Number.isInteger(id) ? [id] : [];
+    });
+    setSelectedTileIDs(ids);
+    if (ids.length > 0) setSelectedTileID(ids[0]);
+  };
+
+  const pasteTiles = () => mutateDocument("Paste Tiles", () => {
+    if (!activeTileset || tileClipboard.length === 0) return false;
+    const source = tileClipboardSourceRef.current;
+    if (!source || source.tabID !== activeTab.id || source.width !== activeTileset.tileWidth || source.height !== activeTileset.tileHeight) {
+      setStatus(language === "zh" ? "图块剪贴板的项目或尺寸不匹配" : "Tile clipboard document or dimensions do not match");
+      return false;
+    }
+    const used = new Set(activeTileset.tiles.map((tile) => tile.id));
+    const copies = tileClipboard.map((tile) => {
+      let id = 1;
+      while (used.has(id)) id += 1;
+      if (id > 0x1fffffff) throw new Error("Tileset has reached its tile limit");
+      used.add(id);
+      return {...tile, id, pixels: tile.pixels.slice(), indexes: tile.indexes?.slice()};
+    });
+    activeTileset.tiles.push(...copies);
+    setSelectedTileIDs(copies.map((tile) => tile.id));
+    setSelectedTileID(copies[0].id);
+    setTileSelectionAnchorID(copies[0].id);
+    return true;
+  });
+
+  const reorderSelectedTiles = (direction: -1 | 1) => mutateDocument("Reorder Tiles", () => {
+    if (!activeTileset) return false;
+    const selected = new Set(effectiveSelectedTileIDs.length > 0 ? effectiveSelectedTileIDs : [effectiveSelectedTileID]);
+    if (selected.size === 0) return false;
+    let changed = false;
+    if (direction < 0) {
+      for (let index = 1; index < activeTileset.tiles.length; index += 1) {
+        if (!selected.has(activeTileset.tiles[index].id) || selected.has(activeTileset.tiles[index - 1].id)) continue;
+        [activeTileset.tiles[index - 1], activeTileset.tiles[index]] = [activeTileset.tiles[index], activeTileset.tiles[index - 1]];
+        changed = true;
+      }
+    } else {
+      for (let index = activeTileset.tiles.length - 2; index >= 0; index -= 1) {
+        if (!selected.has(activeTileset.tiles[index].id) || selected.has(activeTileset.tiles[index + 1].id)) continue;
+        [activeTileset.tiles[index], activeTileset.tiles[index + 1]] = [activeTileset.tiles[index + 1], activeTileset.tiles[index]];
+        changed = true;
+      }
+    }
+    return changed;
+  });
+
+  const terrainNeighborModeForTileset = (): TerrainNeighborMode => {
+    if (activeTileset?.grid.kind === "hexagonal") return "edge6";
+    return "edge4";
+  };
+
+  const recalculateTerrainMapsForTileset = () => {
+    if (!activeTileset) return;
+    const layerIDs = new Set(pixelDocument.layers
+      .filter((layer) => layer.kind === "tilemap" && layer.tilesetId === activeTileset.id)
+      .map((layer) => layer.id));
+    for (const cel of Object.values(pixelDocument.cels)) {
+      if (!layerIDs.has(cel.layerId) || !cel.tilemap || !cel.terrainmap) continue;
+      const changedCells = Array.from({length: cel.terrainmap.terrains.length}, (_, index) => ({
+        column: index % cel.terrainmap!.columns,
+        row: Math.floor(index / cel.terrainmap!.columns),
+      }));
+      recalculateTerrainCells(
+        cel.terrainmap,
+        activeTileset.terrains,
+        tilesetGridLayout(activeTileset, cel.tilemap),
+        cel.tilemap.tiles,
+        changedCells,
+      );
+    }
+    refreshTilemapCaches(pixelDocument);
+  };
+
+  const addTerrain = () => mutateDocument("Add Terrain", () => {
+    if (!activeTileset) return false;
+    const used = new Set(activeTileset.terrains.map((terrain) => terrain.id));
+    let id = 1;
+    while (used.has(id)) id += 1;
+    if (id >= terrainEmpty) return false;
+    activeTileset.terrains.push({
+      id,
+      name: `${language === "zh" ? "地形" : "Terrain"} ${id}`,
+      color: foregroundColor.length === 7 ? `${foregroundColor}ff` : foregroundColor,
+      neighborMode: terrainNeighborModeForTileset(),
+      boundary: "empty",
+      rules: effectiveSelectedTileID === 0 ? [] : [{
+        mask: 0,
+        candidates: [{tileId: effectiveSelectedTileID, flags: selectedTileFlags, weight: 1}],
+      }],
+    });
+    setSelectedTerrainID(id);
+    setTilemapDrawMode("terrain");
+    return true;
+  });
+
+  const renameSelectedTerrain = () => {
+    if (!activeTerrain) return;
+    const name = window.prompt(language === "zh" ? "地形名称" : "Terrain name", activeTerrain.name)?.trim();
+    if (!name || name === activeTerrain.name) return;
+    mutateDocument("Rename Terrain", () => {
+      activeTerrain.name = name;
+      return true;
+    });
+  };
+
+  const duplicateSelectedTerrain = () => mutateDocument("Duplicate Terrain", () => {
+    if (!activeTileset || !activeTerrain) return false;
+    const used = new Set(activeTileset.terrains.map((terrain) => terrain.id));
+    let id = 1;
+    while (used.has(id)) id += 1;
+    if (id >= terrainEmpty) return false;
+    activeTileset.terrains.push({
+      ...activeTerrain,
+      id,
+      name: `${activeTerrain.name} ${language === "zh" ? "副本" : "Copy"}`,
+      rules: activeTerrain.rules.map((rule) => ({
+        ...rule,
+        candidates: rule.candidates.map((candidate) => ({...candidate})),
+      })),
+    });
+    setSelectedTerrainID(id);
+    return true;
+  });
+
+  const updateSelectedTerrainColor = (color: string) => mutateDocument("Change Terrain Color", () => {
+    if (!activeTerrain || !/^#[\da-f]{6}$/i.test(color)) return false;
+    const next = `${color.toLowerCase()}ff`;
+    if (activeTerrain.color.toLowerCase() === next) return false;
+    activeTerrain.color = next;
+    return true;
+  });
+
+  const deleteSelectedTerrain = () => mutateDocument("Delete Terrain", () => {
+    if (!activeTileset || effectiveSelectedTerrainID === 0) return false;
+    const index = activeTileset.terrains.findIndex((terrain) => terrain.id === effectiveSelectedTerrainID);
+    if (index < 0) return false;
+    for (const cel of Object.values(pixelDocument.cels)) {
+      const layer = getLayerByID(pixelDocument, cel.layerId);
+      if (layer?.kind !== "tilemap" || layer.tilesetId !== activeTileset.id || !cel.terrainmap) continue;
+      for (let offset = 0; offset < cel.terrainmap.terrains.length; offset += 1) {
+        if (cel.terrainmap.terrains[offset] === effectiveSelectedTerrainID) cel.terrainmap.terrains[offset] = 0;
+      }
+    }
+    activeTileset.terrains.splice(index, 1);
+    setSelectedTerrainID(activeTileset.terrains[0]?.id ?? 0);
+    recalculateTerrainMapsForTileset();
+    return true;
+  });
+
+  const updateActiveTerrain = (update: {boundary?: TerrainBoundary; neighborMode?: TerrainNeighborMode}) => mutateDocument("Update Terrain", () => {
+    if (!activeTerrain || !activeTileset) return false;
+    const nextMode = update.neighborMode ?? activeTerrain.neighborMode;
+    if (activeTileset.grid.kind === "hexagonal" && nextMode !== "edge6") return false;
+    if (activeTileset.grid.kind === "isometric" && nextMode !== "edge4") return false;
+    if (activeTileset.grid.kind === "orthogonal" && nextMode === "edge6") return false;
+    const nextBoundary = update.boundary ?? activeTerrain.boundary;
+    if (nextMode === activeTerrain.neighborMode && nextBoundary === activeTerrain.boundary) return false;
+    const oldMode = activeTerrain.neighborMode;
+    activeTerrain.neighborMode = nextMode;
+    activeTerrain.boundary = nextBoundary;
+    const maximumMask = nextMode === "blob8" ? 0xff : nextMode === "edge6" ? 0x3f : 0x0f;
+    const remapMask = (mask: number) => {
+      if (oldMode === "edge4" && nextMode === "blob8") {
+        return [0, 1, 2, 3].reduce((result, bit) => result | (((mask >> bit) & 1) << (bit * 2)), 0);
+      }
+      if (oldMode === "blob8" && nextMode === "edge4") {
+        return [0, 1, 2, 3].reduce((result, bit) => result | (((mask >> (bit * 2)) & 1) << bit), 0);
+      }
+      return nextMode === "blob8" ? normalizeBlobMask(mask & maximumMask) : mask & maximumMask;
+    };
+    const rules = new Map<number, (typeof activeTerrain.rules)[number]>();
+    for (const rule of activeTerrain.rules) {
+      const mask = remapMask(rule.mask);
+      const existing = rules.get(mask);
+      if (existing) {
+        for (const candidate of rule.candidates) {
+          const same = existing.candidates.find((entry) => entry.tileId === candidate.tileId && entry.flags === candidate.flags);
+          if (same) same.weight += candidate.weight;
+          else existing.candidates.push({...candidate});
+        }
+      } else rules.set(mask, {...rule, mask, candidates: rule.candidates.map((candidate) => ({...candidate}))});
+    }
+    activeTerrain.rules = [...rules.values()].sort((left, right) => left.mask - right.mask);
+    setTerrainRuleMaskDraft(remapMask);
+    recalculateTerrainMapsForTileset();
+    return true;
+  });
+
+  const assignTerrainRule = () => mutateDocument("Assign Terrain Rule", () => {
+    if (!activeTerrain || effectiveSelectedTileID === 0) return false;
+    const maximumMask = activeTerrain.neighborMode === "blob8" ? 0xff : activeTerrain.neighborMode === "edge6" ? 0x3f : 0x0f;
+    const rawMask = Math.max(0, Math.min(maximumMask, Math.round(terrainRuleMaskDraft)));
+    const mask = activeTerrain.neighborMode === "blob8" ? normalizeBlobMask(rawMask) : rawMask;
+    const index = activeTerrain.rules.findIndex((candidate) => candidate.mask === mask);
+    const weight = Math.max(0.001, Number.isFinite(terrainRuleWeightDraft) ? terrainRuleWeightDraft : 1);
+    if (index >= 0) {
+      const candidates = activeTerrain.rules[index].candidates;
+      const candidateIndex = candidates.findIndex((candidate) => candidate.tileId === effectiveSelectedTileID && candidate.flags === selectedTileFlags);
+      if (candidateIndex >= 0) candidates[candidateIndex] = {...candidates[candidateIndex], weight};
+      else candidates.push({tileId: effectiveSelectedTileID, flags: selectedTileFlags, weight});
+    } else {
+      activeTerrain.rules.push({
+        mask,
+        candidates: [{tileId: effectiveSelectedTileID, flags: selectedTileFlags, weight}],
+      });
+    }
+    activeTerrain.rules.sort((left, right) => left.mask - right.mask);
+    recalculateTerrainMapsForTileset();
+    return true;
+  });
+
+  const fillMissingTerrainRules = () => mutateDocument("Generate Terrain Rules", () => {
+    if (!activeTerrain || !activeTerrainDiagnostic || effectiveSelectedTileID === 0 || activeTerrainDiagnostic.missingMasks.length === 0) return false;
+    activeTerrain.rules.push(...createTerrainRuleTemplate(activeTerrain.neighborMode, {
+      tileId: effectiveSelectedTileID,
+      flags: selectedTileFlags,
+      weight: Math.max(0.001, terrainRuleWeightDraft),
+    }, activeTerrainDiagnostic.missingMasks));
+    activeTerrain.rules.sort((left, right) => left.mask - right.mask);
+    recalculateTerrainMapsForTileset();
+    return true;
+  });
+
+  const deleteTerrainRule = (mask: number) => mutateDocument("Delete Terrain Rule", () => {
+    if (!activeTerrain) return false;
+    const index = activeTerrain.rules.findIndex((rule) => rule.mask === mask);
+    if (index < 0) return false;
+    activeTerrain.rules.splice(index, 1);
+    recalculateTerrainMapsForTileset();
+    return true;
+  });
+
+  const deleteTerrainCandidate = (mask: number, tileId: number, flags: number) => mutateDocument("Delete Terrain Variant", () => {
+    if (!activeTerrain) return false;
+    const ruleIndex = activeTerrain.rules.findIndex((rule) => rule.mask === mask);
+    if (ruleIndex < 0) return false;
+    const candidates = activeTerrain.rules[ruleIndex].candidates;
+    const candidateIndex = candidates.findIndex((candidate) => candidate.tileId === tileId && candidate.flags === flags);
+    if (candidateIndex < 0) return false;
+    candidates.splice(candidateIndex, 1);
+    if (candidates.length === 0) activeTerrain.rules.splice(ruleIndex, 1);
+    recalculateTerrainMapsForTileset();
+    return true;
+  });
+
+  const invalidateTilemapCells = (cel: typeof activeCel, tileset: Tileset, cells: readonly TileCell[]) => {
+    if (!cel?.tilemap || cells.length === 0) return;
+    if (onionSkin) {
+      activeTab.compositeCache.clear();
+      invalidate();
+      return;
+    }
+    const dirty = tileCellsPixelBounds(tileset, cel.tilemap, cells);
+    if (!dirty) return;
+    const aliases = Object.values(pixelDocument.cels).filter((candidate) => candidate.linkId === cel.linkId);
+    touchTabThumbnailCels(activeTab, aliases.map((candidate) => candidate.id));
+    for (const alias of aliases) {
+      const bounds = {x: alias.x + dirty.x, y: alias.y + dirty.y, width: dirty.width, height: dirty.height};
+      activeTab.compositeCache.repair(pixelDocument, alias.frameId, bounds);
+      if (alias.frameId === pixelDocument.activeFrameId) queuePixelRender(bounds);
+    }
+  };
+
+  const commitTileSelectionResult = (result: TilemapEditResult, label: string) => {
+    if (!activeCel?.tilemap || !activeTileset || activeLayerLocked || isPlaying) return;
+    const changes = result.changedCells.map(({x, y}) => {
+      const index = y * activeCel.tilemap!.columns + x;
+      return {index, before: activeCel.tilemap!.tiles[index], after: result.tilemap.tiles[index]};
+    }).filter((change) => change.before !== change.after);
+    if (changes.length === 0) return;
+    let before: PixelDocument | null = null;
+    if (activeCel.terrainmap) {
+      if (!window.confirm(language === "zh"
+        ? "解除当前动画格及其链接动画格的地形管理，保留当前瓦片并进行手工编辑？可通过撤销恢复地形。"
+        : "Detach Terrain from this Cel and its linked Cels, keeping the current tiles for manual editing? Undo restores Terrain.")) return;
+      before = cloneDocument(pixelDocument);
+      replaceCelTerrainAuthority(pixelDocument, activeCel, undefined);
+    }
+    const command = new TilemapCellsCommand(activeCel.id, changes, label);
+    command.redo(pixelDocument);
+    history.commit(before ? new DocumentStateCommand(before, pixelDocument, label) : command);
+    invalidateTilemapCells(activeCel, activeTileset, result.changedCells.map(({x, y}) => ({column: x, row: y})));
+    setStatus(label);
+  };
+
+  const copyTileCells = (cut = false) => {
+    if (!activeCel?.tilemap || !activeTileset || !tileCellSelection) return;
+    tileCellClipboardSourceRef.current = {tabID: activeTab.id, tilesetID: activeTileset.id};
+    const size = {tileWidth: activeTileset.tileWidth, tileHeight: activeTileset.tileHeight};
+    if (cut) {
+      const result = cutTilemapSelection(activeCel.tilemap, tileCellSelection, size);
+      setTileCellClipboard(result.clipboard);
+      const changedCells = tileRectangleCells(
+        {x: tileCellSelection.x, y: tileCellSelection.y},
+        {x: tileCellSelection.x + tileCellSelection.width - 1, y: tileCellSelection.y + tileCellSelection.height - 1},
+        "filled",
+      );
+      commitTileSelectionResult({tilemap: result.tilemap, changedCells}, "Cut Tile Cells");
+    } else {
+      setTileCellClipboard(copyTilemapSelection(activeCel.tilemap, tileCellSelection, size));
+    }
+  };
+
+  const pasteTileCells = () => {
+    if (!activeCel?.tilemap || !activeTileset || !tileCellClipboard) return;
+    const source = tileCellClipboardSourceRef.current;
+    if (!source || source.tabID !== activeTab.id || source.tilesetID !== activeTileset.id
+      || tileCellClipboard.tileWidth !== activeTileset.tileWidth || tileCellClipboard.tileHeight !== activeTileset.tileHeight
+      || [...tileCellClipboard.tiles].some((value) => tileValueIndex(value) !== 0 && !activeTileset.tiles.some((tile) => tile.id === tileValueIndex(value)))) {
+      setStatus(language === "zh" ? "剪贴板图块与当前图块集不匹配" : "Clipboard tiles do not match the active Tileset");
+      return;
+    }
+    const target = tileCellSelection
+      ? {x: tileCellSelection.x, y: tileCellSelection.y}
+      : {x: tilemapHoverCell?.column ?? 0, y: tilemapHoverCell?.row ?? 0};
+    commitTileSelectionResult(pasteTilemapClipboard(activeCel.tilemap, tileCellClipboard, target), "Paste Tile Cells");
+  };
+
+  const transformSelectedTileCells = (operation: "flip-x" | "flip-y" | "cw" | "ccw") => {
+    if (!activeCel?.tilemap || !activeTileset || !tileCellSelection) return;
+    try {
+      if (activeCel.terrainmap) {
+        let nextSelection = tileCellSelection;
+        const changed = mutateDocument("Transform Terrain Cells", () => {
+          const result = transformTerrainSelection(activeCel.terrainmap!, tileCellSelection, operation);
+          if (result.changedCells.length === 0) return false;
+          replaceCelTerrainAuthority(pixelDocument, activeCel, result.map);
+          nextSelection = result.selection;
+          return true;
+        });
+        if (changed) setTileCellSelection(nextSelection);
+        return;
+      }
+      const size = {tileWidth: activeTileset.tileWidth, tileHeight: activeTileset.tileHeight};
+      if (activeTileset.grid.kind !== "orthogonal" && (operation === "cw" || operation === "ccw")) {
+        throw new Error("90-degree cell rotation is not supported by this grid");
+      }
+      let result: TilemapEditResult;
+      if (activeTileset.grid.kind === "orthogonal") {
+        result = operation === "flip-x" || operation === "flip-y"
+          ? flipTilemapSelection(activeCel.tilemap, tileCellSelection, operation === "flip-x" ? "horizontal" : "vertical", size)
+          : rotateTilemapSelection(activeCel.tilemap, tileCellSelection, operation, size);
+      } else {
+        const cut = cutTilemapSelection(activeCel.tilemap, tileCellSelection, size);
+        const transformed = transformTilemapGrid(
+          {columns: cut.clipboard.width, rows: cut.clipboard.height, tiles: cut.clipboard.tiles},
+          activeTileset,
+          operation === "flip-x" ? "horizontal" : "vertical",
+        );
+        const pasted = applyTileStamp(cut.tilemap, {
+          width: transformed.tilemap.columns,
+          height: transformed.tilemap.rows,
+          tiles: transformed.tilemap.tiles,
+          ...size,
+        }, {x: tileCellSelection.x, y: tileCellSelection.y}, {clip: true, emptyMode: "overwrite"});
+        const changed = new Map<string, {x: number; y: number}>();
+        for (const cell of tileRectangleCells(
+          {x: tileCellSelection.x, y: tileCellSelection.y},
+          {x: tileCellSelection.x + tileCellSelection.width - 1, y: tileCellSelection.y + tileCellSelection.height - 1},
+          "filled",
+        )) changed.set(`${cell.x}:${cell.y}`, cell);
+        for (const cell of pasted.changedCells) changed.set(`${cell.x}:${cell.y}`, cell);
+        result = {tilemap: pasted.tilemap, changedCells: [...changed.values()]};
+        setTileCellSelection({
+          x: tileCellSelection.x,
+          y: tileCellSelection.y,
+          width: transformed.tilemap.columns,
+          height: transformed.tilemap.rows,
+        });
+      }
+      commitTileSelectionResult(result, "Transform Tile Cells");
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Tile transform failed");
+    }
+  };
+
+  const captureTileStampFromSelection = () => {
+    if (activeTileset && activeCel?.tilemap && tileCellSelection) {
+      setTileStamp(copyTilemapSelection(activeCel.tilemap, tileCellSelection, activeTileset));
+      setTilemapToolMode("stamp");
+      return;
+    }
+    if (!activeTileset || !activeCel?.tilemap || !selection) return;
+    const start = tilemapCellAtPixel(
+      activeTileset,
+      activeCel.tilemap,
+      selection.x - activeCel.x,
+      selection.y - activeCel.y,
+    );
+    const end = tilemapCellAtPixel(
+      activeTileset,
+      activeCel.tilemap,
+      selection.x + selection.width - 1 - activeCel.x,
+      selection.y + selection.height - 1 - activeCel.y,
+    );
+    const stamp = createTileStamp(
+      activeCel.tilemap,
+      {x: start.column, y: start.row},
+      {x: end.column, y: end.row},
+      {tileWidth: activeTileset.tileWidth, tileHeight: activeTileset.tileHeight},
+    );
+    setTileStamp(stamp);
+    setTilemapToolMode("stamp");
+  };
+
+  const transformTileStamp = (operation: "flip-x" | "flip-y" | "rotate-cw" | "rotate-ccw") => {
+    if (!tileStamp || !activeTileset) return;
+    try {
+      const size = {tileWidth: activeTileset.tileWidth, tileHeight: activeTileset.tileHeight};
+      setTileStamp(operation === "flip-x"
+        ? flipTileStamp(tileStamp, "x", size)
+        : operation === "flip-y"
+          ? flipTileStamp(tileStamp, "y", size)
+          : rotateTileStamp(tileStamp, operation === "rotate-cw" ? "cw" : "ccw", size));
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Tile stamp transform failed");
+    }
+  };
+
+  const captureTerrainStampFromSelection = () => {
+    if (!activeTileset || !activeCel?.tilemap || !activeCel.terrainmap) return;
+    if (tileCellSelection) {
+      setTerrainStamp(createTerrainStamp(
+        activeCel.terrainmap,
+        {column: tileCellSelection.x, row: tileCellSelection.y},
+        {
+          column: tileCellSelection.x + tileCellSelection.width - 1,
+          row: tileCellSelection.y + tileCellSelection.height - 1,
+        },
+      ));
+      setTerrainToolMode("stamp");
+      return;
+    }
+    if (!selection) return;
+    const start = tilemapCellAtPixel(activeTileset, activeCel.tilemap, selection.x - activeCel.x, selection.y - activeCel.y);
+    const end = tilemapCellAtPixel(
+      activeTileset,
+      activeCel.tilemap,
+      selection.x + selection.width - 1 - activeCel.x,
+      selection.y + selection.height - 1 - activeCel.y,
+    );
+    setTerrainStamp(createTerrainStamp(activeCel.terrainmap, start, end));
+    setTerrainToolMode("stamp");
+  };
+
+  const transformTerrainStamp = (operation: "flip-x" | "flip-y" | "rotate-cw" | "rotate-ccw") => {
+    if (!terrainStamp) return;
+    setTerrainStamp(operation === "flip-x"
+      ? flipTerrainStamp(terrainStamp, "horizontal")
+      : operation === "flip-y"
+        ? flipTerrainStamp(terrainStamp, "vertical")
+        : rotateTerrainStamp(terrainStamp, operation === "rotate-cw" ? "cw" : "ccw"));
+  };
+
+  const recalculateTerrainScope = (scope: "selection" | "cel" | "tileset") => mutateDocument("Recalculate Terrain", () => {
+    if (!activeTileset || !activeCel?.tilemap || !activeCel.terrainmap) return false;
+    const layerIDs = new Set(pixelDocument.layers
+      .filter((layer) => layer.kind === "tilemap" && layer.tilesetId === activeTileset.id)
+      .map((layer) => layer.id));
+    const targets = scope === "tileset"
+      ? Object.values(pixelDocument.cels).filter((cel) => layerIDs.has(cel.layerId) && cel.tilemap && cel.terrainmap)
+      : [activeCel];
+    let changed = false;
+    for (const cel of targets) {
+      if (!cel.tilemap || !cel.terrainmap) continue;
+      let cells: Array<{column: number; row: number}>;
+      if (scope === "selection") {
+        if (!selection || cel.id !== activeCel.id) continue;
+        const start = tilemapCellAtPixel(activeTileset, cel.tilemap, selection.x - cel.x, selection.y - cel.y);
+        const end = tilemapCellAtPixel(activeTileset, cel.tilemap, selection.x + selection.width - 1 - cel.x, selection.y + selection.height - 1 - cel.y);
+        const minColumn = Math.max(0, Math.min(start.column, end.column));
+        const maxColumn = Math.min(cel.tilemap.columns - 1, Math.max(start.column, end.column));
+        const minRow = Math.max(0, Math.min(start.row, end.row));
+        const maxRow = Math.min(cel.tilemap.rows - 1, Math.max(start.row, end.row));
+        cells = [];
+        for (let row = minRow; row <= maxRow; row += 1) {
+          for (let column = minColumn; column <= maxColumn; column += 1) cells.push({column, row});
+        }
+      } else {
+        cells = Array.from({length: cel.terrainmap.terrains.length}, (_, index) => ({
+          column: index % cel.terrainmap!.columns,
+          row: Math.floor(index / cel.terrainmap!.columns),
+        }));
+      }
+      const recalculated = recalculateTerrainCells(
+        cel.terrainmap,
+        activeTileset.terrains,
+        tilesetGridLayout(activeTileset, cel.tilemap),
+        cel.tilemap.tiles,
+        cells,
+      );
+      changed = recalculated.length > 0 || changed;
+    }
+    if (changed) refreshTilemapCaches(pixelDocument);
+    return changed;
+  });
+
   const handleTilemapPointer = (phase: "start" | "move" | "end", point: {x: number; y: number}, secondary: boolean) => {
     if (!activeTileset || !activeCel?.tilemap || !isTilemapLayer(activeLayer) || activeLayerLocked || isPlaying) return false;
+    if (phase !== "start" && tilemapPromptEndedGestureRef.current) return true;
+    if (phase === "start") tilemapPromptEndedGestureRef.current = false;
+    const acceptsCell = createTilemapSelectionPredicate(selection, activeTileset,
+      activeCel.tilemap.columns, activeCel.tilemap.rows,
+      {celX: activeCel.x, celY: activeCel.y, gridOffset: activeCel.tilemap.gridOffset});
+    const {tiledX, tiledY} = pixelDocument.settings;
+    const wrappedPoint = wrapTiledPoint(point, pixelDocument.width, pixelDocument.height, tiledX, tiledY);
+    const localPoint = {x: (wrappedPoint ?? point).x - activeCel.x, y: (wrappedPoint ?? point).y - activeCel.y};
+    const pointInside = wrappedPoint !== null
+      && localPoint.x >= 0 && localPoint.y >= 0 && localPoint.x < activeCel.width && localPoint.y < activeCel.height;
+    const pointerSamples = (start: {x: number; y: number}) => wrappedLinePoints(
+      start, point, pixelDocument.width, pixelDocument.height, tiledX, tiledY,
+    );
+    const pointerLineCells = () => {
+      const cells = new Map<number, TileCell>();
+      for (const sample of pointerSamples(tilemapGestureStartPointRef.current ?? point)) {
+        const cell = tilemapCellAtPixel(activeTileset, activeCel.tilemap!, sample.x - activeCel.x, sample.y - activeCel.y);
+        if (acceptsCell(cell)) cells.set(cell.row * activeCel.tilemap!.columns + cell.column, cell);
+      }
+      return [...cells.values()];
+    };
+    const pointerRectangleCells = (filled: boolean) => {
+      const rawStart = tilemapGestureStartPointRef.current;
+      if (!rawStart || !tiledStampGeometry) return [];
+      const start = tilemapCellAtPixel(activeTileset, activeCel.tilemap!,
+        rawStart.x - activeCel.x, rawStart.y - activeCel.y);
+      const end = tilemapCellAtPixel(activeTileset, activeCel.tilemap!,
+        point.x - activeCel.x, point.y - activeCel.y);
+      const cells = terrainRectangleCells(start, end, filled);
+      return mapTiledCellTargets(tiledStampGeometry, cells.map((cell) => ({cell, value: 0}))).map(({cell}) => cell);
+    };
+    const pointedCell = pointInside
+      ? tilemapCellAtPixel(activeTileset, activeCel.tilemap, localPoint.x, localPoint.y)
+      : null;
+    const validPointedCell = pointedCell
+      && pointedCell.column >= 0 && pointedCell.row >= 0
+      && pointedCell.column < activeCel.tilemap.columns && pointedCell.row < activeCel.tilemap.rows
+      ? {x: pointedCell.column, y: pointedCell.row}
+      : null;
+    const dirtyTileCells: TileCell[] = [];
+    if (tilemapDrawMode === "tiles" && tilemapToolMode === "select") {
+      if (phase === "start") {
+        tilemapGestureStartCellRef.current = validPointedCell;
+        const withinSelection = validPointedCell && tileCellSelection
+          && validPointedCell.x >= tileCellSelection.x && validPointedCell.y >= tileCellSelection.y
+          && validPointedCell.x < tileCellSelection.x + tileCellSelection.width
+          && validPointedCell.y < tileCellSelection.y + tileCellSelection.height;
+        tileSelectionDragRef.current = withinSelection
+          ? {selection: {...tileCellSelection!}, start: validPointedCell!}
+          : null;
+        if (secondary) setTileCellSelection(null);
+        else if (validPointedCell && !withinSelection) setTileCellSelection(createTilemapSelection(activeCel.tilemap, validPointedCell, validPointedCell));
+      } else if (validPointedCell && !secondary) {
+        const drag = tileSelectionDragRef.current;
+        const start = tilemapGestureStartCellRef.current;
+        if (drag) {
+          const target = {
+            x: Math.max(0, Math.min(activeCel.tilemap.columns - drag.selection.width, drag.selection.x + validPointedCell.x - drag.start.x)),
+            y: Math.max(0, Math.min(activeCel.tilemap.rows - drag.selection.height, drag.selection.y + validPointedCell.y - drag.start.y)),
+          };
+          setTileCellSelection({...drag.selection, ...target});
+          if (phase === "end") commitTileSelectionResult(moveTilemapSelection(activeCel.tilemap, drag.selection, target), "Move Tile Cells");
+        } else if (start) {
+          setTileCellSelection(createTilemapSelection(activeCel.tilemap, start, validPointedCell));
+        }
+      }
+      if (phase === "end") {
+        tileSelectionDragRef.current = null;
+        tilemapGestureStartCellRef.current = null;
+      }
+      return true;
+    }
     if (phase === "start") {
-      tilemapEditBeforeRef.current = cloneDocument(pixelDocument);
+      tilemapEditBeforeRef.current = tilemapDrawMode === "pixels" ? cloneDocument(pixelDocument) : null;
       tilemapEditChangedRef.current = false;
+      tilemapAuthorityDeclinedRef.current = false;
+      tilemapCellChangesRef.current.clear();
+      terrainCellChangesRef.current.clear();
+      tilemapGestureStartCellRef.current = validPointedCell;
+      tilemapGestureStartPointRef.current = point;
       tilemapLastPointRef.current = point;
     }
-    const previous = tilemapLastPointRef.current ?? point;
+
+    const detachTerrainForWrite = () => {
+      if (tilemapAuthorityDeclinedRef.current) return false;
+      if (!activeCel.terrainmap) return true;
+      // Modal dialogs can consume pointerup. End this gesture after the confirmed write.
+      tilemapPromptEndedGestureRef.current = true;
+      if (!window.confirm(language === "zh"
+        ? "解除当前动画格及其链接动画格的地形管理，保留当前瓦片并进行手工编辑？可通过撤销恢复地形。"
+        : "Detach Terrain from this Cel and its linked Cels, keeping the current tiles for manual editing? Undo restores Terrain.")) {
+        tilemapAuthorityDeclinedRef.current = true;
+        return false;
+      }
+      tilemapEditBeforeRef.current ??= cloneDocument(pixelDocument);
+      replaceCelTerrainAuthority(pixelDocument, activeCel, undefined);
+      return true;
+    };
+    const recordTileCell = (cellX: number, cellY: number, nextValue: number) => {
+      if (!acceptsCell({column: cellX, row: cellY})) return false;
+      const offset = cellY * activeCel.tilemap!.columns + cellX;
+      const current = activeCel.tilemap!.tiles[offset];
+      const normalized = nextValue >>> 0;
+      if (current === normalized) return false;
+      if (!detachTerrainForWrite()) return false;
+      const existing = tilemapCellChangesRef.current.get(offset);
+      const before = existing?.before ?? current;
+      setTileCellInPlace(activeCel.tilemap!, cellX, cellY, normalized);
+      if (before === normalized) tilemapCellChangesRef.current.delete(offset);
+      else tilemapCellChangesRef.current.set(offset, {before, after: normalized});
+      dirtyTileCells.push({column: cellX, row: cellY});
+      return true;
+    };
+
+    const nextTileValue = secondary || selectedTool === "eraser"
+      ? 0
+      : (effectiveSelectedTileID | selectedTileFlags) >>> 0;
     let changed = false;
-    for (const sample of integerLinePoints(previous, point)) {
-      if (selection && selectionCoverageAt(selection, sample.x, sample.y) === 0) continue;
-      const localX = sample.x - activeCel.x;
-      const localY = sample.y - activeCel.y;
-      if (localX < 0 || localY < 0 || localX >= activeCel.width || localY >= activeCel.height) continue;
-      if (tilemapDrawMode === "tiles") {
-        const cellX = Math.floor(localX / activeTileset.tileWidth);
-        const cellY = Math.floor(localY / activeTileset.tileHeight);
-        const offset = cellY * activeCel.tilemap.columns + cellX;
-        const nextTile = secondary || selectedTool === "eraser" ? 0 : effectiveSelectedTileID;
-        if (activeCel.tilemap.tiles[offset] === nextTile) continue;
-        setTileCellInPlace(activeCel.tilemap, cellX, cellY, nextTile);
+    if (tilemapDrawMode === "tiles") {
+      if (tilemapToolMode === "picker") {
+        if (phase !== "end" && validPointedCell) {
+          const value = pickTileCell(activeCel.tilemap, validPointedCell);
+          if (value !== undefined) {
+            setSelectedTileID(tileValueIndex(value));
+            setSelectedTileIDs(tileValueIndex(value) === 0 ? [] : [tileValueIndex(value)]);
+            setSelectedTileFlags(tileValueFlags(value));
+          }
+        }
+      } else if (tilemapToolMode === "fill") {
+        if (phase === "start" && validPointedCell) {
+          const result = floodFillTilemap(activeCel.tilemap, validPointedCell, nextTileValue, {
+            grid: tilesetGridLayout(activeTileset, activeCel.tilemap),
+            acceptsCell: ({x, y}) => acceptsCell({column: x, row: y}),
+          });
+          for (const cell of result.changedCells) {
+            changed = recordTileCell(cell.x, cell.y, result.tilemap.tiles[cell.y * result.tilemap.columns + cell.x]) || changed;
+          }
+        }
+      } else if (tilemapToolMode === "stamp") {
+        if (phase === "start" && validPointedCell && tileStamp && tiledStampGeometry) {
+          const targets = mapTiledTileStampTargets(tiledStampGeometry,
+            {column: validPointedCell.x, row: validPointedCell.y}, tileStamp, {emptyMode: tileStampEmptyMode});
+          for (const {cell, value} of targets) {
+            changed = recordTileCell(cell.column, cell.row, value) || changed;
+          }
+        }
+      } else if ((tilemapToolMode === "line" || tilemapToolMode === "rectangle") && phase === "end") {
+        const start = tilemapGestureStartCellRef.current;
+        const rawStart = tilemapGestureStartPointRef.current;
+        if (tilemapToolMode === "rectangle") {
+          for (const cell of pointerRectangleCells(tileRectangleFilled)) {
+            changed = recordTileCell(cell.column, cell.row, nextTileValue) || changed;
+          }
+        } else if (tilemapToolMode === "line" && rawStart && (!start || !validPointedCell
+          || crossesTiledBoundary(rawStart, point, pixelDocument.width, pixelDocument.height, tiledX, tiledY))) {
+          for (const cell of pointerLineCells()) changed = recordTileCell(cell.column, cell.row, nextTileValue) || changed;
+        } else if (start && validPointedCell) {
+          const cells = terrainLineCells(tilesetGridLayout(activeTileset, activeCel.tilemap), start, validPointedCell)
+            .map(({column, row}) => ({x: column, y: row}));
+          for (const cell of cells) changed = recordTileCell(cell.x, cell.y, nextTileValue) || changed;
+        }
+      } else if (tilemapToolMode === "pencil") {
+        const previous = tilemapLastPointRef.current ?? point;
+        for (const sample of pointerSamples(previous)) {
+          const localX = sample.x - activeCel.x;
+          const localY = sample.y - activeCel.y;
+          if (localX < 0 || localY < 0 || localX >= activeCel.width || localY >= activeCel.height) continue;
+          const cell = tilemapCellAtPixel(activeTileset, activeCel.tilemap, localX, localY);
+          changed = recordTileCell(cell.column, cell.row, nextTileValue) || changed;
+        }
+      }
+    } else if (tilemapDrawMode === "terrain") {
+      const terrainmap = activeCel.terrainmap
+        ?? createTerrainMapData(activeCel.tilemap.columns, activeCel.tilemap.rows, 0);
+      const changedTerrainCells = new Map<number, {column: number; row: number}>();
+      const nextTerrain = secondary || selectedTool === "eraser" ? terrainEmpty : effectiveSelectedTerrainID;
+      const layout = tilesetGridLayout(activeTileset, activeCel.tilemap);
+      const recordTerrainCell = (cell: {column: number; row: number}, terrainId = nextTerrain) => {
+        if (!acceptsCell(cell)) return;
+        const offset = cell.row * terrainmap.columns + cell.column;
+        const current = terrainmap.terrains[offset];
+        if (current === terrainId) return;
+        if (!activeCel.terrainmap) {
+          if (tilemapAuthorityDeclinedRef.current) return;
+          if (activeCel.tilemap!.tiles.some((value) => value !== 0)) {
+            tilemapPromptEndedGestureRef.current = true;
+            if (!window.confirm(language === "zh"
+              ? "启用地形将替换当前动画格及其链接动画格中的手工瓦片。继续绘制？可通过撤销恢复原瓦片。"
+              : "Enabling Terrain replaces manual tiles in this Cel and its linked Cels. Continue painting? Undo restores the original tiles.")) {
+              tilemapAuthorityDeclinedRef.current = true;
+              return;
+            }
+          }
+          tilemapEditBeforeRef.current = cloneDocument(pixelDocument);
+          replaceCelTerrainAuthority(pixelDocument, activeCel, terrainmap);
+          for (let index = 0; index < terrainmap.terrains.length; index += 1) {
+            dirtyTileCells.push({column: index % terrainmap.columns, row: Math.floor(index / terrainmap.columns)});
+          }
+        }
+        const existing = terrainCellChangesRef.current.get(offset);
+        const before = existing?.before ?? current;
+        terrainmap.terrains[offset] = terrainId;
+        if (before === terrainId) terrainCellChangesRef.current.delete(offset);
+        else terrainCellChangesRef.current.set(offset, {before, after: terrainId});
+        changedTerrainCells.set(offset, cell);
+        dirtyTileCells.push(cell);
         changed = true;
-      } else {
+      };
+      if (terrainToolMode === "picker") {
+        if (phase !== "end" && validPointedCell) {
+          const picked = terrainPicker(terrainmap, {
+            column: validPointedCell.x,
+            row: validPointedCell.y,
+          });
+          setSelectedTerrainID(picked === terrainEmpty ? 0 : picked);
+        }
+      } else if (nextTerrain !== 0 || selectedTool === "eraser" || secondary || terrainToolMode === "stamp") {
+        if (terrainToolMode === "fill" && phase === "start" && validPointedCell) {
+          for (const cell of terrainFloodFill(terrainmap, layout, {
+            column: validPointedCell.x,
+            row: validPointedCell.y,
+          }, acceptsCell)) recordTerrainCell(cell);
+        } else if (terrainToolMode === "stamp" && phase === "start" && validPointedCell && terrainStamp && tiledStampGeometry) {
+          const targets = mapTiledTerrainStampTargets(tiledStampGeometry, {
+            column: validPointedCell.x,
+            row: validPointedCell.y,
+          }, terrainStamp, {emptyMode: terrainStampEmptyMode});
+          for (const {cell, value} of targets) {
+            recordTerrainCell(cell, value);
+          }
+        } else if ((terrainToolMode === "line" || terrainToolMode === "rectangle") && phase === "end") {
+          const start = tilemapGestureStartCellRef.current;
+          const rawStart = tilemapGestureStartPointRef.current;
+          if (terrainToolMode === "rectangle") {
+            for (const cell of pointerRectangleCells(terrainRectangleFilled)) recordTerrainCell(cell);
+          } else if (terrainToolMode === "line" && rawStart && (!start || !validPointedCell
+            || crossesTiledBoundary(rawStart, point, pixelDocument.width, pixelDocument.height, tiledX, tiledY))) {
+            for (const cell of pointerLineCells()) recordTerrainCell(cell);
+          } else if (start && validPointedCell) {
+            const cells = terrainLineCells(layout, {column: start.x, row: start.y}, {column: validPointedCell.x, row: validPointedCell.y});
+            for (const cell of cells) recordTerrainCell(cell);
+          }
+        } else if (terrainToolMode === "brush") {
+          const previous = tilemapLastPointRef.current ?? point;
+          for (const sample of pointerSamples(previous)) {
+            const localX = sample.x - activeCel.x;
+            const localY = sample.y - activeCel.y;
+            if (localX < 0 || localY < 0 || localX >= activeCel.width || localY >= activeCel.height) continue;
+            const center = tilemapCellAtPixel(activeTileset, activeCel.tilemap, localX, localY);
+            const candidates = terrainBrushCells(layout, center, terrainBrushRadius, terrainBrushShape);
+            const targets = tiledStampGeometry
+              ? mapTiledCellTargets(tiledStampGeometry, candidates.map((cell) => ({cell, value: nextTerrain})))
+                .map(({cell}) => cell)
+              : candidates;
+            for (const cell of targets) {
+              if (terrainScatterAllows(terrainmap.seed, cell.column, cell.row, terrainScatterPercent)) recordTerrainCell(cell);
+            }
+          }
+        }
+      }
+      if (changedTerrainCells.size > 0) {
+        dirtyTileCells.push(...recalculateTerrainCells(
+          terrainmap,
+          activeTileset.terrains,
+          tilesetGridLayout(activeTileset, activeCel.tilemap),
+          activeCel.tilemap.tiles,
+          [...changedTerrainCells.values()],
+        ));
+      }
+    } else if (tilemapDrawMode === "pixels") {
+      const previous = tilemapLastPointRef.current ?? point;
+      for (const sample of pointerSamples(previous)) {
+        if (selection && selectionCoverageAt(selection, sample.x, sample.y) === 0) continue;
+        const localX = sample.x - activeCel.x;
+        const localY = sample.y - activeCel.y;
+        if (localX < 0 || localY < 0 || localX >= activeCel.width || localY >= activeCel.height) continue;
+        const cell = tilemapCellAtPixel(activeTileset, activeCel.tilemap, localX, localY);
+        if (cell.column < 0 || cell.row < 0 || cell.column >= activeCel.tilemap.columns || cell.row >= activeCel.tilemap.rows) continue;
+        const imageOrigin = tileCellImageOrigin(activeTileset, activeCel.tilemap, cell);
+        if (localX < imageOrigin.x || localY < imageOrigin.y
+          || localX >= imageOrigin.x + activeTileset.tileWidth || localY >= imageOrigin.y + activeTileset.tileHeight) continue;
         const nextColor: RGBA = selectedTool === "eraser"
           ? [0, 0, 0, 0]
           : secondary ? backgroundRGBA : foregroundRGBA;
@@ -4770,6 +6526,7 @@ function App() {
           && activeCel.pixels[pixelOffset + 1] === nextColor[1]
           && activeCel.pixels[pixelOffset + 2] === nextColor[2]
           && activeCel.pixels[pixelOffset + 3] === nextColor[3]) continue;
+        if (!detachTerrainForWrite()) continue;
         drawTilemapPixelInPlace(activeCel, activeTileset, localX, localY, nextColor, {
           mode: tilePixelSyncMode,
           palette: pixelDocument.colorMode === "indexed" ? pixelDocument.palette.colors : undefined,
@@ -4781,7 +6538,8 @@ function App() {
     }
     tilemapLastPointRef.current = point;
     if (changed) {
-      if (tilemapDrawMode === "tiles") renderTilemapCelIntoCache(activeCel, activeTileset, {
+      if (tilemapDrawMode === "pixels") refreshTilemapCaches(pixelDocument);
+      if (tilemapDrawMode !== "pixels") renderTilemapCelIntoCache(activeCel, activeTileset, {
         palette: pixelDocument.colorMode === "indexed" ? pixelDocument.palette.colors : undefined,
         transparentIndex: pixelDocument.palette.transparentIndex,
       });
@@ -4789,13 +6547,18 @@ function App() {
       for (const linked of Object.values(pixelDocument.cels)) {
         if (linked.id === activeCel.id || linked.linkId !== activeCel.linkId) continue;
         linked.tilemap = activeCel.tilemap;
+        linked.terrainmap = activeCel.terrainmap;
         linked.pixels = activeCel.pixels;
         linked.indexes = activeCel.indexes;
       }
       tilemapEditChangedRef.current = true;
-      invalidatePixels({x: 0, y: 0, width: pixelDocument.width, height: pixelDocument.height});
+      if (tilemapDrawMode === "pixels") {
+        invalidatePixels({x: 0, y: 0, width: pixelDocument.width, height: pixelDocument.height});
+      } else {
+        invalidateTilemapCells(activeCel, activeTileset, dirtyTileCells);
+      }
     }
-    if (phase === "end") {
+    if (phase === "end" || tilemapPromptEndedGestureRef.current) {
       if (tilemapDrawMode === "pixels" && tilePixelSyncMode === "auto" && tilemapEditChangedRef.current) {
         const cleanup = cleanupTilesetInPlace(activeTileset, tilemapBuffersForTileset(activeTileset.id));
         if (cleanup.changed) {
@@ -4807,12 +6570,42 @@ function App() {
       }
       const before = tilemapEditBeforeRef.current;
       if (before && tilemapEditChangedRef.current) {
-        history.commit(new DocumentStateCommand(before, pixelDocument, tilemapDrawMode === "tiles" ? "Draw Tiles" : "Draw Tile Pixels"));
-        setStatus(tilemapDrawMode === "tiles" ? "Draw Tiles" : "Draw Tile Pixels");
+        const label = tilemapDrawMode === "terrain" ? "Draw Terrain"
+          : tilemapDrawMode === "tiles" ? "Draw Tiles" : "Draw Tile Pixels";
+        history.commit(new DocumentStateCommand(before, pixelDocument, label));
+        setStatus(label);
+      } else if (tilemapDrawMode === "tiles" && tilemapCellChangesRef.current.size > 0) {
+        const label = tilemapToolMode === "fill"
+          ? "Fill Tiles"
+          : tilemapToolMode === "stamp"
+            ? "Stamp Tiles"
+          : tilemapToolMode === "line"
+            ? "Draw Tile Line"
+            : tilemapToolMode === "rectangle"
+              ? "Draw Tile Rectangle"
+              : "Draw Tiles";
+        history.commit(new TilemapCellsCommand(activeCel.id, [...tilemapCellChangesRef.current].map(([index, change]) => ({
+          index,
+          before: change.before,
+          after: change.after,
+        })), label));
+        setStatus(label);
+      } else if (tilemapDrawMode === "terrain" && terrainCellChangesRef.current.size > 0) {
+        history.commit(new TerrainCellsCommand(activeCel.id, [...terrainCellChangesRef.current].map(([index, change]) => ({
+          index,
+          before: change.before,
+          after: change.after,
+        })), "Draw Terrain"));
+        setStatus("Draw Terrain");
       }
       tilemapEditBeforeRef.current = null;
       tilemapLastPointRef.current = null;
+      tilemapGestureStartCellRef.current = null;
+      tilemapGestureStartPointRef.current = null;
+      tilemapCellChangesRef.current.clear();
+      terrainCellChangesRef.current.clear();
       tilemapEditChangedRef.current = false;
+      tilemapAuthorityDeclinedRef.current = false;
     }
     return true;
   };
@@ -4826,6 +6619,32 @@ function App() {
       activeTab.frameSelectionAnchorId = pixelDocument.activeFrameId;
       setTabCommandScope(activeTab, "frame");
       return true;
+    });
+  };
+
+  const appendTimelineFrame = (layerId?: string) => {
+    if (isPlaying) return;
+    mutateDocument(layerId ? "Append Frame and Cel" : "Append Empty Frame", () => {
+      const lastFrame = pixelDocument.frames.at(-1);
+      if (lastFrame) pixelDocument.activeFrameId = lastFrame.id;
+      const extendLoop = shouldExtendTimelineLoopAfterInsertion(activeTab);
+      const frame = addEmptyFrame(pixelDocument, lastFrame?.durationMs ?? 100, backgroundClearColor);
+      extendTimelineLoopAfterInsertion(activeTab, extendLoop);
+      activeTab.selectedFrameIds = [frame.id];
+      activeTab.frameSelectionAnchorId = frame.id;
+      if (!layerId) {
+        setTabCommandScope(activeTab, "frame");
+        return true;
+      }
+      const layer = getLayerByID(pixelDocument, layerId);
+      if (!layer || !isCelLayer(layer)) return true;
+      const cel = ensureCel(pixelDocument, layer.id, frame.id);
+      pixelDocument.activeLayerId = layer.id;
+      const key = celSelectionKey(layer.id, frame.id);
+      activeTab.selectedCelKeys = [key];
+      activeTab.celSelectionAnchor = {layerId: layer.id, frameId: frame.id};
+      setTabCommandScope(activeTab, "cels");
+      return Boolean(cel);
     });
   };
 
@@ -5685,6 +7504,203 @@ function App() {
     uiScalePercent: preferences.general.uiScale,
     kind: "submenu",
   });
+  const runContextAction = (action: () => void) => {
+    setContextMenu(null);
+    action();
+  };
+  const contextMenuButton = (label: string, icon: ReactNode, action: () => void, disabled = false, danger = false) => (
+    <button
+      type="button"
+      role="menuitem"
+      className={danger ? "is-danger" : undefined}
+      disabled={disabled}
+      onClick={() => runContextAction(action)}
+    >
+      {icon}<span className="context-menu-label">{label}</span>
+    </button>
+  );
+  const contextMenuDivider = () => <div className="menu-divider" role="separator" />;
+  const renderContextMenuContents = () => {
+    if (!contextMenu) return null;
+    const target = contextMenu.target;
+    if (target.kind === "document") {
+      const tab = tabs.find((candidate) => candidate.id === target.tabId);
+      if (!tab) return null;
+      const index = tabs.indexOf(tab);
+      return <>
+        {contextMenuButton(language === "zh" ? "保存" : "Save", <Save size={16} />, () => dispatchCommandShortcut("save"))}
+        {contextMenuButton(language === "zh" ? "另存为" : "Save As", <SaveAll size={16} />, () => dispatchCommandShortcut("saveAs"))}
+        {contextMenuButton(language === "zh" ? "重命名" : "Rename", <Pencil size={16} />, () => {
+          setDocumentNameDraft(displayProjectName(tab.document.name));
+          setRenamingDocumentTabID(tab.id);
+        }, isPlaying)}
+        {contextMenuButton(language === "zh" ? "复制为新项目" : "Duplicate Sprite", <Copy size={16} />, () => dispatchCommandShortcut("duplicateSprite"), isPlaying)}
+        {contextMenuDivider()}
+        {contextMenuButton(language === "zh" ? "关闭" : "Close", <X size={16} />, () => closeTab(tab))}
+        {contextMenuButton(language === "zh" ? "关闭其他文件" : "Close Others", <X size={16} />, () => {
+          for (const candidate of [...tabs]) if (candidate.id !== tab.id) closeTab(candidate);
+        }, tabs.length < 2)}
+        {contextMenuButton(language === "zh" ? "关闭右侧文件" : "Close Tabs to the Right", <ChevronRight size={16} />, () => {
+          for (const candidate of [...tabs].slice(index + 1)) closeTab(candidate);
+        }, index >= tabs.length - 1)}
+      </>;
+    }
+    if (target.kind === "layer") {
+      const layer = getLayerByID(pixelDocument, target.layerId);
+      if (!layer) return null;
+      return <>
+        {contextMenuButton(language === "zh" ? "重命名" : "Rename", <Pencil size={16} />, () => {
+          setLayerNameDraft(layer.name);
+          setRenamingLayerId(layer.id);
+        }, isPlaying)}
+        {contextMenuButton(language === "zh" ? "图层属性" : "Layer Properties", <SlidersHorizontal size={16} />, openLayerProperties, isPlaying)}
+        {contextMenuButton(language === "zh" ? "复制图层" : "Duplicate Layer", <Copy size={16} />, duplicateSelectedLayers, isPlaying)}
+        {contextMenuDivider()}
+        {contextMenuButton(layer.visible ? (language === "zh" ? "隐藏" : "Hide") : (language === "zh" ? "显示" : "Show"), layer.visible ? <EyeOff size={16} /> : <Eye size={16} />, () => dispatchCommandShortcut("toggleLayerVisibility"), isPlaying)}
+        {contextMenuButton(layer.locked ? (language === "zh" ? "解锁" : "Unlock") : (language === "zh" ? "锁定" : "Lock"), layer.locked ? <Unlock size={16} /> : <Lock size={16} />, () => dispatchCommandShortcut("toggleLayerLock"), isPlaying)}
+        {isImageLayer(layer) && contextMenuButton(language === "zh" ? "切换锁定透明度" : "Toggle Alpha Lock", <Droplets size={16} />, () => dispatchCommandShortcut("toggleAlphaLock"), isPlaying)}
+        {isImageLayer(layer) && contextMenuButton(language === "zh" ? "切换连续动画格" : "Toggle Continuous Cels", <Waypoints size={16} />, () => dispatchCommandShortcut("toggleContinuous"), isPlaying)}
+        {contextMenuDivider()}
+        {contextMenuButton(language === "zh" ? "上移" : "Move Up", <ChevronUp size={16} />, () => moveSelectedLayers("up"), isPlaying || !canMoveSelectedLayersUp)}
+        {contextMenuButton(language === "zh" ? "下移" : "Move Down", <ChevronDown size={16} />, () => moveSelectedLayers("down"), isPlaying || !canMoveSelectedLayersDown)}
+        {contextMenuButton(selectedLayers.length > 1 ? (language === "zh" ? "合并所选图层" : "Merge Selected Layers") : (language === "zh" ? "向下合并" : "Merge Down"), <Merge size={16} />, () => selectedLayers.length > 1 ? mergeSelectedLayers() : dispatchCommandShortcut("mergeLayerDown"), isPlaying || (selectedLayers.length > 1 ? !canMergeSelectedLayers : !canMergeDown))}
+        {contextMenuButton(language === "zh" ? "拼合可见图层" : "Flatten Visible Layers", <Layers size={16} />, flattenDocumentLayers, isPlaying || pixelDocument.layers.filter((candidate) => candidate.role !== "reference").length < 2)}
+        {isImageLayer(layer) && contextMenuButton(language === "zh" ? "转换为图块地图" : "Convert to Tilemap", <Grid2X2 size={16} />, convertActiveLayerToTiles, isPlaying)}
+        {contextMenuDivider()}
+        {contextMenuButton(language === "zh" ? "删除图层" : "Delete Layer", <Trash2 size={16} />, () => dispatchCommandShortcut("delete"), isPlaying, true)}
+      </>;
+    }
+    if (target.kind === "frame") {
+      const frame = pixelDocument.frames.find((candidate) => candidate.id === target.frameId);
+      if (!frame) return null;
+      return <>
+        {contextMenuButton(language === "zh" ? "新建帧" : "Add Frame", <Plus size={16} />, () => dispatchCommandShortcut("addFrame"), isPlaying)}
+        {contextMenuButton(language === "zh" ? "新建空帧" : "New Empty Frame", <FilePlus size={16} />, () => dispatchCommandShortcut("newEmptyFrame"), isPlaying)}
+        {contextMenuButton(language === "zh" ? "复制帧" : "Duplicate Frame", <Copy size={16} />, () => dispatchCommandShortcut("duplicateFrame"), isPlaying)}
+        {contextMenuButton(language === "zh" ? "删除帧" : "Delete Frame", <Trash2 size={16} />, () => dispatchCommandShortcut("deleteFrame"), isPlaying || selectedFrameIds.length >= pixelDocument.frames.length, true)}
+        {contextMenuDivider()}
+        {contextMenuButton(language === "zh" ? "前移" : "Move Earlier", <ChevronLeft size={16} />, () => dispatchCommandShortcut("moveFrameBackward"), isPlaying || !canMoveFramesBackward)}
+        {contextMenuButton(language === "zh" ? "后移" : "Move Later", <ChevronRight size={16} />, () => dispatchCommandShortcut("moveFrameForward"), isPlaying || !canMoveFramesForward)}
+        {contextMenuButton(language === "zh" ? "反转所选帧" : "Reverse Selected Frames", <RotateCcw size={16} />, () => dispatchCommandShortcut("reverseFrames"), isPlaying || selectedFrameIds.length < 2)}
+        {contextMenuButton(language === "zh" ? "设置帧时长…" : "Set Frame Duration…", <SlidersHorizontal size={16} />, () => {
+          const input = window.prompt(language === "zh" ? "帧时长（毫秒）" : "Frame duration (milliseconds)", String(Math.round(frame.durationMs)));
+          if (input === null) return;
+          const duration = Math.max(1, Math.min(60_000, Math.round(Number(input) || 0)));
+          mutateDocument("Change Frame Duration", () => setFramesDuration(pixelDocument, selectedFrameIds, duration));
+        }, isPlaying)}
+        {contextMenuDivider()}
+        {contextMenuButton(language === "zh" ? "设为循环起点" : "Set Loop Start", <ChevronLeft size={16} />, () => {
+          activeTab.loopStartFrameId = frame.id;
+          activeTab.activeTagId = undefined;
+          setUIRevision((value) => value + 1);
+        })}
+        {contextMenuButton(language === "zh" ? "设为循环终点" : "Set Loop End", <ChevronRight size={16} />, () => {
+          activeTab.loopEndFrameId = frame.id;
+          activeTab.activeTagId = undefined;
+          setUIRevision((value) => value + 1);
+        })}
+        {contextMenuButton(language === "zh" ? "从所选帧创建标签" : "Create Tag from Selection", <Target size={16} />, openNewTagDialog, isPlaying)}
+        {contextMenuButton(language === "zh" ? "复制到其他打开文件" : "Copy to Open Document", <Copy size={16} />, () => dispatchCommandShortcut("copySelectedFramesToDocument"), isPlaying || tabs.length < 2)}
+      </>;
+    }
+    if (target.kind === "cel") {
+      const cel = getCel(pixelDocument, target.layerId, target.frameId);
+      return <>
+        {!cel && contextMenuButton(language === "zh" ? "创建动画格" : "Create Cel", <FilePlus size={16} />, () => dispatchCommandShortcut("createCels"), isPlaying)}
+        {contextMenuButton(language === "zh" ? "复制" : "Copy", <Copy size={16} />, copyCurrentCels, isPlaying || !cel)}
+        {contextMenuButton(language === "zh" ? "剪切" : "Cut", <FileDown size={16} />, cutCurrentCels, isPlaying || !cel)}
+        {contextMenuButton(language === "zh" ? "粘贴" : "Paste", <FileUp size={16} />, pasteCurrentCels, isPlaying || !celClipboardRef.current)}
+        {contextMenuButton(language === "zh" ? "删除动画格" : "Delete Cel", <Trash2 size={16} />, clearCurrentCels, isPlaying || !cel, true)}
+        {contextMenuDivider()}
+        {contextMenuButton(language === "zh" ? "复制动画格" : "Duplicate Cels", <Copy size={16} />, () => dispatchCommandShortcut("duplicateCels"), isPlaying || !cel)}
+        {contextMenuButton(language === "zh" ? "复制并链接" : "Duplicate Linked Cels", <Link2 size={16} />, () => dispatchCommandShortcut("duplicateLinkedCels"), isPlaying || !cel)}
+        {contextMenuButton(language === "zh" ? "链接动画格" : "Link Cels", <Link2 size={16} />, linkCurrentCels, isPlaying || linkableCelGroups.length === 0 || !celGroupsEditable(linkableCelGroups))}
+        {contextMenuButton(language === "zh" ? "取消链接" : "Unlink Cels", <Unlink2 size={16} />, unlinkCurrentCels, isPlaying || unlinkableCelGroups.length === 0 || !celGroupsEditable(unlinkableCelGroups))}
+        {contextMenuButton(language === "zh" ? "动画格属性" : "Cel Properties", <SlidersHorizontal size={16} />, openCelProperties, isPlaying || !cel)}
+        {contextMenuButton(language === "zh" ? "选择链接动画格" : "Select Linked Cels", <Link2 size={16} />, () => dispatchCommandShortcut("selectLinkedCels"), !cel)}
+        {contextMenuButton(language === "zh" ? "选择本层全部动画格" : "Select All Cels in Layer", <Layers size={16} />, () => dispatchCommandShortcut("selectAllLayerCels"), !cel)}
+        {contextMenuDivider()}
+        {contextMenuButton(language === "zh" ? "应用动画格变换" : "Apply Cel Transform", <Move size={16} />, applySelectedCelTransform, isPlaying || !transformTargetCelsEditable)}
+        {contextMenuButton(language === "zh" ? "栅格化到画布" : "Rasterize to Canvas", <Grid2X2 size={16} />, rasterizeSelectedCels, isPlaying || !transformTargetCelsEditable)}
+      </>;
+    }
+    if (target.kind === "slice") {
+      const slice = pixelDocument.slices.find((candidate) => candidate.id === target.sliceId);
+      if (!slice) return null;
+      const key = slice.keys.find((candidate) => candidate.frameId === pixelDocument.activeFrameId);
+      return <>
+        {contextMenuButton(language === "zh" ? "切片属性" : "Slice Properties", <SlidersHorizontal size={16} />, () => openSliceProperties(slice.id))}
+        {contextMenuButton(language === "zh" ? "添加当前帧关键帧" : "Add Current-frame Key", <Plus size={16} />, addCurrentSliceKey, Boolean(key))}
+        {contextMenuButton(language === "zh" ? "删除当前帧关键帧" : "Delete Current-frame Key", <Trash2 size={16} />, deleteCurrentSliceKey, !key || slice.keys.length <= 1, true)}
+        {contextMenuButton(key?.center ? (language === "zh" ? "移除九宫格中心" : "Remove Nine-patch Center") : (language === "zh" ? "添加九宫格中心" : "Add Nine-patch Center"), <Grid2X2 size={16} />, () => {
+          if (!key) return;
+          editCurrentSliceKey({center: key.center ? undefined : {x: Math.floor(key.width / 4), y: Math.floor(key.height / 4), width: Math.max(1, Math.floor(key.width / 2)), height: Math.max(1, Math.floor(key.height / 2))}}, "Toggle Nine-patch");
+        }, !key)}
+        {contextMenuDivider()}
+        {contextMenuButton(language === "zh" ? "删除切片" : "Delete Slice", <Trash2 size={16} />, deleteSelectedSlices, false, true)}
+      </>;
+    }
+    if (target.kind === "tile") {
+      const tile = activeTileset?.tiles.find((candidate) => candidate.id === target.tileId);
+      return <>
+        {contextMenuButton(language === "zh" ? "选择图块" : "Select Tile", <Check size={16} />, () => setSelectedTileID(target.tileId))}
+        {contextMenuButton(language === "zh" ? "切换到像素编辑" : "Edit Tile Pixels", <Pencil size={16} />, () => setTilemapDrawMode("pixels"), !tile)}
+        {contextMenuButton(language === "zh" ? "复制为新图块" : "Duplicate as New Tile", <Copy size={16} />, () => {
+          if (!activeTileset || !tile) return;
+          let nextID = 0;
+          mutateDocument("Duplicate Tile", () => {
+            const result = addTileInPlace(activeTileset, tile.pixels.slice(), tile.indexes?.slice());
+            nextID = result.tile.id;
+            return result.created;
+          });
+          if (nextID) setSelectedTileID(nextID);
+        }, isPlaying || !tile)}
+        {contextMenuButton(language === "zh" ? "删除图块" : "Delete Tile", <Trash2 size={16} />, deleteSelectedTile, isPlaying || !tile, true)}
+      </>;
+    }
+    if (target.kind === "guide") {
+      const guide = pixelDocument.guides.find((candidate) => candidate.id === target.guideId);
+      if (!guide) return null;
+      return <>
+        {contextMenuButton(language === "zh" ? "设置精确位置…" : "Set Exact Position…", <Move size={16} />, () => {
+          const input = window.prompt(language === "zh" ? "参考线位置" : "Guide position", String(guide.position));
+          if (input === null) return;
+          const maximum = guide.axis === "vertical" ? pixelDocument.width : pixelDocument.height;
+          const position = Math.max(0, Math.min(maximum, Math.round(Number(input) || 0)));
+          mutateDocument("Move Guide", () => { guide.position = position; return true; });
+        })}
+        {contextMenuButton(language === "zh" ? "切换方向" : "Switch Orientation", <RotateCw size={16} />, () => mutateDocument("Change Guide Orientation", () => {
+          guide.axis = guide.axis === "vertical" ? "horizontal" : "vertical";
+          guide.position = Math.min(guide.axis === "vertical" ? pixelDocument.width : pixelDocument.height, guide.position);
+          return true;
+        }))}
+        {contextMenuButton(language === "zh" ? "删除参考线" : "Delete Guide", <Trash2 size={16} />, () => mutateDocument("Delete Guide", () => {
+          const index = pixelDocument.guides.findIndex((candidate) => candidate.id === guide.id);
+          if (index < 0) return false;
+          pixelDocument.guides.splice(index, 1);
+          return true;
+        }), false, true)}
+      </>;
+    }
+    if (target.kind === "tag") {
+      const tag = pixelDocument.tags.find((candidate) => candidate.id === target.tagId);
+      if (!tag) return null;
+      return <>
+        {contextMenuButton(language === "zh" ? "聚焦标签" : "Focus Tag", <Target size={16} />, focusCurrentTag, isPlaying)}
+        {contextMenuButton(language === "zh" ? "编辑标签" : "Edit Tag", <Pencil size={16} />, openEditTagDialog, isPlaying)}
+        {contextMenuButton(language === "zh" ? "删除标签" : "Delete Tag", <Trash2 size={16} />, removeActiveTag, isPlaying, true)}
+      </>;
+    }
+    return <>
+      {contextMenuButton(target.panel === "inspector" ? (language === "zh" ? "隐藏侧栏" : "Hide Inspector") : (language === "zh" ? "隐藏时间轴" : "Hide Timeline"), <EyeOff size={16} />, () => target.panel === "inspector" ? setInspectorVisible(false) : setTimelineVisible(false))}
+      {contextMenuButton(language === "zh" ? "显示所有面板" : "Show All Panels", <PanelTopOpen size={16} />, showAllPanels)}
+      {contextMenuButton(language === "zh" ? "恢复默认尺寸" : "Restore Default Size", <RotateCcw size={16} />, () => {
+        if (target.panel === "inspector") setInspectorWidth(defaultWorkspaceDimensions.inspectorWidth);
+        else setTimelineHeight(defaultWorkspaceDimensions.timelineHeight);
+      })}
+      {contextMenuButton(language === "zh" ? "重置工作区布局" : "Reset Workspace Layout", <RotateCcw size={16} />, () => dispatchCommandShortcut("resetWorkspace"))}
+    </>;
+  };
 
   return (
     <div
@@ -5709,6 +7725,19 @@ function App() {
         ref={menuLayerRef}
         style={{position: "fixed", inset: 0, zIndex: 20, pointerEvents: "none"}}
       />
+      {contextMenu && menuLayerRef.current && createPortal(
+        <div
+          ref={contextMenuRef}
+          className="editor-context-menu"
+          role="menu"
+          aria-label={language === "zh" ? "上下文菜单" : "Context menu"}
+          style={{left: contextMenu.left, top: contextMenu.top}}
+          onContextMenu={(event) => event.preventDefault()}
+        >
+          {renderContextMenuContents()}
+        </div>,
+        menuLayerRef.current,
+      )}
       <header className="topbar">
         <div className="file-menu" ref={fileMenuRef} onPointerEnter={() => {
           if (!preferences.general.expandMenusOnHover || (!isFileMenuOpen && !isEditMenuOpen && !isSpriteMenuOpen && !isViewMenuOpen)) return;
@@ -5897,8 +7926,16 @@ function App() {
               tabIndex={selected ? 0 : -1}
               title={displayProjectName(tab.document.name)}
               onClick={() => { setActiveTabID(tab.id); setRenamingLayerId(null); setRenamingDocumentTabID(null); setIsPlaying(false); invalidate(); }}
+              onContextMenu={(event) => {
+                setActiveTabID(tab.id);
+                setRenamingLayerId(null);
+                setRenamingDocumentTabID(null);
+                setIsPlaying(false);
+                openContextMenu(event, {kind: "document", tabId: tab.id});
+              }}
               onKeyDown={(event) => {
                 if (event.target !== event.currentTarget) return;
+                if (openKeyboardContextMenu(event, {kind: "document", tabId: tab.id})) return;
                 if (isActivationKey(event.key)) {
                   event.preventDefault();
                   event.currentTarget.click();
@@ -5973,17 +8010,80 @@ function App() {
 
       {hasOpenDocument && <>
       <aside className="tool-rail" aria-label={ui.tools}>
-        {tools.map(({id, icon: Icon}) => (
-          <button
-            key={id}
-            className={selectedTool === id ? "tool-button is-active" : "tool-button"}
-            title={ui.toolsByID[id]}
-            aria-label={ui.toolsByID[id]}
-            aria-pressed={selectedTool === id}
-            onClick={() => activateTool(id)}
-          ><Icon size={19} /></button>
-        ))}
+        {toolGroups.map((group) => {
+          const displayedTool = group.tools.includes(selectedTool)
+            ? selectedTool
+            : group.tools.includes(preferredToolByGroup[group.id])
+              ? preferredToolByGroup[group.id]
+              : group.defaultTool;
+          const definition = toolDefinitionByID.get(displayedTool)!;
+          const Icon = definition.icon;
+          const isActive = group.tools.includes(selectedTool);
+          const hasMenu = group.tools.length > 1;
+          return <div className="tool-group-slot" key={group.id}>
+            <button
+              type="button"
+              className={`${isActive ? "tool-button is-active" : "tool-button"}${hasMenu ? " has-tool-menu" : ""}`}
+              title={`${ui.toolsByID[displayedTool]}${hasMenu ? ` · ${language === "zh" ? "长按或右键选择工具" : "Hold or right-click to choose a tool"}` : ""}`}
+              aria-label={ui.toolsByID[displayedTool]}
+              aria-pressed={isActive}
+              aria-haspopup={hasMenu ? "menu" : undefined}
+              aria-expanded={hasMenu ? openToolGroupID === group.id : undefined}
+              onPointerDown={(event) => beginToolGroupLongPress(group, event)}
+              onPointerUp={clearToolGroupLongPress}
+              onPointerCancel={clearToolGroupLongPress}
+              onPointerLeave={clearToolGroupLongPress}
+              onContextMenu={(event) => {
+                if (!hasMenu) return;
+                event.preventDefault();
+                clearToolGroupLongPress();
+                openToolGroupMenu(group, event.currentTarget);
+              }}
+              onKeyDown={(event) => {
+                if (!hasMenu || (event.key !== "ArrowRight" && event.key !== "ArrowDown")) return;
+                event.preventDefault();
+                openToolGroupMenu(group, event.currentTarget);
+              }}
+              onClick={() => {
+                if (toolGroupSuppressClickRef.current === group.id) {
+                  toolGroupSuppressClickRef.current = null;
+                  return;
+                }
+                activateTool(displayedTool);
+              }}
+            ><Icon size={19} /></button>
+          </div>;
+        })}
       </aside>
+      {openToolGroupID && menuLayerRef.current && (() => {
+        const group = toolGroups.find((candidate) => candidate.id === openToolGroupID);
+        if (!group) return null;
+        return createPortal(<div
+          ref={toolGroupMenuRef}
+          className="tool-group-popover"
+          role="menu"
+          aria-label={language === "zh" ? "选择工具" : "Choose tool"}
+          style={{left: toolGroupMenuPosition.left, top: toolGroupMenuPosition.top}}
+        >
+          {group.tools.map((tool) => {
+            const definition = toolDefinitionByID.get(tool)!;
+            const Icon = definition.icon;
+            const shortcut = shortcutAssignments[tool]?.toUpperCase();
+            return <button
+              key={tool}
+              type="button"
+              role="menuitemradio"
+              aria-checked={selectedTool === tool}
+              className={selectedTool === tool ? "is-active" : ""}
+              onClick={() => activateTool(tool)}
+            >
+              <Icon size={17} />
+              <span>{ui.toolsByID[tool]}</span>
+              {shortcut && <kbd>{shortcut}</kbd>}
+            </button>;
+          })}
+        </div>, menuLayerRef.current);
+      })()}
 
       <main className="workspace" onPointerDown={() => {
         if (activeTab.commandScope === "canvas" && activeTab.selectedCelKeys.length === 0) return;
@@ -6050,6 +8150,9 @@ function App() {
           pixelGridOpacity={preferences.grid.pixelGridOpacity}
           gridLineColor={preferences.grid.lineColor}
           gridLineOpacity={preferences.grid.lineOpacity}
+          tileGridLines={activeTileGridLines}
+          tileCellOverlays={tileCellOverlays}
+          tileImagePreviews={tileImagePreviews}
           guideColor={preferences.guides.guideColor}
           showSelectionEdges={preferences.selection.showEdges}
           wheelZoom={preferences.editor.wheelZoom}
@@ -6111,6 +8214,15 @@ function App() {
             guide.position = position;
             return true;
           })}
+          onOverlayContextMenu={(target: CanvasContextTarget, position) => {
+            if (target.kind === "slice") {
+              setActiveSliceId(target.id);
+              if (!selectedSliceIds.includes(target.id)) setSelectedSliceIds([target.id]);
+              showContextMenu({kind: "slice", sliceId: target.id}, position.clientX, position.clientY);
+              return;
+            }
+            showContextMenu({kind: "guide", guideId: target.id}, position.clientX, position.clientY);
+          }}
           onGridOffsetChange={(x, y) => mutateDocument("Move Grid", () => {
             if (pixelDocument.settings.gridOffsetX === x && pixelDocument.settings.gridOffsetY === y) return false;
             pixelDocument.settings.gridOffsetX = x;
@@ -6133,12 +8245,26 @@ function App() {
           textPreview={textRaster}
           onTextPlace={placeText}
           onTilemapPointer={activeTileset && (selectedTool === "pencil" || selectedTool === "eraser") ? handleTilemapPointer : undefined}
+          onTilemapHover={activeTileset && activeCel?.tilemap ? (point) => {
+            if (!point) {
+              setTilemapHoverCell(null);
+              return;
+            }
+            const cell = tilemapCellAtPixel(activeTileset, activeCel.tilemap!, point.x - activeCel.x, point.y - activeCel.y);
+            const next = cell.column >= 0 && cell.row >= 0
+              && cell.column < activeCel.tilemap!.columns && cell.row < activeCel.tilemap!.rows
+              ? cell
+              : null;
+            setTilemapHoverCell((current) => current?.column === next?.column && current?.row === next?.row ? current : next);
+          } : undefined}
         />
       </main>
 
-      {inspectorVisible && <aside className="inspector">
+      {inspectorVisible && <aside className="inspector" onContextMenu={(event) => {
+        if (event.target === event.currentTarget) openContextMenu(event, {kind: "panel", panel: "inspector"});
+      }}>
         <section className="panel-section color-section">
-          <div className="color-section-header">
+          <div className="color-section-header" onContextMenu={(event) => openContextMenu(event, {kind: "panel", panel: "inspector"})}>
             <h2>{ui.color}</h2>
             <select className="color-mode-select" value={pixelDocument.colorMode} disabled={isPlaying} aria-label={ui.colorMode} title={ui.colorMode} onChange={(event) => changeColorMode(event.target.value as ColorMode)}>
               <option value="rgba">{ui.rgbaMode}</option>
@@ -6249,17 +8375,246 @@ function App() {
         <div className="inspector-scroll">
         {activeTileset && <section className="panel-section tilemap-section tool-settings-section">
           <div className="tilemap-heading"><h2>{language === "zh" ? "图块地图" : "Tilemap"}</h2><span>{activeTileset.tileWidth} × {activeTileset.tileHeight}</span></div>
+          <div className="tilemap-tileset-actions">
+            <button type="button" className="panel-command" onClick={renameActiveTileset}>{language === "zh" ? "重命名图块集" : "Rename Tileset"}</button>
+            <button type="button" className="panel-command" onClick={createSharedTilemapLayer}>{language === "zh" ? "新建共享图层" : "New Shared Layer"}</button>
+            <button type="button" className="panel-command" onClick={createBlankTilesetForLayer}>{language === "zh" ? "新建图块集" : "New Tileset"}</button>
+            <button type="button" className="panel-command" onClick={duplicateActiveTileset}>{language === "zh" ? "复制图块集" : "Duplicate Tileset"}</button>
+          </div>
+          <label className="compact-field"><span>{language === "zh" ? "图层图块集" : "Layer Tileset"}</span><select value={activeTileset.id} onChange={(event) => assignActiveLayerTileset(event.target.value)}>
+            {pixelDocument.tilesets.map((tileset) => <option key={tileset.id} value={tileset.id}>{tileset.name}</option>)}
+          </select></label>
+          <div className="tileset-reference-summary">
+            <span>{language === "zh" ? "引用" : "References"}: {activeTilesetReferences.layers.length} {language === "zh" ? "图层" : "layers"} · {activeTilesetReferences.cels.length} Cels · {activeTilesetReferences.terrains.length} Terrain</span>
+            <button type="button" title={language === "zh" ? "删除图块集" : "Delete Tileset"} disabled={pixelDocument.tilesets.length < 2} onClick={deleteActiveTileset}><Trash2 size={13} /></button>
+          </div>
+          <TilesetReferencesPanel references={activeTilesetReferences} language={language}
+            firstFrame={preferences.timeline.firstFrame} onSelectLayer={selectLayer} onSelectCel={selectCel}
+            onSelectTerrain={(id) => { setSelectedTerrainID(id); setTilemapDrawMode("terrain"); }} />
+          <label className="compact-field"><span>{language === "zh" ? "网格" : "Grid"}</span><select value={activeTileset.grid.kind === "hexagonal"
+            ? `hex-${activeTileset.grid.orientation}-${activeTileset.grid.offset.startsWith("odd") ? "odd" : "even"}`
+            : activeTileset.grid.kind} onChange={(event) => updateActiveTilesetGrid(event.target.value)}>
+            <option value="orthogonal">{language === "zh" ? "正交" : "Orthogonal"}</option>
+            <option value="isometric">{language === "zh" ? "等距" : "Isometric"}</option>
+            <option value="hex-pointy-odd">Hex pointy odd-r</option>
+            <option value="hex-pointy-even">Hex pointy even-r</option>
+            <option value="hex-flat-odd">Hex flat odd-q</option>
+            <option value="hex-flat-even">Hex flat even-q</option>
+          </select></label>
+          {activeTileset.grid.kind === "isometric" && <div className="tilemap-grid-fields">
+            <label className="compact-field"><span>{language === "zh" ? "底面宽" : "Cell width"}</span><input type="number" min={1} max={4096} value={activeTileset.grid.cellWidth} onChange={(event) => updateActiveIsometricGrid("cellWidth", Number(event.target.value))} /></label>
+            <label className="compact-field"><span>{language === "zh" ? "底面高" : "Cell height"}</span><input type="number" min={1} max={4096} value={activeTileset.grid.cellHeight} onChange={(event) => updateActiveIsometricGrid("cellHeight", Number(event.target.value))} /></label>
+            <label className="compact-field"><span>{language === "zh" ? "锚点 X" : "Anchor X"}</span><input type="number" min={0} max={activeTileset.tileWidth} value={activeTileset.grid.anchorX} onChange={(event) => updateActiveIsometricGrid("anchorX", Number(event.target.value))} /></label>
+            <label className="compact-field"><span>{language === "zh" ? "锚点 Y" : "Anchor Y"}</span><input type="number" min={0} max={activeTileset.tileHeight} value={activeTileset.grid.anchorY} onChange={(event) => updateActiveIsometricGrid("anchorY", Number(event.target.value))} /></label>
+          </div>}
+          {activeTileset.grid.kind === "hexagonal" && <div className="tilemap-grid-fields">
+            <label className="compact-field"><span>{language === "zh" ? "边长" : "Side length"}</span><input type="number" min={1} max={1024} value={Math.round((activeTileset.grid.orientation === "pointy" ? activeTileset.tileHeight : activeTileset.tileWidth) / 2)} onChange={(event) => updateActiveHexSideLength(Number(event.target.value))} /></label>
+            <div className="tileset-reference-summary"><span>{activeTileset.tileWidth} × {activeTileset.tileHeight} {language === "zh" ? "边界框" : "bounds"}</span></div>
+          </div>}
+          <div className="tilemap-data-actions">
+            <button type="button" className="panel-command" onClick={() => void importActiveTilemapData()}><FileUp size={13} /><span>{language === "zh" ? "导入地图" : "Import map"}</span></button>
+            <button type="button" className="panel-command" onClick={() => void exportActiveTilemapData("json")}><Download size={13} /><span>JSON</span></button>
+            <button type="button" className="panel-command" onClick={() => void exportActiveTilemapData("csv")}><Download size={13} /><span>CSV</span></button>
+          </div>
+          <button type="button" className="panel-command" onClick={() => void importTilesetBundle()}><FileUp size={13} /><span>{language === "zh" ? "导入 PNG 与地图元数据" : "Import PNG and map metadata"}</span></button>
           <div className="color-model-tabs" role="tablist" aria-label={language === "zh" ? "图块绘制模式" : "Tile drawing mode"}>
             <button type="button" role="tab" aria-selected={tilemapDrawMode === "tiles"} className={tilemapDrawMode === "tiles" ? "is-active" : ""} onClick={() => setTilemapDrawMode("tiles")}>{language === "zh" ? "绘制图块" : "Draw Tiles"}</button>
             <button type="button" role="tab" aria-selected={tilemapDrawMode === "pixels"} className={tilemapDrawMode === "pixels" ? "is-active" : ""} onClick={() => setTilemapDrawMode("pixels")}>{language === "zh" ? "绘制像素" : "Draw Pixels"}</button>
+            <button type="button" role="tab" aria-selected={tilemapDrawMode === "terrain"} className={tilemapDrawMode === "terrain" ? "is-active" : ""} onClick={() => setTilemapDrawMode("terrain")}>{language === "zh" ? "地形" : "Terrain"}</button>
           </div>
+          {tilemapDrawMode === "tiles" && <>
+            <div className="tilemap-tool-actions" role="toolbar" aria-label={language === "zh" ? "图块工具" : "Tile tools"}>
+              <button type="button" className={tilemapToolMode === "pencil" ? "is-active" : ""} aria-pressed={tilemapToolMode === "pencil"} title={language === "zh" ? "图块铅笔" : "Tile pencil"} onClick={() => setTilemapToolMode("pencil")}><Pencil size={14} /></button>
+              <button type="button" className={tilemapToolMode === "picker" ? "is-active" : ""} aria-pressed={tilemapToolMode === "picker"} title={language === "zh" ? "拾取图块" : "Pick tile"} onClick={() => setTilemapToolMode("picker")}><Pipette size={14} /></button>
+              <button type="button" className={tilemapToolMode === "fill" ? "is-active" : ""} aria-pressed={tilemapToolMode === "fill"} title={language === "zh" ? "填充图块" : "Fill tiles"} onClick={() => setTilemapToolMode("fill")}><PaintBucket size={14} /></button>
+              <button type="button" className={tilemapToolMode === "line" ? "is-active" : ""} aria-pressed={tilemapToolMode === "line"} title={language === "zh" ? "图块直线" : "Tile line"} onClick={() => setTilemapToolMode("line")}><Slash size={14} /></button>
+              <button type="button" className={tilemapToolMode === "rectangle" ? "is-active" : ""} aria-pressed={tilemapToolMode === "rectangle"} title={language === "zh" ? "图块矩形" : "Tile rectangle"} onClick={() => setTilemapToolMode("rectangle")}><Square size={14} /></button>
+              <button type="button" className={tilemapToolMode === "stamp" ? "is-active" : ""} aria-pressed={tilemapToolMode === "stamp"} disabled={!tileStamp} title={language === "zh" ? "图块印章" : "Tile stamp"} onClick={() => setTilemapToolMode("stamp")}><Copy size={14} /></button>
+              <button type="button" className={tilemapToolMode === "select" ? "is-active" : ""} aria-pressed={tilemapToolMode === "select"} title={language === "zh" ? "图块单元格选区" : "Tile cell selection"} onClick={() => setTilemapToolMode("select")}><BoxSelect size={14} /></button>
+            </div>
+            {tilemapToolMode === "rectangle" && <label className="brush-option-row is-single"><input type="checkbox" checked={tileRectangleFilled} onChange={(event) => setTileRectangleFilled(event.target.checked)} />{language === "zh" ? "填充矩形" : "Filled rectangle"}</label>}
+            {tilemapToolMode === "select" && <div className="tilemap-tool-actions" role="toolbar" aria-label={language === "zh" ? "图块选区命令" : "Tile selection commands"}>
+              <button type="button" disabled={!tileCellSelection} title={language === "zh" ? "复制单元格" : "Copy cells"} onClick={() => copyTileCells(false)}><Copy size={14} /></button>
+              <button type="button" disabled={!tileCellSelection} title={language === "zh" ? "剪切单元格" : "Cut cells"} onClick={() => copyTileCells(true)}><Scissors size={14} /></button>
+              <button type="button" disabled={!tileCellClipboard} title={language === "zh" ? "粘贴单元格" : "Paste cells"} onClick={pasteTileCells}><ClipboardPaste size={14} /></button>
+              <button type="button" disabled={!tileCellSelection} title={language === "zh" ? "水平翻转单元格" : "Flip cells horizontally"} onClick={() => transformSelectedTileCells("flip-x")}><FlipHorizontal2 size={14} /></button>
+              <button type="button" disabled={!tileCellSelection} title={language === "zh" ? "垂直翻转单元格" : "Flip cells vertically"} onClick={() => transformSelectedTileCells("flip-y")}><FlipVertical2 size={14} /></button>
+              <button type="button" disabled={!tileCellSelection || activeTileset.grid.kind !== "orthogonal"} title={language === "zh" ? "顺时针旋转单元格（仅正交网格）" : "Rotate cells clockwise (orthogonal only)"} onClick={() => transformSelectedTileCells("cw")}><RotateCw size={14} /></button>
+              <button type="button" disabled={!tileCellSelection || activeTileset.grid.kind !== "orthogonal"} title={language === "zh" ? "逆时针旋转单元格（仅正交网格）" : "Rotate cells counterclockwise (orthogonal only)"} onClick={() => transformSelectedTileCells("ccw")}><RotateCcw size={14} /></button>
+              <button type="button" disabled={!tileCellSelection} title={language === "zh" ? "清除单元格选区" : "Clear cell selection"} onClick={() => setTileCellSelection(null)}><X size={14} /></button>
+            </div>}
+            <button type="button" className="panel-command" disabled={!selection && !tileCellSelection} onClick={captureTileStampFromSelection}>{language === "zh" ? "从选区创建图块印章" : "Create stamp from selection"}</button>
+            {tileStamp && <div className="tile-stamp-settings">
+              <span>{tileStamp.width} × {tileStamp.height}</span>
+              <select value={tileStampEmptyMode} onChange={(event) => setTileStampEmptyMode(event.target.value as "overwrite" | "skip")} aria-label={language === "zh" ? "空图块行为" : "Empty tile behavior"}>
+                <option value="overwrite">{language === "zh" ? "覆盖空格" : "Overwrite empty"}</option>
+                <option value="skip">{language === "zh" ? "跳过空格" : "Skip empty"}</option>
+              </select>
+              <div className="mini-actions">
+                <button type="button" title={language === "zh" ? "水平翻转印章" : "Flip stamp horizontally"} onClick={() => transformTileStamp("flip-x")}><FlipHorizontal2 size={13} /></button>
+                <button type="button" title={language === "zh" ? "垂直翻转印章" : "Flip stamp vertically"} onClick={() => transformTileStamp("flip-y")}><FlipVertical2 size={13} /></button>
+                <button type="button" title={language === "zh" ? "顺时针旋转印章" : "Rotate stamp clockwise"} onClick={() => transformTileStamp("rotate-cw")}><RotateCw size={13} /></button>
+                <button type="button" title={language === "zh" ? "逆时针旋转印章" : "Rotate stamp counterclockwise"} onClick={() => transformTileStamp("rotate-ccw")}><RotateCcw size={13} /></button>
+              </div>
+            </div>}
+            <div className="tilemap-tool-actions" role="toolbar" aria-label={language === "zh" ? "图块变换" : "Tile transforms"}>
+              <button type="button" className={(selectedTileFlags & tileFlipX) !== 0 ? "is-active" : ""} aria-pressed={(selectedTileFlags & tileFlipX) !== 0} disabled={effectiveSelectedTileID === 0} title={language === "zh" ? "水平翻转" : "Flip horizontally"} onClick={() => setSelectedTileFlags((value) => (value ^ tileFlipX) >>> 0)}><FlipHorizontal2 size={14} /></button>
+              <button type="button" className={(selectedTileFlags & tileFlipY) !== 0 ? "is-active" : ""} aria-pressed={(selectedTileFlags & tileFlipY) !== 0} disabled={effectiveSelectedTileID === 0} title={language === "zh" ? "垂直翻转" : "Flip vertically"} onClick={() => setSelectedTileFlags((value) => (value ^ tileFlipY) >>> 0)}><FlipVertical2 size={14} /></button>
+              <button type="button" className={(selectedTileFlags & tileFlipDiagonal) !== 0 ? "is-active" : ""} aria-pressed={(selectedTileFlags & tileFlipDiagonal) !== 0} disabled={effectiveSelectedTileID === 0 || activeTileset.tileWidth !== activeTileset.tileHeight} title={language === "zh" ? "对角翻转" : "Flip diagonally"} onClick={() => setSelectedTileFlags((value) => (value ^ tileFlipDiagonal) >>> 0)}><RotateCw size={14} /></button>
+            </div>
+          </>}
           {tilemapDrawMode === "pixels" && <label className="compact-field"><span>{language === "zh" ? "像素同步" : "Pixel sync"}</span><select value={tilePixelSyncMode} onChange={(event) => setTilePixelSyncMode(event.target.value as TilePixelSyncMode)}>
             <option value="manual">Manual</option><option value="auto">Auto</option><option value="stack">Stack</option>
           </select></label>}
-          <div className="panel-subheading"><span>{language === "zh" ? "图块集" : "Tileset"}</span><div className="mini-actions"><button type="button" title={language === "zh" ? "添加空图块" : "Add empty tile"} onClick={addEmptyTile}><Plus size={13} /></button><button type="button" title={language === "zh" ? "删除所选图块" : "Delete selected tile"} disabled={effectiveSelectedTileID === 0} onClick={deleteSelectedTile}><Trash2 size={13} /></button></div></div>
-          <div className="tile-swatch-grid" role="listbox" aria-label={activeTileset.name}>
-            <button type="button" role="option" aria-selected={effectiveSelectedTileID === 0} className={`tile-swatch is-empty${effectiveSelectedTileID === 0 ? " is-selected" : ""}`} title={language === "zh" ? "空图块" : "Empty tile"} onClick={() => setSelectedTileID(0)}><X size={14} /></button>
-            {activeTileset.tiles.map((tile) => <button type="button" role="option" aria-selected={effectiveSelectedTileID === tile.id} className={`tile-swatch${effectiveSelectedTileID === tile.id ? " is-selected" : ""}`} title={`${language === "zh" ? "图块" : "Tile"} ${tile.id}`} key={tile.id} onClick={() => setSelectedTileID(tile.id)}><LayerThumbnail pixels={tile.pixels} width={activeTileset.tileWidth} height={activeTileset.tileHeight} revision={revision} visible ariaLabel={`${language === "zh" ? "图块" : "Tile"} ${tile.id}`} size={30} /></button>)}
+          {tilemapDrawMode === "terrain" && <>
+            <div className="tilemap-tool-actions" role="toolbar" aria-label={language === "zh" ? "地形工具" : "Terrain tools"}>
+              <button type="button" className={terrainToolMode === "brush" ? "is-active" : ""} aria-pressed={terrainToolMode === "brush"} title={language === "zh" ? "地形笔刷" : "Terrain brush"} onClick={() => setTerrainToolMode("brush")}><Pencil size={14} /></button>
+              <button type="button" className={terrainToolMode === "picker" ? "is-active" : ""} aria-pressed={terrainToolMode === "picker"} title={language === "zh" ? "拾取地形" : "Pick Terrain"} onClick={() => setTerrainToolMode("picker")}><Pipette size={14} /></button>
+              <button type="button" className={terrainToolMode === "fill" ? "is-active" : ""} aria-pressed={terrainToolMode === "fill"} title={language === "zh" ? "填充地形" : "Fill Terrain"} onClick={() => setTerrainToolMode("fill")}><PaintBucket size={14} /></button>
+              <button type="button" className={terrainToolMode === "line" ? "is-active" : ""} aria-pressed={terrainToolMode === "line"} title={language === "zh" ? "地形直线" : "Terrain line"} onClick={() => setTerrainToolMode("line")}><Slash size={14} /></button>
+              <button type="button" className={terrainToolMode === "rectangle" ? "is-active" : ""} aria-pressed={terrainToolMode === "rectangle"} title={language === "zh" ? "地形矩形" : "Terrain rectangle"} onClick={() => setTerrainToolMode("rectangle")}><Square size={14} /></button>
+              <button type="button" className={terrainToolMode === "stamp" ? "is-active" : ""} aria-pressed={terrainToolMode === "stamp"} disabled={!terrainStamp} title={language === "zh" ? "地形印章" : "Terrain stamp"} onClick={() => setTerrainToolMode("stamp")}><Copy size={14} /></button>
+            </div>
+            {terrainToolMode === "brush" && <div className="terrain-brush-settings">
+              <label className="compact-field"><span>{language === "zh" ? "半径" : "Radius"}</span><input type="number" min="0" max="16" value={terrainBrushRadius} onChange={(event) => setTerrainBrushRadius(Math.max(0, Math.min(16, Math.round(Number(event.target.value) || 0))))} /></label>
+              <label className="compact-field"><span>{language === "zh" ? "形状" : "Shape"}</span><select value={activeTileset.grid.kind === "hexagonal" ? "native" : terrainBrushShape} disabled={activeTileset.grid.kind === "hexagonal"} onChange={(event) => setTerrainBrushShape(event.target.value as "native" | "square")}>
+                <option value="native">{activeTileset.grid.kind === "hexagonal" ? "Hex distance" : (language === "zh" ? "逻辑距离" : "Logical distance")}</option>
+                <option value="square">{language === "zh" ? "方形" : "Square"}</option>
+              </select></label>
+              <label className="compact-field"><span>{language === "zh" ? "散布" : "Scatter"} {terrainScatterPercent}%</span><input type="range" min="1" max="100" value={terrainScatterPercent} onChange={(event) => setTerrainScatterPercent(Number(event.target.value))} /></label>
+            </div>}
+            {terrainToolMode === "rectangle" && <label className="brush-option-row is-single"><input type="checkbox" checked={terrainRectangleFilled} onChange={(event) => setTerrainRectangleFilled(event.target.checked)} />{language === "zh" ? "填充矩形" : "Filled rectangle"}</label>}
+            <button type="button" className="panel-command" disabled={(!selection && !tileCellSelection) || !activeCel?.terrainmap} onClick={captureTerrainStampFromSelection}>{language === "zh" ? "从选区创建地形印章" : "Create Terrain stamp from selection"}</button>
+            {terrainStamp && <div className="tile-stamp-settings">
+              <span>{terrainStamp.width} × {terrainStamp.height}</span>
+              <select value={terrainStampEmptyMode} onChange={(event) => setTerrainStampEmptyMode(event.target.value as "overwrite" | "skip")} aria-label={language === "zh" ? "空地形行为" : "Empty Terrain behavior"}>
+                <option value="overwrite">{language === "zh" ? "覆盖空格" : "Overwrite empty"}</option>
+                <option value="skip">{language === "zh" ? "跳过空格" : "Skip empty"}</option>
+              </select>
+              <div className="mini-actions">
+                <button type="button" title={language === "zh" ? "水平翻转地形印章" : "Flip Terrain stamp horizontally"} onClick={() => transformTerrainStamp("flip-x")}><FlipHorizontal2 size={13} /></button>
+                <button type="button" title={language === "zh" ? "垂直翻转地形印章" : "Flip Terrain stamp vertically"} onClick={() => transformTerrainStamp("flip-y")}><FlipVertical2 size={13} /></button>
+                <button type="button" title={language === "zh" ? "顺时针旋转地形印章" : "Rotate Terrain stamp clockwise"} onClick={() => transformTerrainStamp("rotate-cw")}><RotateCw size={13} /></button>
+                <button type="button" title={language === "zh" ? "逆时针旋转地形印章" : "Rotate Terrain stamp counterclockwise"} onClick={() => transformTerrainStamp("rotate-ccw")}><RotateCcw size={13} /></button>
+              </div>
+            </div>}
+            <div className="terrain-recalculate-actions">
+              <button type="button" className="panel-command" disabled={!selection || !activeCel?.terrainmap} onClick={() => recalculateTerrainScope("selection")}>{language === "zh" ? "重算选区" : "Recalculate selection"}</button>
+              <button type="button" className="panel-command" disabled={!activeCel?.terrainmap} onClick={() => recalculateTerrainScope("cel")}>{language === "zh" ? "重算当前动画格" : "Recalculate Cel"}</button>
+              <button type="button" className="panel-command" disabled={!activeCel?.terrainmap} onClick={() => recalculateTerrainScope("tileset")}>{language === "zh" ? "重算图块集" : "Recalculate Tileset"}</button>
+            </div>
+            <div className="panel-subheading"><span>{language === "zh" ? "地形" : "Terrains"}</span><div className="mini-actions">
+              <button type="button" title={language === "zh" ? "添加地形" : "Add Terrain"} onClick={addTerrain}><Plus size={13} /></button>
+              <button type="button" title={language === "zh" ? "重命名地形" : "Rename Terrain"} disabled={!activeTerrain} onClick={renameSelectedTerrain}><Pencil size={13} /></button>
+              <button type="button" title={language === "zh" ? "复制地形" : "Duplicate Terrain"} disabled={!activeTerrain} onClick={duplicateSelectedTerrain}><Copy size={13} /></button>
+              <button type="button" title={language === "zh" ? "删除所选地形" : "Delete selected Terrain"} disabled={!activeTerrain} onClick={deleteSelectedTerrain}><Trash2 size={13} /></button>
+            </div></div>
+            <div className="terrain-list" role="listbox" aria-label={language === "zh" ? "地形列表" : "Terrain list"}>
+              {activeTileset.terrains.map((terrain) => <button
+                type="button"
+                role="option"
+                aria-selected={terrain.id === effectiveSelectedTerrainID}
+                className={terrain.id === effectiveSelectedTerrainID ? "is-selected" : ""}
+                key={terrain.id}
+                onClick={() => setSelectedTerrainID(terrain.id)}
+              ><i style={{background: terrain.color}} /><span>{terrain.name}</span><small>{terrain.id}</small></button>)}
+            </div>
+            {activeTerrain && <>
+              <label className="compact-field"><span>{language === "zh" ? "标识色" : "Color"}</span><input type="color" value={activeTerrain.color.slice(0, 7)} onChange={(event) => updateSelectedTerrainColor(event.target.value)} /></label>
+              <label className="compact-field"><span>{language === "zh" ? "邻域" : "Neighbors"}</span><select value={activeTerrain.neighborMode} onChange={(event) => updateActiveTerrain({neighborMode: event.target.value as TerrainNeighborMode})}>
+                {activeTileset.grid.kind !== "hexagonal" && <option value="edge4">4-edge</option>}
+                {activeTileset.grid.kind === "orthogonal" && <option value="blob8">Blob / 47</option>}
+                {activeTileset.grid.kind === "hexagonal" && <option value="edge6">6-edge</option>}
+              </select></label>
+              <label className="compact-field"><span>{language === "zh" ? "边界" : "Boundary"}</span><select value={activeTerrain.boundary} onChange={(event) => updateActiveTerrain({boundary: event.target.value as TerrainBoundary})}>
+                <option value="empty">{language === "zh" ? "空白" : "Empty"}</option>
+                <option value="same">{language === "zh" ? "相同" : "Same"}</option>
+                <option value="wrap">{language === "zh" ? "循环" : "Wrap"}</option>
+              </select></label>
+              <div className="terrain-rule-editor">
+                <TerrainMaskEditor mode={activeTerrain.neighborMode} gridKind={activeTileset.grid.kind}
+                  hexOrientation={activeTileset.grid.kind === "hexagonal" ? activeTileset.grid.orientation : undefined}
+                  value={terrainRuleMaskDraft} language={language} onChange={setTerrainRuleMaskDraft} />
+                <label><span>Mask</span><input type="number" min="0" max={activeTerrain.neighborMode === "blob8" ? 255 : activeTerrain.neighborMode === "edge6" ? 63 : 15} value={terrainRuleMaskDraft} onChange={(event) => {
+                  const maximum = activeTerrain.neighborMode === "blob8" ? 255 : activeTerrain.neighborMode === "edge6" ? 63 : 15;
+                  const value = Math.max(0, Math.min(maximum, Math.round(Number(event.target.value) || 0)));
+                  setTerrainRuleMaskDraft(activeTerrain.neighborMode === "blob8" ? normalizeBlobMask(value) : value);
+                }} /></label>
+                <label><span>{language === "zh" ? "权重" : "Weight"}</span><input type="number" min="0.001" step="0.1" value={terrainRuleWeightDraft} onChange={(event) => setTerrainRuleWeightDraft(Math.max(0.001, Number(event.target.value) || 1))} /></label>
+                <button type="button" className="panel-command" disabled={effectiveSelectedTileID === 0} onClick={assignTerrainRule}>{language === "zh" ? "添加或更新变体" : "Add or update variant"}</button>
+                {activeTerrainDiagnostic && <div className="terrain-rule-diagnostic">
+                  <span>{language === "zh"
+                    ? `覆盖 ${activeTerrainDiagnostic.coveredMasks.length}/${activeTerrainDiagnostic.coveredMasks.length + activeTerrainDiagnostic.missingMasks.length}，缺少 ${activeTerrainDiagnostic.missingMasks.length}，重复 ${activeTerrainDiagnostic.duplicateMasks.length}，无效 ${activeTerrainDiagnostic.invalidMasks.length + activeTerrainDiagnostic.invalidCandidates.length}`
+                    : `${activeTerrainDiagnostic.coveredMasks.length}/${activeTerrainDiagnostic.coveredMasks.length + activeTerrainDiagnostic.missingMasks.length} covered, ${activeTerrainDiagnostic.missingMasks.length} missing, ${activeTerrainDiagnostic.duplicateMasks.length} duplicate, ${activeTerrainDiagnostic.invalidMasks.length + activeTerrainDiagnostic.invalidCandidates.length} invalid`}</span>
+                  <button type="button" className="panel-command" disabled={effectiveSelectedTileID === 0 || activeTerrainDiagnostic.missingMasks.length === 0} onClick={fillMissingTerrainRules}>{language === "zh" ? "用所选图块补齐缺失规则" : "Fill missing with selected tile"}</button>
+                </div>}
+              </div>
+              <TerrainPreviewPanel
+                tileset={activeTileset}
+                terrainId={activeTerrain.id}
+                revision={revision}
+                seed={activeCel?.terrainmap?.seed ?? 0}
+                language={language}
+                palette={pixelDocument.colorMode === "indexed" ? pixelDocument.palette.colors : undefined}
+                transparentIndex={pixelDocument.palette.transparentIndex}
+              />
+              <div className="terrain-rule-list">
+                {activeTerrain.rules.map((rule) => <section key={rule.mask}>
+                  <header><code>{rule.mask}</code><span>{rule.candidates.length} {language === "zh" ? "个变体" : "variants"}</span><button type="button" title={language === "zh" ? "删除规则" : "Delete rule"} onClick={() => deleteTerrainRule(rule.mask)}><Trash2 size={12} /></button></header>
+                  {rule.candidates.map((candidate) => <div key={`${candidate.tileId}:${candidate.flags}`}>
+                    <span>{candidate.tileId} / 0x{candidate.flags.toString(16)}</span><small>×{candidate.weight}</small><button type="button" title={language === "zh" ? "删除变体" : "Delete variant"} onClick={() => deleteTerrainCandidate(rule.mask, candidate.tileId, candidate.flags)}><X size={11} /></button>
+                  </div>)}
+                </section>)}
+              </div>
+            </>}
+          </>}
+          <div className="panel-subheading"><span>{language === "zh" ? "图块集" : "Tileset"}</span><div className="mini-actions"><button type="button" title={language === "zh" ? "从 PNG 导入图块" : "Import tiles from PNG"} onClick={() => void importTilesetPNG()}><FileUp size={13} /></button><button type="button" title={language === "zh" ? "导出图块集 PNG 与元数据" : "Export Tileset PNG and metadata"} disabled={activeTileset.tiles.length === 0} onClick={() => void exportTilesetBundle()}><Download size={13} /></button><button type="button" title={language === "zh" ? "添加空图块" : "Add empty tile"} onClick={addEmptyTile}><Plus size={13} /></button><button type="button" title={language === "zh" ? "复制到图块剪贴板" : "Copy tiles"} disabled={effectiveSelectedTileID === 0} onClick={copySelectedTiles}><Copy size={13} /></button><button type="button" title={language === "zh" ? "粘贴为新图块" : "Paste as new tiles"} disabled={tileClipboard.length === 0} onClick={pasteTiles}><ClipboardPaste size={13} /></button><button type="button" title={language === "zh" ? "复制所选图块为新图块" : "Duplicate selected tiles"} disabled={effectiveSelectedTileID === 0} onClick={duplicateSelectedTiles}><SquaresUnite size={13} /></button><button type="button" title={language === "zh" ? "向前移动" : "Move earlier"} disabled={effectiveSelectedTileID === 0} onClick={() => reorderSelectedTiles(-1)}><ChevronLeft size={13} /></button><button type="button" title={language === "zh" ? "向后移动" : "Move later"} disabled={effectiveSelectedTileID === 0} onClick={() => reorderSelectedTiles(1)}><ChevronRight size={13} /></button><button type="button" title={language === "zh" ? "删除所选图块" : "Delete selected tiles"} disabled={effectiveSelectedTileID === 0} onClick={deleteSelectedTile}><Trash2 size={13} /></button></div></div>
+          <div className="tile-filter-controls">
+            <input className="tile-search-input" type="search" value={tileSearch} onChange={(event) => setTileSearch(event.target.value)} placeholder={language === "zh" ? "按 ID 搜索图块" : "Search tile ID"} aria-label={language === "zh" ? "搜索图块" : "Search tiles"} />
+            <select value={tileTerrainFilter} onChange={(event) => setTileTerrainFilter(Number(event.target.value))} aria-label={language === "zh" ? "按地形筛选" : "Filter by Terrain"}>
+              <option value={0}>{language === "zh" ? "全部地形" : "All Terrains"}</option>
+              {activeTileset.terrains.map((terrain) => <option key={terrain.id} value={terrain.id}>{terrain.name}</option>)}
+            </select>
+          </div>
+          <label className="compact-range tile-preview-size"><span>{language === "zh" ? "预览大小" : "Preview size"}</span><input type="range" min={24} max={96} step={4} value={tilePreviewSize} onChange={(event) => setTilePreviewSize(Number(event.target.value))} /><output>{tilePreviewSize}</output></label>
+          <div className="tile-swatch-grid" role="listbox" aria-label={activeTileset.name} style={{gridTemplateColumns: `repeat(auto-fill, ${tilePreviewSize + 4}px)`}}>
+            <button type="button" role="option" aria-selected={effectiveSelectedTileID === 0} className={`tile-swatch is-empty${effectiveSelectedTileID === 0 ? " is-selected" : ""}`} style={{width: tilePreviewSize, height: tilePreviewSize}} title={language === "zh" ? "空图块" : "Empty tile"} onClick={() => { setSelectedTileID(0); setSelectedTileIDs([]); }}><X size={14} /></button>
+            {activeTileset.tiles.filter((tile) => (tileSearch.trim() === "" || String(tile.id).includes(tileSearch.trim()))
+              && (tileTerrainFilter === 0 || tileUsage.get(tile.id)?.terrainIDs.includes(tileTerrainFilter))).map((tile) => {
+              const selected = effectiveSelectedTileIDs.includes(tile.id) || (effectiveSelectedTileIDs.length === 0 && effectiveSelectedTileID === tile.id);
+              const usage = tileUsage.get(tile.id) ?? {cells: 0, rules: 0, terrainIDs: []};
+              const terrainNames = usage.terrainIDs.map((id) => activeTileset.terrains.find((terrain) => terrain.id === id)?.name ?? id).join(", ");
+              return <button type="button" role="option" data-tile-id={tile.id} aria-selected={selected} className={`tile-swatch${selected ? " is-selected" : ""}`} style={{width: tilePreviewSize, height: tilePreviewSize}} title={`${language === "zh" ? "图块" : "Tile"} ${tile.id} · ${language === "zh" ? "单元格" : "cells"} ${usage.cells} · ${language === "zh" ? "规则" : "rules"} ${usage.rules}${terrainNames ? ` · ${terrainNames}` : ""}`} key={tile.id} onPointerDown={(event) => {
+                if (event.button !== 0) return;
+                tilesetSelectionDragRef.current = {start: event.currentTarget, moved: false};
+              }} onPointerEnter={(event) => {
+                const drag = tilesetSelectionDragRef.current;
+                if (!drag || (event.buttons & 1) === 0) return;
+                drag.moved = true;
+                updateTilesetBoxSelection(drag.start, event.currentTarget);
+              }} onPointerUp={() => {
+                const drag = tilesetSelectionDragRef.current;
+                if (drag?.moved) tilesetSelectionSuppressClickRef.current = true;
+                tilesetSelectionDragRef.current = null;
+              }} onClick={(event) => {
+                if (tilesetSelectionSuppressClickRef.current) {
+                  tilesetSelectionSuppressClickRef.current = false;
+                  return;
+                }
+                setSelectedTileID(tile.id);
+                setSelectedTileIDs((current) => {
+                  if (event.shiftKey && tileSelectionAnchorID !== null) {
+                    const start = activeTileset.tiles.findIndex((candidate) => candidate.id === tileSelectionAnchorID);
+                    const end = activeTileset.tiles.findIndex((candidate) => candidate.id === tile.id);
+                    if (start >= 0 && end >= 0) return activeTileset.tiles.slice(Math.min(start, end), Math.max(start, end) + 1).map((candidate) => candidate.id);
+                  }
+                  return event.ctrlKey || event.metaKey
+                    ? current.includes(tile.id) ? current.filter((id) => id !== tile.id) : [...current, tile.id]
+                    : [tile.id];
+                });
+                if (!event.shiftKey) setTileSelectionAnchorID(tile.id);
+              }} onContextMenu={(event) => { setSelectedTileID(tile.id); setSelectedTileIDs([tile.id]); setTileSelectionAnchorID(tile.id); openContextMenu(event, {kind: "tile", tileId: tile.id}); }} onKeyDown={(event) => { openKeyboardContextMenu(event, {kind: "tile", tileId: tile.id}); }}><LayerThumbnail pixels={tile.pixels} width={activeTileset.tileWidth} height={activeTileset.tileHeight} revision={revision} visible ariaLabel={`${language === "zh" ? "图块" : "Tile"} ${tile.id}`} size={Math.max(20, tilePreviewSize - 4)} /><span className="tile-swatch-meta">{tile.id} · {usage.cells}</span></button>;
+            })}
           </div>
         </section>}
 
@@ -6291,9 +8646,13 @@ function App() {
           {selection && <button type="button" className="panel-command" onClick={createSliceFromSelection}>{language === "zh" ? "从选区创建切片" : "Create slice from selection"}</button>}
           {pixelDocument.slices.length > 0 && <>
             <div className="slice-list" role="listbox" aria-label={language === "zh" ? "切片选择" : "Slice selection"}>
-              {pixelDocument.slices.map((slice) => <label className="slice-list-item" key={slice.id}>
+              {pixelDocument.slices.map((slice) => <label className="slice-list-item" key={slice.id} onContextMenu={(event) => {
+                setActiveSliceId(slice.id);
+                if (!selectedSliceIds.includes(slice.id)) setSelectedSliceIds([slice.id]);
+                openContextMenu(event, {kind: "slice", sliceId: slice.id});
+              }}>
                 <input type="checkbox" checked={selectedSliceIds.includes(slice.id)} onChange={() => setSelectedSliceIds((current) => current.includes(slice.id) ? current.filter((id) => id !== slice.id) : [...current, slice.id])} />
-                <button type="button" className={slice.id === activeSlice?.id ? "slice-list-name is-active" : "slice-list-name"} onClick={() => setActiveSliceId(slice.id)} onDoubleClick={() => openSliceProperties(slice.id)}>{slice.name}</button>
+                <button type="button" className={slice.id === activeSlice?.id ? "slice-list-name is-active" : "slice-list-name"} onClick={() => setActiveSliceId(slice.id)} onDoubleClick={() => openSliceProperties(slice.id)} onKeyDown={(event) => { openKeyboardContextMenu(event, {kind: "slice", sliceId: slice.id}); }}>{slice.name}</button>
               </label>)}
             </div>
             <div className="slice-tool-actions">
@@ -6505,20 +8864,17 @@ function App() {
         aria-label={language === "zh" ? "调整时间轴高度" : "Resize timeline"}
         onPointerDown={(event) => beginPanelResize("timeline", event)}
       />}
-      {timelineVisible && <section className="timeline-panel" aria-label={ui.animation}>
+      {timelineVisible && <section className="timeline-panel" aria-label={ui.animation} onContextMenu={(event) => {
+        if (event.target === event.currentTarget) openContextMenu(event, {kind: "panel", panel: "timeline"});
+      }}>
         <header className="timeline-toolbar">
           <div className="timeline-toolbar-row">
-            <div className="timeline-title">{ui.layers} / {ui.animation}</div>
+            <div className="timeline-title" onContextMenu={(event) => openContextMenu(event, {kind: "panel", panel: "timeline"})}>{ui.layers} / {ui.animation}</div>
             <div className="panel-actions">
               <button title={ui.addLayer} disabled={isPlaying} onClick={() => mutateDocument("Add Layer", () => { const layer = addLayer(pixelDocument, nextLayerName(pixelDocument, ui.layerBaseName)); if (!layer) return false; setTabCommandScope(activeTab, "layer"); return true; })}><Plus size={15} /></button>
               <button title={ui.addGroup} disabled={isPlaying} onClick={() => mutateDocument("Add Layer Group", () => { const group = addLayerGroup(pixelDocument, nextGroupName(pixelDocument, ui.groupBaseName)); if (!group) return false; setTabCommandScope(activeTab, "layer"); return true; })}><FolderPlus size={15} /></button>
               <button title={language === "zh" ? "新建图块地图图层" : "New tilemap layer"} disabled={isPlaying} onClick={createTilemapLayer}><Grid2X2 size={14} /></button>
-              <button title={language === "zh" ? "将当前图层转换为图块地图" : "Convert current layer to tilemap"} disabled={isPlaying || !isImageLayer(activeLayer)} onClick={convertActiveLayerToTiles}><Replace size={14} /></button>
               <button title={selectedLayerRoots.length > 1 ? (language === "zh" ? "复制所选图层" : "Duplicate selected layers") : ui.duplicateLayer} disabled={isPlaying} onClick={duplicateSelectedLayers}><Copy size={14} /></button>
-              <button title={ui.moveLayerUp} disabled={isPlaying || !canMoveSelectedLayersUp} onClick={() => moveSelectedLayers("up")}><ChevronUp size={15} /></button>
-              <button title={ui.moveLayerDown} disabled={isPlaying || !canMoveSelectedLayersDown} onClick={() => moveSelectedLayers("down")}><ChevronDown size={15} /></button>
-              <button title={selectedLayers.length > 1 ? (language === "zh" ? "合并所选图层" : "Merge selected layers") : ui.mergeLayerDown} disabled={isPlaying || (selectedLayers.length > 1 ? !canMergeSelectedLayers : !canMergeDown)} onClick={() => selectedLayers.length > 1 ? mergeSelectedLayers() : mutateDocument("Merge Layer Down", () => { const changed = mergeLayerDown(pixelDocument); if (changed) { activeTab.selectedLayerIds = [pixelDocument.activeLayerId]; setTabCommandScope(activeTab, "layer"); } return changed; })}><Merge size={14} /></button>
-              <button title={language === "zh" ? "拼合可见图层" : "Flatten visible layers"} disabled={isPlaying || pixelDocument.layers.filter((layer) => layer.role !== "reference").length < 2} onClick={flattenDocumentLayers}><Layers size={14} /></button>
             </div>
             <span className="timeline-toolbar-separator" />
             <label className="timeline-select"><span>{ui.blendMode}</span><select disabled={isPlaying} value={activeLayer.blendMode} onChange={(event) => mutateSelectedLayers("Change Blend Mode", (layerId) => setLayerBlendMode(pixelDocument, layerId, event.target.value as BlendMode))}>
@@ -6537,38 +8893,38 @@ function App() {
               <button title={ui.newEmptyFrame} disabled={isPlaying} onClick={() => dispatchCommandShortcut("newEmptyFrame")}><FilePlus size={14} /></button>
               <button title={ui.duplicateFrame} disabled={isPlaying} onClick={() => mutateDocument("Duplicate Frame", () => { const extendLoop = shouldExtendTimelineLoopAfterInsertion(activeTab); const frames = duplicateFrames(pixelDocument, selectedFrameIds); if (frames.length === 0) return false; extendTimelineLoopAfterInsertion(activeTab, extendLoop); activeTab.selectedFrameIds = frames.map((frame) => frame.id); activeTab.frameSelectionAnchorId = frames[0].id; setTabCommandScope(activeTab, "frame"); return true; })}><Copy size={14} /></button>
               <button title={ui.deleteFrame} disabled={isPlaying || selectedFrameIds.length >= pixelDocument.frames.length} onClick={deleteCurrentFrames}><Trash2 size={14} /></button>
-              <button title={ui.moveFrameBackward} disabled={isPlaying || !canMoveFramesBackward} onClick={() => mutateDocument("Move Frame", () => { const changed = moveFrames(pixelDocument, selectedFrameIds, "backward"); if (changed) setTabCommandScope(activeTab, "frame"); return changed; })}><ChevronLeft size={14} /></button>
-              <button title={ui.moveFrameForward} disabled={isPlaying || !canMoveFramesForward} onClick={() => mutateDocument("Move Frame", () => { const changed = moveFrames(pixelDocument, selectedFrameIds, "forward"); if (changed) setTabCommandScope(activeTab, "frame"); return changed; })}><ChevronRight size={14} /></button>
-              <button title={language === "zh" ? "反转所选帧" : "Reverse selected frames"} disabled={isPlaying || selectedFrameIds.length < 2} onClick={() => mutateDocument("Reverse Frames", () => reverseFrames(pixelDocument, selectedFrameIds))}><RotateCcw size={14} /></button>
               <button title={language === "zh" ? "创建空动画格" : "Create cel"} disabled={isPlaying || !isCelLayer(activeLayer)} onClick={() => mutateDocument("Create Cels", () => { const addresses = activeTab.commandScope === "cels" && selectedCels.length ? selectedCels : [{layerId: activeLayer.id, frameId: pixelDocument.activeFrameId}]; let changed = false; for (const address of addresses) { if (getCel(pixelDocument, address.layerId, address.frameId)) continue; changed = Boolean(ensureCel(pixelDocument, address.layerId, address.frameId)) || changed; } return changed; })}><FilePlus size={14} /></button>
               <button title={ui.duplicateCels} disabled={isPlaying || (!activeCel && !selectedCels.some(({layerId, frameId}) => Boolean(getCel(pixelDocument, layerId, frameId))))} onClick={() => dispatchCommandShortcut("duplicateCels")}><Copy size={14} /></button>
-              <button title={ui.duplicateLinkedCels} disabled={isPlaying || (!activeCel && !selectedCels.some(({layerId, frameId}) => Boolean(getCel(pixelDocument, layerId, frameId))))} onClick={() => dispatchCommandShortcut("duplicateLinkedCels")}><Link2 size={14} /></button>
               <button title={language === "zh" ? "删除动画格" : "Delete cel"} disabled={isPlaying || !selectedCels.some(({layerId, frameId}) => Boolean(getCel(pixelDocument, layerId, frameId)))} onClick={() => {
                 if (preferences.alerts.deleteCel && !window.confirm(language === "zh" ? "删除所选动画格？" : "Delete the selected cels?")) return;
                 mutateDocument("Delete Cels", () => { let changed = false; for (const address of selectedCels) changed = deleteCel(pixelDocument, address.layerId, address.frameId) || changed; return changed; });
               }}><X size={14} /></button>
-              <button title={ui.linkCels} disabled={isPlaying || linkableCelGroups.length === 0 || !celGroupsEditable(linkableCelGroups)} onClick={linkCurrentCels}><Link2 size={14} /></button>
-              <button title={ui.unlinkCels} disabled={isPlaying || unlinkableCelGroups.length === 0 || !celGroupsEditable(unlinkableCelGroups)} onClick={unlinkCurrentCels}><Unlink2 size={14} /></button>
-              <button title={language === "zh" ? "动画格属性" : "Cel properties"} disabled={isPlaying || !activeCel || activeLayer.role !== "standard" || isLayerEffectivelyLocked(pixelDocument, activeLayer)} onClick={openCelProperties}><SlidersHorizontal size={14} /></button>
             </div>
             <span className="timeline-toolbar-separator" />
             <button className="icon-button timeline-play-button" title={isPlaying ? ui.pause : ui.play} onClick={togglePlayback}>{isPlaying ? <Pause size={16} /> : <Play size={16} />}</button>
             <label className="timeline-fps"><span>FPS</span><input type="number" min="1" max="120" disabled={isPlaying} value={Math.round(1000 / (pixelDocument.frames[activeFrameIndex]?.durationMs ?? 100))} onChange={(event) => { const fps = Math.min(120, Math.max(1, Number(event.target.value) || 1)); mutateDocument("Change Frame Rate", () => { const changed = setFramesDuration(pixelDocument, selectedFrameIds, 1000 / fps); if (changed) setTabCommandScope(activeTab, "frame"); return changed; }); }} /></label>
             <label className="timeline-duration"><span>{language === "zh" ? "帧时长" : "Duration"}</span><input type="range" min="10" max="2000" step="10" disabled={isPlaying} value={Math.round(pixelDocument.frames[activeFrameIndex]?.durationMs ?? 100)} onPointerDown={beginFrameDurationChange} onPointerUp={finishFrameDurationChange} onKeyDown={beginFrameDurationChange} onKeyUp={finishFrameDurationChange} onBlur={finishFrameDurationChange} onChange={(event) => { if (setFramesDuration(pixelDocument, selectedFrameIds, Number(event.target.value))) { activeTab.compositeCache.clear(); invalidate(); } }} /><output>{Math.round(pixelDocument.frames[activeFrameIndex]?.durationMs ?? 100)} ms</output></label>
             <label className="timeline-onion"><input type="checkbox" checked={onionSkin} onChange={(event) => setOnionSkin(event.target.checked)} /> {ui.onionSkin}</label>
-            <label className="timeline-fps" title={language === "zh" ? "前置帧数" : "Previous onion frames"}><span>−</span><input type="number" min="0" max="16" value={pixelDocument.settings.onionPreviousFrames} onChange={(event) => mutateDocument("Change Onion Skin", () => { pixelDocument.settings.onionPreviousFrames = Math.max(0, Math.min(16, Math.round(Number(event.target.value) || 0))); return true; })} /></label>
-            <label className="timeline-fps" title={language === "zh" ? "后置帧数" : "Next onion frames"}><span>+</span><input type="number" min="0" max="16" value={pixelDocument.settings.onionNextFrames} onChange={(event) => mutateDocument("Change Onion Skin", () => { pixelDocument.settings.onionNextFrames = Math.max(0, Math.min(16, Math.round(Number(event.target.value) || 0))); return true; })} /></label>
-            <label className="timeline-fps" title={language === "zh" ? "洋葱皮透明度" : "Onion opacity"}><span>%</span><input type="number" min="0" max="100" value={Math.round(pixelDocument.settings.onionOpacity * 100)} onChange={(event) => mutateDocument("Change Onion Skin", () => { pixelDocument.settings.onionOpacity = Math.max(0, Math.min(1, (Number(event.target.value) || 0) / 100)); return true; })} /></label>
-            <input className="timeline-color" type="color" title={language === "zh" ? "前置帧颜色" : "Previous frame color"} value={pixelDocument.settings.onionPreviousColor.slice(0, 7)} onChange={(event) => mutateDocument("Change Onion Skin", () => { pixelDocument.settings.onionPreviousColor = `${event.target.value}ff`; return true; })} />
-            <input className="timeline-color" type="color" title={language === "zh" ? "后置帧颜色" : "Next frame color"} value={pixelDocument.settings.onionNextColor.slice(0, 7)} onChange={(event) => mutateDocument("Change Onion Skin", () => { pixelDocument.settings.onionNextColor = `${event.target.value}ff`; return true; })} />
-            <button className="icon-button timeline-play-button" type="button" aria-pressed={Boolean((detachedPreviewRef.current && !detachedPreviewRef.current.closed) || previewOpen)} title={language === "zh" ? "独立动画预览" : "Detached preview"} onClick={toggleDetachedPreview}><Eye size={15} /></button>
+            <details className="timeline-advanced-settings">
+              <summary title={language === "zh" ? "动画高级设置" : "Advanced animation settings"} aria-label={language === "zh" ? "动画高级设置" : "Advanced animation settings"}><SlidersHorizontal size={14} /></summary>
+              <div className="timeline-advanced-popover">
+                <label className="timeline-fps" title={language === "zh" ? "前置帧数" : "Previous onion frames"}><span>−</span><input type="number" min="0" max="16" value={pixelDocument.settings.onionPreviousFrames} onChange={(event) => mutateDocument("Change Onion Skin", () => { pixelDocument.settings.onionPreviousFrames = Math.max(0, Math.min(16, Math.round(Number(event.target.value) || 0))); return true; })} /></label>
+                <label className="timeline-fps" title={language === "zh" ? "后置帧数" : "Next onion frames"}><span>+</span><input type="number" min="0" max="16" value={pixelDocument.settings.onionNextFrames} onChange={(event) => mutateDocument("Change Onion Skin", () => { pixelDocument.settings.onionNextFrames = Math.max(0, Math.min(16, Math.round(Number(event.target.value) || 0))); return true; })} /></label>
+                <label className="timeline-fps" title={language === "zh" ? "洋葱皮透明度" : "Onion opacity"}><span>%</span><input type="number" min="0" max="100" value={Math.round(pixelDocument.settings.onionOpacity * 100)} onChange={(event) => mutateDocument("Change Onion Skin", () => { pixelDocument.settings.onionOpacity = Math.max(0, Math.min(1, (Number(event.target.value) || 0) / 100)); return true; })} /></label>
+                <label className="timeline-advanced-color"><span>{language === "zh" ? "前帧" : "Previous"}</span><input className="timeline-color" type="color" value={pixelDocument.settings.onionPreviousColor.slice(0, 7)} onChange={(event) => mutateDocument("Change Onion Skin", () => { pixelDocument.settings.onionPreviousColor = `${event.target.value}ff`; return true; })} /></label>
+                <label className="timeline-advanced-color"><span>{language === "zh" ? "后帧" : "Next"}</span><input className="timeline-color" type="color" value={pixelDocument.settings.onionNextColor.slice(0, 7)} onChange={(event) => mutateDocument("Change Onion Skin", () => { pixelDocument.settings.onionNextColor = `${event.target.value}ff`; return true; })} /></label>
+                <button className="panel-command" type="button" aria-pressed={Boolean((detachedPreviewRef.current && !detachedPreviewRef.current.closed) || previewOpen)} onClick={toggleDetachedPreview}><Eye size={14} />{language === "zh" ? "独立动画预览" : "Detached preview"}</button>
+              </div>
+            </details>
             <span className="timeline-toolbar-separator" />
-            <label className="timeline-select timeline-tags"><span>{ui.tags}</span><select value={activeTag?.id ?? ""} onChange={(event) => selectTag(event.target.value)}><option value="">{ui.noTag}</option>{pixelDocument.tags.map((tag) => <option key={tag.id} value={tag.id}>{tag.name}</option>)}</select></label>
+            <label className="timeline-select timeline-tags" onContextMenu={(event) => {
+              if (activeTag) openContextMenu(event, {kind: "tag", tagId: activeTag.id});
+            }}><span>{ui.tags}</span><select value={activeTag?.id ?? ""} onChange={(event) => selectTag(event.target.value)} onKeyDown={(event) => {
+              if (activeTag) openKeyboardContextMenu(event, {kind: "tag", tagId: activeTag.id});
+            }}><option value="">{ui.noTag}</option>{pixelDocument.tags.map((tag) => <option key={tag.id} value={tag.id}>{tag.name}</option>)}</select></label>
             <div className="panel-actions">
               <button className={activeTag ? "is-active" : ""} title={ui.focusTag} aria-label={ui.focusTag} aria-pressed={Boolean(activeTag)} disabled={isPlaying || !focusableTagId} onClick={() => dispatchCommandShortcut("focusTag")}><Target size={14} /></button>
               <button title={ui.addTag} disabled={isPlaying} onClick={openNewTagDialog}><Plus size={14} /></button>
-              <button title={ui.editTag} disabled={isPlaying || !activeTag} onClick={openEditTagDialog}><Pencil size={13} /></button>
-              <button title={ui.deleteTag} disabled={isPlaying || !activeTag} onClick={removeActiveTag}><Trash2 size={13} /></button>
             </div>
             <label className="timeline-loop"><span>{ui.loop}</span><select aria-label={ui.loopStart} value={activeTab.loopStartFrameId} onChange={(event) => { activeTab.loopStartFrameId = event.target.value; activeTab.activeTagId = undefined; setUIRevision((value) => value + 1); }}>{pixelDocument.frames.map((frame, index) => <option key={frame.id} value={frame.id}>{index + preferences.timeline.firstFrame}</option>)}</select><span>{ui.to}</span><select aria-label={ui.loopEnd} value={activeTab.loopEndFrameId} onChange={(event) => { activeTab.loopEndFrameId = event.target.value; activeTab.activeTagId = undefined; setUIRevision((value) => value + 1); }}>{pixelDocument.frames.map((frame, index) => <option key={frame.id} value={frame.id}>{index + preferences.timeline.firstFrame}</option>)}</select></label>
           </div>
@@ -6594,8 +8950,17 @@ function App() {
                   return;
                 }
                 selectLayer(layer.id, event.shiftKey, false);
+              }} onContextMenu={(event) => {
+                if (!selectedLayerIdSet.has(layer.id)) selectLayer(layer.id, false, false);
+                else {
+                  pixelDocument.activeLayerId = layer.id;
+                  setTabCommandScope(activeTab, "layer");
+                  invalidate();
+                }
+                openContextMenu(event, {kind: "layer", layerId: layer.id});
               }} onKeyDown={(event) => {
                 if (event.target !== event.currentTarget) return;
+                if (openKeyboardContextMenu(event, {kind: "layer", layerId: layer.id})) return;
                 if (isActivationKey(event.key)) {
                   event.preventDefault();
                   event.currentTarget.click();
@@ -6652,9 +9017,30 @@ function App() {
                   const nextActiveFrameId = selectFrame(frame.id, event.shiftKey, event.ctrlKey || event.metaKey);
                   if (nextActiveFrameId) focusTimelineFrame(grid, nextActiveFrameId);
                 }}
-                onKeyDown={(event) => navigateTimelineFrame(event, frame.id)}
+                onContextMenu={(event) => {
+                  if (!selectedFrameIds.includes(frame.id)) selectFrame(frame.id, false, false);
+                  else {
+                    pixelDocument.activeFrameId = frame.id;
+                    setTabCommandScope(activeTab, "frame");
+                    invalidate();
+                  }
+                  openContextMenu(event, {kind: "frame", frameId: frame.id});
+                }}
+                onKeyDown={(event) => {
+                  if (openKeyboardContextMenu(event, {kind: "frame", frameId: frame.id})) return;
+                  navigateTimelineFrame(event, frame.id);
+                }}
               >{tag && <span className="timeline-tag-mark" style={{backgroundColor: tag.color}} />}{index + preferences.timeline.firstFrame}</button>;
-            })}<div className="timeline-frame-append-header" role="columnheader" aria-colindex={pixelDocument.frames.length + 1} aria-label={language === "zh" ? "时间轴末尾" : "Timeline end"}><Plus size={12} /></div></div>
+            })}<button
+              className="timeline-frame-append-header"
+              type="button"
+              role="columnheader"
+              aria-colindex={pixelDocument.frames.length + 1}
+              aria-label={language === "zh" ? "在时间轴末尾追加空帧" : "Append empty frame at timeline end"}
+              title={language === "zh" ? "在时间轴末尾追加空帧" : "Append empty frame at timeline end"}
+              disabled={isPlaying}
+              onClick={() => appendTimelineFrame()}
+            ><Plus size={12} /></button></div>
             {timelineEntries.map(({layer}, rowIndex) => <div className={`timeline-cel-row${layer.kind === "group" ? " is-group" : ""}`} key={layer.id} role="row" aria-rowindex={rowIndex + 2} style={{gridTemplateColumns: `repeat(${pixelDocument.frames.length + 1}, 42px)`}}>{pixelDocument.frames.map((frame, index) => {
               const cel = getCel(pixelDocument, layer.id, frame.id);
               if (layer.kind === "group") return <div key={frame.id} className="timeline-cel is-group-cell" role="gridcell" aria-colindex={index + 1} />;
@@ -6684,7 +9070,20 @@ function App() {
                   const nextActive = selectCel(layer.id, frame.id, event.shiftKey, event.ctrlKey || event.metaKey);
                   if (nextActive) focusTimelineCel(grid, nextActive);
                 }}
-                onKeyDown={(event) => navigateTimelineCel(event, layer.id, frame.id)}
+                onContextMenu={(event) => {
+                  if (!selectedCelKeySet.has(key)) selectCel(layer.id, frame.id, false, false);
+                  else {
+                    pixelDocument.activeLayerId = layer.id;
+                    pixelDocument.activeFrameId = frame.id;
+                    setTabCommandScope(activeTab, "cels");
+                    invalidate();
+                  }
+                  openContextMenu(event, {kind: "cel", layerId: layer.id, frameId: frame.id});
+                }}
+                onKeyDown={(event) => {
+                  if (openKeyboardContextMenu(event, {kind: "cel", layerId: layer.id, frameId: frame.id})) return;
+                  navigateTimelineCel(event, layer.id, frame.id);
+                }}
               >{linked ? <Link2 size={11} /> : <span />}</button>;
             })}{layer.kind === "group"
               ? <div key="append" className="timeline-cel is-group-cell" role="gridcell" aria-colindex={pixelDocument.frames.length + 1} />
@@ -6694,8 +9093,10 @@ function App() {
                 type="button"
                 role="gridcell"
                 aria-colindex={pixelDocument.frames.length + 1}
-                aria-label={language === "zh" ? `${layer.name}，拖放到末尾以追加帧` : `${layer.name}, drop here to append frames`}
-                title={language === "zh" ? "拖放到此处以在末尾追加帧" : "Drop here to append frames"}
+                aria-label={language === "zh" ? `${layer.name}，追加帧并创建动画格` : `${layer.name}, append frame and create cel`}
+                title={language === "zh" ? "点击追加帧并创建动画格；也可拖放到此处追加" : "Click to append a frame and create a cel; drop here to append"}
+                disabled={isPlaying}
+                onClick={() => appendTimelineFrame(layer.id)}
                 onDragOver={handleTimelineCelDragOver}
                 onDrop={(event) => finishTimelineCelDrag(event, layer.id, undefined, pixelDocument.frames.length)}
               ><Plus size={12} /></button>}

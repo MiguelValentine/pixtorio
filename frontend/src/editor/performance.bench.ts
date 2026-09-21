@@ -15,6 +15,8 @@ import {
   type RGBA,
   type ToolContext,
 } from "./tools";
+import {createTerrainMapData, recalculateTerrainCells, type TerrainDefinition} from "./terrain";
+import {createTileset, tilesetGridLayout} from "./tilemap";
 
 const BENCHMARK_RUN_OPTIONS = {
   iterations: 8,
@@ -120,6 +122,102 @@ test("layered compositing workload", async ({bench}) => {
     },
   ).run(BENCHMARK_RUN_OPTIONS);
 });
+
+test("Terrain recalculation workloads", async ({bench}) => {
+  const orthogonalTileset = createTileset({tileWidth: 16, tileHeight: 16});
+  orthogonalTileset.terrains = [benchmarkTerrain("edge4", 0x0f)];
+  const orthogonalMap = createTerrainMapData(256, 256, 17);
+  orthogonalMap.terrains.fill(1);
+  const orthogonalTiles = new Uint32Array(orthogonalMap.terrains.length);
+  const allOrthogonalCells = Array.from({length: orthogonalMap.terrains.length}, (_, index) => ({
+    column: index % orthogonalMap.columns,
+    row: Math.floor(index / orthogonalMap.columns),
+  }));
+  await bench("full orthogonal Terrain rebuild at 256x256", () => {
+    recalculateTerrainCells(
+      orthogonalMap,
+      orthogonalTileset.terrains,
+      tilesetGridLayout(orthogonalTileset, orthogonalMap.columns, orthogonalMap.rows),
+      orthogonalTiles,
+      allOrthogonalCells,
+    );
+    benchmarkSink ^= orthogonalTiles[orthogonalTiles.length - 1] ?? 0;
+  }).run(BENCHMARK_RUN_OPTIONS);
+
+  const isometricTileset = createTileset({
+    tileWidth: 16,
+    tileHeight: 24,
+    grid: {kind: "isometric", cellWidth: 16, cellHeight: 8, anchorX: 8, anchorY: 24},
+  });
+  isometricTileset.terrains = [benchmarkTerrain("edge4", 0x0f)];
+  const isometricMap = createTerrainMapData(256, 256, 19);
+  isometricMap.terrains.fill(1);
+  const isometricTiles = new Uint32Array(isometricMap.terrains.length);
+  const allIsometricCells = Array.from({length: isometricMap.terrains.length}, (_, index) => ({
+    column: index % isometricMap.columns,
+    row: Math.floor(index / isometricMap.columns),
+  }));
+  await bench("full high-isometric Terrain rebuild at 256x256", () => {
+    recalculateTerrainCells(
+      isometricMap,
+      isometricTileset.terrains,
+      tilesetGridLayout(isometricTileset, isometricMap.columns, isometricMap.rows),
+      isometricTiles,
+      allIsometricCells,
+    );
+    benchmarkSink ^= isometricTiles[isometricTiles.length - 1] ?? 0;
+  }).run(BENCHMARK_RUN_OPTIONS);
+
+  const hexTileset = createTileset({
+    tileWidth: 16,
+    tileHeight: 16,
+    grid: {kind: "hexagonal", orientation: "pointy", offset: "odd-r"},
+  });
+  hexTileset.terrains = [benchmarkTerrain("edge6", 0x3f)];
+  const hexMap = createTerrainMapData(512, 512, 23);
+  hexMap.terrains.fill(1);
+  const hexTiles = new Uint32Array(hexMap.terrains.length);
+  const allHexCells = Array.from({length: hexMap.terrains.length}, (_, index) => ({
+    column: index % hexMap.columns,
+    row: Math.floor(index / hexMap.columns),
+  }));
+  await bench("full pointy-hex Terrain rebuild at 512x512", () => {
+    recalculateTerrainCells(
+      hexMap,
+      hexTileset.terrains,
+      tilesetGridLayout(hexTileset, hexMap.columns, hexMap.rows),
+      hexTiles,
+      allHexCells,
+    );
+    benchmarkSink ^= hexTiles[hexTiles.length - 1] ?? 0;
+  }).run(BENCHMARK_RUN_OPTIONS);
+
+  const center = [{column: 256, row: 256}];
+  await bench("local pointy-hex Terrain rebuild at 512x512", () => {
+    recalculateTerrainCells(
+      hexMap,
+      hexTileset.terrains,
+      tilesetGridLayout(hexTileset, hexMap.columns, hexMap.rows),
+      hexTiles,
+      center,
+    );
+    benchmarkSink ^= hexTiles[256 * hexMap.columns + 256] ?? 0;
+  }).run(BENCHMARK_RUN_OPTIONS);
+});
+
+function benchmarkTerrain(neighborMode: TerrainDefinition["neighborMode"], maximumMask: number): TerrainDefinition {
+  return {
+    id: 1,
+    name: "Benchmark",
+    color: "#ffffffff",
+    neighborMode,
+    boundary: "same",
+    rules: Array.from({length: maximumMask + 1}, (_, mask) => ({
+      mask,
+      candidates: [{tileId: 1, flags: 0, weight: 1}],
+    })),
+  };
+}
 
 function createStrokePath(width: number, height: number, pointCount: number): Point[] {
   const points: Point[] = [];
