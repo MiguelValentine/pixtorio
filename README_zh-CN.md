@@ -15,7 +15,7 @@
   <a href="README.md">English</a>
 </p>
 
-![Pixtorio 浅色界面预览](artifacts/final-light.png)
+![Pixtorio 图块地图与地形编辑界面](artifacts/final-light.png)
 
 Pixtorio 是一个受 Aseprite 工作流启发的像素画与帧动画编辑器。桌面端使用 Wails 和 Go，编辑器界面使用 React、TypeScript、Vite 与 Canvas 2D 渲染；同一前端也可在浏览器中运行，完成本地导入和导出。
 

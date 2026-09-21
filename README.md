@@ -15,7 +15,7 @@
   <a href="README_zh-CN.md">简体中文</a>
 </p>
 
-![Pixtorio light interface preview](artifacts/final-light.png)
+![Pixtorio tilemap and Terrain editing interface](artifacts/final-light.png)
 
 Pixtorio is a pixel-art and frame-animation editor inspired by the Aseprite workflow. Its desktop shell is built with Wails and Go; the editor uses React, TypeScript, Vite, and Canvas 2D. The same frontend can also run in a browser for local import and export workflows.
 
