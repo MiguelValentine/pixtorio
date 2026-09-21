@@ -1124,7 +1124,7 @@ export function PixelCanvas({
     if (cropPreview) {
       context.save();
       context.setLineDash([5, 3]);
-      context.strokeStyle = "#ff6b6b";
+      context.strokeStyle = "#83c4d6";
       context.lineWidth = 1;
       context.strokeRect(
         Math.round(viewport.x + cropPreview.x * zoom) + 0.5,
@@ -1230,7 +1230,7 @@ export function PixelCanvas({
       const bounds = slicePreview.bounds;
       context.save();
       context.setLineDash([5, 3]);
-      context.strokeStyle = lightTheme ? "#b43f48" : "#ff8585";
+      context.strokeStyle = lightTheme ? "#2f7285" : "#a9d9e7";
       context.lineWidth = 2;
       context.strokeRect(
         Math.round(viewport.x + bounds.x * zoom) + 0.5,
@@ -1279,7 +1279,7 @@ export function PixelCanvas({
         context.lineTo(viewport.x + quad.se.x * zoom, viewport.y + quad.se.y * zoom);
         context.lineTo(viewport.x + quad.sw.x * zoom, viewport.y + quad.sw.y * zoom);
         context.closePath();
-        context.strokeStyle = lightTheme ? "#b63d3d" : "#ff8585";
+        context.strokeStyle = lightTheme ? "#2f7285" : "#a9d9e7";
         context.stroke();
         const rotate = rotationHandle(quad, viewport, zoom);
         context.beginPath();
@@ -1294,7 +1294,7 @@ export function PixelCanvas({
         for (const {x, y} of transformHandles(quad, viewport, zoom)) {
           const left = Math.round(x - transformHandleSize / 2) + 0.5;
           const top = Math.round(y - transformHandleSize / 2) + 0.5;
-          context.fillStyle = lightTheme ? "#df5c5c" : "#ff8585";
+          context.fillStyle = lightTheme ? "#3e8ea5" : "#a9d9e7";
           context.fillRect(left, top, transformHandleSize, transformHandleSize);
           context.strokeStyle = lightTheme ? "#ffffff" : "#25262a";
           context.strokeRect(left, top, transformHandleSize, transformHandleSize);

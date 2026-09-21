@@ -1,6 +1,8 @@
 import {useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type DragEvent as ReactDragEvent, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type ReactNode} from "react";
 import {GIFEncoder, applyPalette, quantize} from "gifenc";
 import {createPortal, flushSync} from "react-dom";
+import {useModalFocus} from "./useModalFocus";
+import {useMenuKeyboardNavigation} from "./useMenuKeyboardNavigation";
 import {
   Blend,
   Check,
@@ -1585,6 +1587,13 @@ function storedNumber(key: string, fallback: number, minimum: number, maximum: n
   return Number.isFinite(value) ? Math.max(minimum, Math.min(maximum, value)) : fallback;
 }
 
+export function normalizePanelDimensionInput(rawValue: string, currentValue: number, minimum: number, maximum: number) {
+  if (rawValue.trim() === "") return currentValue;
+  const value = Number(rawValue);
+  if (!Number.isFinite(value)) return currentValue;
+  return Math.max(minimum, Math.min(maximum, Math.round(value)));
+}
+
 export function calculatePanelResizeValue(startValue: number, startClient: number, currentClient: number, uiScalePercent: number, minimum: number, maximum: number) {
   const uiScale = Math.max(0.01, uiScalePercent / 100);
   const delta = (startClient - currentClient) / uiScale;
@@ -1675,6 +1684,7 @@ function createBlankDocument(language: Language, width = 64, height = 64, colorM
 }
 
 function App() {
+  const appShellRef = useRef<HTMLDivElement>(null);
   const [preferences, setPreferences] = useState<AppPreferences>(() => readPreferences(localStorage));
   const initialLanguageRef = useRef<Language>(preferences.general.language);
   const tabsRef = useRef<EditorTab[] | null>(null);
@@ -1730,6 +1740,7 @@ function App() {
   const spriteMenuRef = useRef<HTMLDivElement | null>(null);
   const viewMenuRef = useRef<HTMLDivElement | null>(null);
   const paletteMenuRef = useRef<HTMLDivElement | null>(null);
+  const paletteMenuPopoverRef = useRef<HTMLDivElement | null>(null);
   const menuLayerRef = useRef<HTMLDivElement | null>(null);
   const fileMenuPopoverRef = useRef<HTMLDivElement | null>(null);
   const editMenuPopoverRef = useRef<HTMLDivElement | null>(null);
@@ -2044,7 +2055,9 @@ function App() {
   const [spriteImportDialog, setSpriteImportDialog] = useState<SpriteImportDialogState | null>(null);
   const [previewOpen, setPreviewOpen] = useState(false);
   const [inspectorWidth, setInspectorWidth] = useState(() => storedNumber("pixtorio-inspector-width", 228, 190, 420));
+  const [inspectorWidthDraft, setInspectorWidthDraft] = useState(() => String(storedNumber("pixtorio-inspector-width", 228, 190, 420)));
   const [timelineHeight, setTimelineHeight] = useState(() => storedNumber("pixtorio-timeline-height", 254, 150, 520));
+  const [timelineHeightDraft, setTimelineHeightDraft] = useState(() => String(storedNumber("pixtorio-timeline-height", 254, 150, 520)));
   const [timelineLayersBottomPadding, setTimelineLayersBottomPadding] = useState(0);
   const [workspaceLayouts, setWorkspaceLayouts] = useState(() => readWorkspaceLayouts(localStorage));
   const [workspaceLayoutName, setWorkspaceLayoutName] = useState("");
@@ -2142,21 +2155,36 @@ function App() {
     setCommandShortcutAssignments((current) => Object.fromEntries(Object.entries(current).map(([command, shortcut]) => [command, defaultKeys.has(normalizeShortcut(shortcut)) ? "" : shortcut])) as Record<CommandShortcutID, string>);
   }, []);
 
+  const panelResizeCleanupRef = useRef<(() => void) | null>(null);
+  useEffect(() => () => panelResizeCleanupRef.current?.(), []);
   const beginPanelResize = useCallback((kind: "inspector" | "timeline", event: ReactPointerEvent<HTMLElement>) => {
+    if (event.button !== 0 || !event.isPrimary || panelResizeCleanupRef.current) return;
     event.preventDefault();
+    event.currentTarget.focus({preventScroll: true});
+    const pointerId = event.pointerId;
     const startClient = kind === "inspector" ? event.clientX : event.clientY;
     const startValue = kind === "inspector" ? inspectorWidth : timelineHeight;
     const onMove = (moveEvent: PointerEvent) => {
+      if (moveEvent.pointerId !== pointerId) return;
       const currentClient = kind === "inspector" ? moveEvent.clientX : moveEvent.clientY;
       if (kind === "inspector") setInspectorWidth(calculatePanelResizeValue(startValue, startClient, currentClient, preferences.general.uiScale, 190, 420));
       else setTimelineHeight(calculatePanelResizeValue(startValue, startClient, currentClient, preferences.general.uiScale, 150, 520));
     };
-    const onUp = () => {
+    const cleanup = () => {
       window.removeEventListener("pointermove", onMove);
       window.removeEventListener("pointerup", onUp);
+      window.removeEventListener("pointercancel", onUp);
+      window.removeEventListener("blur", cleanup);
+      panelResizeCleanupRef.current = null;
     };
+    const onUp = (endEvent: PointerEvent) => {
+      if (endEvent.pointerId === pointerId) cleanup();
+    };
+    panelResizeCleanupRef.current = cleanup;
     window.addEventListener("pointermove", onMove);
-    window.addEventListener("pointerup", onUp, {once: true});
+    window.addEventListener("pointerup", onUp);
+    window.addEventListener("pointercancel", onUp);
+    window.addEventListener("blur", cleanup);
   }, [inspectorWidth, preferences.general.uiScale, timelineHeight]);
   const [celRotationDraft, setCelRotationDraft] = useState(0);
   const [celPropertiesDialog, setCelPropertiesDialog] = useState<{addresses: Array<{layerId: string; frameId: string}>; opacity: string; zIndex: string} | null>(null);
@@ -2712,6 +2740,8 @@ function App() {
   useEffect(() => {
     setRecentProjects((projects) => projects.length <= preferences.files.recentItems ? projects : projects.slice(0, preferences.files.recentItems));
   }, [preferences.files.recentItems]);
+  useEffect(() => { setInspectorWidthDraft(String(inspectorWidth)); }, [inspectorWidth]);
+  useEffect(() => { setTimelineHeightDraft(String(timelineHeight)); }, [timelineHeight]);
   useEffect(() => { localStorage.setItem("pixtorio-inspector-width", String(inspectorWidth)); }, [inspectorWidth]);
   useEffect(() => { localStorage.setItem("pixtorio-timeline-height", String(timelineHeight)); }, [timelineHeight]);
   useEffect(() => {
@@ -7261,10 +7291,11 @@ function App() {
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.defaultPrevented || event.isComposing) return;
       const key = event.key.toLowerCase();
-      if (key === "escape" && canvasOnly) {
+      if (key === "escape" && celPropertiesDialog) {
         event.preventDefault();
-        setCanvasOnly(false);
+        setCelPropertiesDialog(null);
         return;
       }
       if (key === "escape" && canvasDialog) {
@@ -7356,6 +7387,11 @@ function App() {
         return;
       }
       if (celPropertiesDialog || canvasDialog || layerPropertiesDialog || slicePropertiesDialog || tagDialog || crossDocumentCopyDialog || exportDialog || adjustmentDialog || spriteImportDialog || settingsOpen || historyOpen || colorProfileDialog || isViewMenuOpen) return;
+      if (key === "escape" && canvasOnly) {
+        event.preventDefault();
+        setCanvasOnly(false);
+        return;
+      }
       const command = commandForShortcutEvent(event, commandShortcutAssignments);
       const editableTarget = isEditableTarget(event.target);
       if (command && editableTarget) return;
@@ -7533,6 +7569,48 @@ function App() {
     menuRef: imageEffectsMenuRef,
     uiScalePercent: preferences.general.uiScale,
     kind: "submenu",
+  });
+  useMenuKeyboardNavigation({
+    open: isFileMenuOpen, menuRef: fileMenuPopoverRef, triggerRef: fileMenuRef,
+    onClose: () => { setIsFileMenuOpen(false); setIsRecentProjectsMenuOpen(false); },
+    onOpen: () => { setIsFileMenuOpen(true); setIsEditMenuOpen(false); setIsSpriteMenuOpen(false); setIsViewMenuOpen(false); },
+  });
+  useMenuKeyboardNavigation({
+    open: isEditMenuOpen, menuRef: editMenuPopoverRef, triggerRef: editMenuRef,
+    onClose: () => { setIsEditMenuOpen(false); setIsPasteSpecialMenuOpen(false); setIsShiftPixelsMenuOpen(false); },
+    onOpen: () => { setIsEditMenuOpen(true); setIsFileMenuOpen(false); setIsSpriteMenuOpen(false); setIsViewMenuOpen(false); },
+  });
+  useMenuKeyboardNavigation({
+    open: isSpriteMenuOpen, menuRef: spriteMenuPopoverRef, triggerRef: spriteMenuRef,
+    onClose: () => { setIsSpriteMenuOpen(false); setIsImageEffectsMenuOpen(false); },
+    onOpen: () => { setIsSpriteMenuOpen(true); setIsFileMenuOpen(false); setIsEditMenuOpen(false); setIsViewMenuOpen(false); },
+  });
+  useMenuKeyboardNavigation({
+    open: isViewMenuOpen, menuRef: viewMenuPopoverRef, triggerRef: viewMenuRef,
+    onClose: () => setIsViewMenuOpen(false),
+    onOpen: () => { setIsViewMenuOpen(true); setIsFileMenuOpen(false); setIsEditMenuOpen(false); setIsSpriteMenuOpen(false); },
+  });
+  useMenuKeyboardNavigation({
+    open: isFileMenuOpen && isRecentProjectsMenuOpen, menuRef: recentProjectsMenuRef, triggerRef: recentProjectsAnchorRef,
+    onClose: () => setIsRecentProjectsMenuOpen(false), onOpen: () => setIsRecentProjectsMenuOpen(true), submenu: true,
+  });
+  useMenuKeyboardNavigation({
+    open: isEditMenuOpen && isPasteSpecialMenuOpen, menuRef: pasteSpecialMenuRef, triggerRef: pasteSpecialAnchorRef,
+    onClose: () => setIsPasteSpecialMenuOpen(false),
+    onOpen: () => { setIsPasteSpecialMenuOpen(true); setIsShiftPixelsMenuOpen(false); }, submenu: true,
+  });
+  useMenuKeyboardNavigation({
+    open: isEditMenuOpen && isShiftPixelsMenuOpen, menuRef: shiftPixelsMenuRef, triggerRef: shiftPixelsAnchorRef,
+    onClose: () => setIsShiftPixelsMenuOpen(false),
+    onOpen: () => { setIsShiftPixelsMenuOpen(true); setIsPasteSpecialMenuOpen(false); }, submenu: true,
+  });
+  useMenuKeyboardNavigation({
+    open: isSpriteMenuOpen && isImageEffectsMenuOpen, menuRef: imageEffectsMenuRef, triggerRef: imageEffectsAnchorRef,
+    onClose: () => setIsImageEffectsMenuOpen(false), onOpen: () => setIsImageEffectsMenuOpen(true), submenu: true,
+  });
+  useMenuKeyboardNavigation({
+    open: isPaletteMenuOpen, menuRef: paletteMenuPopoverRef, triggerRef: paletteMenuRef,
+    onClose: () => setIsPaletteMenuOpen(false), onOpen: () => setIsPaletteMenuOpen(true),
   });
   const runContextAction = (action: () => void) => {
     setContextMenu(null);
@@ -7732,8 +7810,30 @@ function App() {
     </>;
   };
 
+  const modalKey = colorProfileDialog ? "color-profile" : canvasDialog ? "canvas"
+    : crossDocumentCopyDialog ? "cross-document" : exportDialog ? "export"
+    : spriteImportDialog ? "sprite-import" : adjustmentDialog ? "adjustment"
+    : tagDialog ? "tag" : celPropertiesDialog ? "cel" : layerPropertiesDialog ? "layer"
+    : slicePropertiesDialog ? "slice" : settingsOpen ? "settings" : historyOpen && hasOpenDocument ? "history" : null;
+  useModalFocus(appShellRef, modalKey);
+
+  const resizePanelWithKeyboard = (kind: "inspector" | "timeline", event: ReactKeyboardEvent<HTMLDivElement>) => {
+    if (event.altKey || event.ctrlKey || event.metaKey || event.nativeEvent.isComposing) return;
+    const decreaseKey = kind === "inspector" ? "ArrowRight" : "ArrowDown";
+    const increaseKey = kind === "inspector" ? "ArrowLeft" : "ArrowUp";
+    if (!["Home", "End", decreaseKey, increaseKey].includes(event.key)) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const minimum = kind === "inspector" ? 190 : 150;
+    const maximum = kind === "inspector" ? 420 : 520;
+    const setValue = kind === "inspector" ? setInspectorWidth : setTimelineHeight;
+    setValue((value) => event.key === "Home" ? minimum : event.key === "End" ? maximum
+      : Math.max(minimum, Math.min(maximum, value + (event.key === increaseKey ? 1 : -1) * (event.shiftKey ? 10 : 1))));
+  };
+
   return (
     <div
+      ref={appShellRef}
       className={`${lightTheme ? "app-shell is-light" : "app-shell"}${preferences.general.paletteSeparators ? " has-palette-separators" : ""}${canvasOnly ? " is-canvas-only" : ""}`}
       style={{
         "--inspector-width": inspectorVisible ? `${inspectorWidth}px` : "0px",
@@ -8395,7 +8495,7 @@ function App() {
               </button>
               <button type="button" title={ui.removeColor} aria-label={ui.removeColor} disabled={isPlaying || pixelDocument.palette.colors.length <= 1 || !hasSelectedPaletteColor} onClick={removePaletteColor}><Trash2 size={13} /></button>
               <button className={isPaletteMenuOpen ? "is-open" : ""} type="button" title={language === "zh" ? "调色板菜单" : "Palette menu"} aria-label={language === "zh" ? "调色板菜单" : "Palette menu"} aria-haspopup="menu" aria-expanded={isPaletteMenuOpen} onClick={() => setIsPaletteMenuOpen((value) => !value)}><MoreHorizontal size={14} /></button>
-              {isPaletteMenuOpen && <div className="file-menu-popover palette-menu-popover" role="menu" aria-label={language === "zh" ? "调色板文件与管理" : "Palette files and management"}>
+              {isPaletteMenuOpen && <div ref={paletteMenuPopoverRef} className="file-menu-popover palette-menu-popover" role="menu" aria-label={language === "zh" ? "调色板文件与管理" : "Palette files and management"}>
                 <button type="button" role="menuitem" disabled={isPlaying} onClick={() => { setIsPaletteMenuOpen(false); extractDocumentPalette(); }}><WandSparkles size={16} />{ui.extractPalette}</button>
                 <button type="button" role="menuitem" disabled={isPlaying} onClick={() => { setIsPaletteMenuOpen(false); sortDocumentPalette(); }}><Shuffle size={16} />{ui.sortPalette}</button>
                 <button type="button" role="menuitem" onClick={() => {
@@ -8919,17 +9019,27 @@ function App() {
       {inspectorVisible && <div
         className="inspector-resizer"
         role="separator"
+        tabIndex={0}
         aria-orientation="vertical"
+        aria-valuemin={190}
+        aria-valuemax={420}
+        aria-valuenow={inspectorWidth}
         aria-label={language === "zh" ? "调整侧栏宽度" : "Resize inspector"}
         onPointerDown={(event) => beginPanelResize("inspector", event)}
+        onKeyDown={(event) => resizePanelWithKeyboard("inspector", event)}
       />}
 
       {timelineVisible && <div
         className="timeline-resizer"
         role="separator"
+        tabIndex={0}
         aria-orientation="horizontal"
+        aria-valuemin={150}
+        aria-valuemax={520}
+        aria-valuenow={timelineHeight}
         aria-label={language === "zh" ? "调整时间轴高度" : "Resize timeline"}
         onPointerDown={(event) => beginPanelResize("timeline", event)}
+        onKeyDown={(event) => resizePanelWithKeyboard("timeline", event)}
       />}
       {timelineVisible && <section className="timeline-panel" aria-label={ui.animation} onContextMenu={(event) => {
         if (event.target === event.currentTarget) openContextMenu(event, {kind: "panel", panel: "timeline"});
@@ -9225,8 +9335,8 @@ function App() {
                   <div className="preferences-section-body">
                     <div className="preferences-section-actions"><button type="button" onClick={() => { setInspectorWidth(defaultWorkspaceDimensions.inspectorWidth); setTimelineHeight(defaultWorkspaceDimensions.timelineHeight); setInspectorVisible(defaultWorkspaceVisibility.inspectorVisible); setTimelineVisible(defaultWorkspaceVisibility.timelineVisible); setCanvasOnly(false); setWorkspaceLayoutNotice("reset"); }}>{language === "zh" ? "重置布局" : "Reset layout"}</button></div>
                     <div className="preferences-general">
-                      <label className="dialog-field"><span>{language === "zh" ? "侧栏宽度" : "Inspector width"}</span><input type="number" min="190" max="420" value={inspectorWidth} onChange={(event) => setInspectorWidth(Math.max(190, Math.min(420, Math.round(Number(event.target.value) || 190))))} /></label>
-                      <label className="dialog-field"><span>{language === "zh" ? "时间轴高度" : "Timeline height"}</span><input type="number" min="150" max="520" value={timelineHeight} onChange={(event) => setTimelineHeight(Math.max(150, Math.min(520, Math.round(Number(event.target.value) || 150))))} /></label>
+                      <label className="dialog-field"><span>{language === "zh" ? "侧栏宽度" : "Inspector width"}</span><input type="number" min="190" max="420" value={inspectorWidthDraft} onChange={(event) => setInspectorWidthDraft(event.target.value)} onBlur={() => { const next = normalizePanelDimensionInput(inspectorWidthDraft, inspectorWidth, 190, 420); setInspectorWidth(next); setInspectorWidthDraft(String(next)); }} /></label>
+                      <label className="dialog-field"><span>{language === "zh" ? "时间轴高度" : "Timeline height"}</span><input type="number" min="150" max="520" value={timelineHeightDraft} onChange={(event) => setTimelineHeightDraft(event.target.value)} onBlur={() => { const next = normalizePanelDimensionInput(timelineHeightDraft, timelineHeight, 150, 520); setTimelineHeight(next); setTimelineHeightDraft(String(next)); }} /></label>
                       <label className="dialog-field dialog-field-wide"><span>{language === "zh" ? "布局名称" : "Layout name"}</span><input type="text" maxLength={64} value={workspaceLayoutName} onChange={(event) => { setWorkspaceLayoutName(event.target.value); setWorkspaceLayoutNotice(null); }} /></label>
                       <button className="panel-command workspace-layout-button" type="button" disabled={!workspaceLayoutName.trim()} onClick={() => {
                         try {
@@ -9537,7 +9647,10 @@ function App() {
             <span>×</span>
             <label>{ui.height}<input type="number" min="1" max="2048" value={canvasHeightDraft} onChange={(event) => { setCanvasHeightDraft(Number(event.target.value)); setCanvasSizeError(false); }} /></label>
           </div>
-          {canvasDialog === "new" && <><label className="new-document-color-mode">{ui.colorMode}<select value={newDocumentColorMode} onChange={(event) => setNewDocumentColorMode(event.target.value as ColorMode)}><option value="rgba">{ui.rgbaMode}</option><option value="grayscale">{ui.grayscaleMode}</option><option value="indexed">{ui.indexedMode}</option></select></label><label className="new-document-color-mode">{language === "zh" ? "背景" : "Background"}<select value={newDocumentBackground} onChange={(event) => setNewDocumentBackground(event.target.value as "transparent" | "foreground" | "background")}><option value="transparent">{language === "zh" ? "透明" : "Transparent"}</option><option value="foreground">{language === "zh" ? "前景色" : "Foreground color"}</option><option value="background">{language === "zh" ? "背景色" : "Background color"}</option></select></label></>}
+          {canvasDialog === "new" && <div className="new-document-options">
+            <label className="new-document-color-mode">{ui.colorMode}<select value={newDocumentColorMode} onChange={(event) => setNewDocumentColorMode(event.target.value as ColorMode)}><option value="rgba">{ui.rgbaMode}</option><option value="grayscale">{ui.grayscaleMode}</option><option value="indexed">{ui.indexedMode}</option></select></label>
+            <label className="new-document-color-mode">{language === "zh" ? "背景" : "Background"}<select value={newDocumentBackground} onChange={(event) => setNewDocumentBackground(event.target.value as "transparent" | "foreground" | "background")}><option value="transparent">{language === "zh" ? "透明" : "Transparent"}</option><option value="foreground">{language === "zh" ? "前景色" : "Foreground color"}</option><option value="background">{language === "zh" ? "背景色" : "Background color"}</option></select></label>
+          </div>}
           {canvasDialog === "resize" && <div className="anchor-fields">
             <label>{ui.horizontal}<select value={horizontalAnchor} onChange={(event) => setHorizontalAnchor(event.target.value as "left" | "center" | "right")}><option value="left">{ui.left}</option><option value="center">{ui.center}</option><option value="right">{ui.right}</option></select></label>
             <label>{ui.vertical}<select value={verticalAnchor} onChange={(event) => setVerticalAnchor(event.target.value as "top" | "center" | "bottom")}><option value="top">{ui.top}</option><option value="center">{ui.center}</option><option value="bottom">{ui.bottom}</option></select></label>

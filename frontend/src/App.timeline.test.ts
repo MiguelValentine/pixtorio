@@ -8,6 +8,7 @@ import {
   extendTimelineLoopAfterInsertion,
   getTimelineHorizontalScrollbarHeight,
   getTimelineScrollTopForPeer,
+  normalizePanelDimensionInput,
   normalizeTabTimeline,
   shouldExtendTimelineLoopAfterInsertion,
   syncTimelineScrollPositions,
@@ -192,5 +193,13 @@ describe("timeline scrolling and panel resizing", () => {
     expect(Number.isInteger(resized)).toBe(true);
     expect(calculatePanelResizeValue(500, 300.25, 0.5, 125, 150, 520)).toBe(520);
     expect(calculatePanelResizeValue(170, 100.25, 400.5, 150, 150, 520)).toBe(150);
+  });
+
+  it("keeps panel dimension drafts editable until they are committed", () => {
+    expect(normalizePanelDimensionInput("", 228, 190, 420)).toBe(228);
+    expect(normalizePanelDimensionInput("300", 228, 190, 420)).toBe(300);
+    expect(normalizePanelDimensionInput("3", 228, 190, 420)).toBe(190);
+    expect(normalizePanelDimensionInput("521", 254, 150, 520)).toBe(520);
+    expect(normalizePanelDimensionInput("254.5", 254, 150, 520)).toBe(255);
   });
 });
