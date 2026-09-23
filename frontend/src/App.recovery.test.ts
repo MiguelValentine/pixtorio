@@ -1,7 +1,11 @@
 import {describe, expect, it} from "vitest";
 import {createDocument} from "./editor/document";
 import {encodeProject} from "./editor/serialization";
-import {createEditorTab, decodeRecoveryPayload, encodeRecoveryPayload, isActivationKey, localizeStatus, parsePNGResponse, parsePNGSequenceResponse, parseProjectResponse, projectPathKey} from "./App";
+import {createEditorTab, projectPathKey} from "./app/editorTab";
+import {decodeRecoveryPayload, encodeRecoveryPayload} from "./app/recovery";
+import {isActivationKey} from "./keyboardTargets";
+import {localizeStatus} from "./app/localization";
+import {parsePNGResponse, parsePNGSequenceResponse, parseProjectResponse} from "./app/bridgeResponses";
 
 describe("recovery snapshots", () => {
   it("distinguishes the startup placeholder from explicit unsaved documents", () => {

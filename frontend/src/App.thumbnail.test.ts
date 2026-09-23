@@ -1,6 +1,6 @@
 import {describe, expect, it} from "vitest";
 
-import {combinePixelBounds, createEditorTab, touchAllTabThumbnails, touchTabThumbnailCels} from "./App";
+import {combinePixelBounds, createEditorTab, touchAllTabThumbnails, touchTabThumbnailCels} from "./app/editorTab";
 import {addLayer, createDocument, getCel} from "./editor/document";
 
 describe("thumbnail revisions", () => {

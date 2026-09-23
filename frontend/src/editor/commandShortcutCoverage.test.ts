@@ -1,15 +1,15 @@
 import {describe, expect, it} from "vitest";
 import appSource from "../App.tsx?raw";
+import {commandShortcutLabels} from "../app/localization";
 import {commandShortcutIDs, defaultCommandShortcuts} from "./shortcuts";
 
-const labelsSource = appSource.slice(appSource.indexOf("const commandShortcutLabels"), appSource.indexOf("interface EditorTab"));
 const dispatchSource = appSource.slice(appSource.indexOf("const dispatchCommandShortcut"), appSource.indexOf("useEffect(() =>", appSource.indexOf("const dispatchCommandShortcut")));
 
 describe("command shortcut coverage", () => {
   it("keeps every command in the bilingual labels and dispatch switch", () => {
     for (const command of commandShortcutIDs) {
-      const labelMatches = labelsSource.match(new RegExp(`\\b${command}:`, "g")) ?? [];
-      expect(labelMatches, `${command} must have English and Chinese labels`).toHaveLength(2);
+      expect(commandShortcutLabels.en[command], `${command} must have an English label`).toBeTruthy();
+      expect(commandShortcutLabels.zh[command], `${command} must have a Chinese label`).toBeTruthy();
       expect(dispatchSource, `${command} must have a dispatch case`).toContain(`case "${command}"`);
       expect(defaultCommandShortcuts, `${command} must have a default assignment`).toHaveProperty(command);
     }

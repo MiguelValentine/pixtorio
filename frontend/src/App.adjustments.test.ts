@@ -1,5 +1,5 @@
 import {describe, expect, it} from "vitest";
-import {createAdjustmentDialogState} from "./App";
+import {createAdjustmentDialogState} from "./app/adjustmentState";
 
 describe("adjustment dialog defaults", () => {
   it("enables alpha for a visible outside outline and isolates direction arrays between dialogs", () => {

@@ -1,379 +1,358 @@
-import {useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type DragEvent as ReactDragEvent, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type ReactNode} from "react";
-import {GIFEncoder, applyPalette, quantize} from "gifenc";
-import {createPortal, flushSync} from "react-dom";
-import {useModalFocus} from "./useModalFocus";
-import {useMenuKeyboardNavigation} from "./useMenuKeyboardNavigation";
 import {
-  Blend,
-  Check,
-  ChevronDown,
-  ChevronLeft,
-  ChevronRight,
-  ChevronUp,
-  Hand,
-  X,
-  BoxSelect,
-  Circle,
-  ClipboardPaste,
-  Copy,
-  Crop,
-  Diamond,
-  Droplets,
-  Download,
-  Eraser,
-  FolderOpen,
-  Grid2X2,
-  History as HistoryIcon,
-  Layers,
-  Eye,
-  EyeOff,
-  Fullscreen,
-  FileImage,
-  FileDown,
-  FilePlus,
-  FileUp,
-  FlipHorizontal2,
-  FlipVertical2,
-  FolderPlus,
-  Folder,
-  Lock,
-  Languages,
-  Link2,
-  Merge,
-  MoreHorizontal,
-  Move,
-  PanelTopOpen,
-  Minus,
-  PaintBucket,
-  Pause,
-  Pentagon,
-  Play,
-  Pencil,
-  Pipette,
-  Plus,
-  Redo2,
-  Replace,
-  RotateCcw,
-  RotateCw,
-  Save,
-  SaveAll,
-  Scissors,
-  Scaling,
-  Settings,
-  Slash,
-  SlidersHorizontal,
-  Spline,
-  SprayCan,
-  Square,
-  SquaresUnite,
-  Sun,
-  Target,
-  Type,
-  ZoomIn,
-  Slice as SliceIcon,
-  Shuffle,
-  Trash2,
-  Undo2,
-  Unlink2,
-  Unlock,
-  Waypoints,
-  WandSparkles,
-  type LucideIcon,
+Blend,
+BoxSelect,
+Check,
+ChevronDown,
+ChevronLeft,
+ChevronRight,
+ChevronUp,
+Circle,
+ClipboardPaste,
+Copy,
+Crop,
+Diamond,
+Download,
+Droplets,
+Eye,
+EyeOff,
+FileDown,
+FileImage,
+FilePlus,
+FileUp,
+FlipHorizontal2,
+FlipVertical2,
+Folder,
+FolderOpen,
+FolderPlus,
+Fullscreen,
+Grid2X2,
+History as HistoryIcon,
+Languages,
+Layers,
+Link2,
+Lock,
+Merge,
+Minus,
+MoreHorizontal,
+Move,
+PaintBucket,
+PanelTopOpen,
+Pause,
+Pencil,
+Pipette,
+Play,
+Plus,
+Redo2,
+Replace,
+RotateCcw,
+RotateCw,
+Save,
+SaveAll,
+Scaling,
+Scissors,
+Settings,
+Shuffle,
+Slash,
+SlidersHorizontal,
+Spline,
+SprayCan,
+Square,
+SquaresUnite,
+Sun,
+Target,
+Trash2,
+Undo2,
+Unlink2,
+Unlock,
+WandSparkles,
+Waypoints,
+X
 } from "lucide-react";
-import {ClearRecovery, ClipboardReadImage, ClipboardWriteImage, ImportPNG, ImportPNGSequence, LoadRecovery, OpenPixio, OpenPixioPath, OpenStartupProject, OpenTilemapData, SaveGIFWithOptions, SavePackedAtlas, SavePixio, SavePixioPath, SavePNGWithOptions, SavePNGSequence, SaveRecovery, SaveTilemapData, SetWindowCloseState} from "../wailsjs/go/main/App";
-import {ClipboardGetText, ClipboardSetText, EventsOn, WindowFullscreen, WindowIsFullscreen, WindowUnfullscreen} from "../wailsjs/runtime/runtime";
-import {useConstrainedMenuStyle} from "./menuPositioning";
-import {ClaimMCPCommand, CompleteMCPCommand, SetMCPReady} from "../wailsjs/go/main/App";
-import {handleMCPWorkspaceCommand, type MCPWorkspaceTab} from "./editor/mcpWorkspace";
-import {defaultWorkspaceDimensions, defaultWorkspaceVisibility, readWorkspaceCanvasOnly, readWorkspaceLayouts, readWorkspaceVisibility, saveWorkspaceCanvasOnly, saveWorkspaceLayout, saveWorkspaceVisibility, deleteWorkspaceLayout} from "./editor/workspaceLayouts";
-import {applyNewDocumentPreferenceDefaults, readPreferences, savePreferences, type AppPreferences} from "./editor/preferences";
-import {shouldAutoShowTimeline, timelineStructure} from "./editor/timelineVisibility";
-import {readDefaultPalette, saveDefaultPalette, resetDefaultPalette} from "./editor/defaultPalette";
-import {applyDocumentPalette, relocateTransparentIndex} from "./editor/paletteOperations";
-import {applyPixelAspectRatio, normalizePixelAspectRatio, resizePixels} from "./editor/pixelAspectRatio";
-import {CurveEditor} from "./CurveEditor";
-import {BrushPresetPanel} from "./BrushPresetPanel";
+import {useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type DragEvent as ReactDragEvent, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, type ReactNode, type PointerEvent as ReactPointerEvent} from "react";
+import {createPortal, flushSync} from "react-dom";
+import {ClaimMCPCommand, ClearRecovery, CompleteMCPCommand, ImportPNG, ImportPNGSequence, LoadRecovery, OpenPixio, OpenPixioPath, OpenStartupProject, OpenTilemapData, SaveGIFWithOptions, SavePNGSequence, SavePNGWithOptions, SavePackedAtlas, SavePixio, SavePixioPath, SaveRecovery, SaveTilemapData, SetMCPReady, SetWindowCloseState} from "../wailsjs/go/main/App";
+import {EventsOn, WindowFullscreen, WindowIsFullscreen, WindowUnfullscreen} from "../wailsjs/runtime/runtime";
+import "./App.css";
 import {BrushDynamicsPanel} from "./BrushDynamicsPanel";
+import {BrushPresetPanel} from "./BrushPresetPanel";
 import {ColorSelector} from "./ColorSelector";
 import {PreferencesPanel} from "./PreferencesPanel";
-import type {ColorSelectorMode} from "./editor/colorSelector";
-import type {BrushPresetSettings} from "./editor/brushPresets";
-import {captureSelectionBrush} from "./editor/selectionBrush";
-import {patternBrushTools, type PatternBrush, type PatternAlignment} from "./editor/tools";
-import {getToolGroup, toolGroups, type ToolGroup} from "./editor/toolGroups";
-import {identityCurvePoints} from "./editor/curveEditor";
-import type {CurvePoint} from "./editor/adjustments";
-import "./App.css";
-import {
-  addLayer,
-  addLayerGroup,
-  addTilemapLayer,
-  addFrame,
-  addEmptyFrame,
-  adjacentFrameID,
-  addFrameTag,
-  addSlice,
-  addSliceKey,
-  cloneDocument,
-  compositeFrame,
-  compositeFrameForExport,
-  compositeFrameWithOnionSkin,
-  createDocument,
-  cropDocument,
-  resizeDocument,
-  deleteFrames,
-  deleteFrameTag,
-  deleteSlice,
-  deleteSliceKey,
-  deleteLayer,
-  deleteCel,
-  duplicateDocument,
-  duplicateLayer,
-  flattenVisibleLayers,
-  duplicateFrames,
-  ensureCel,
-  frameIDsInRange,
-  getActiveCel,
-  getActiveLayer,
-  getCel,
-  getLayerByID,
-  isCelLinked,
-  isCelLayer,
-  isImageLayer,
-  isEditableImageLayer,
-  isTilemapLayer,
-  isLayerEffectivelyLocked,
-  linkCels,
-  mergeLayerDown,
-  moveLayer,
-  moveFrames,
-  reverseFrames,
-  nextCopyName,
-  nextLayerName,
-  nextGroupName,
-  nextTagName,
-  renameLayer,
-  setLayerLocked,
-  setLayerBlendMode,
-  setLayerAlphaLock,
-  setLayerContinuous,
-  setLayerRole,
-  setLayerOpacity,
-  setCelProperties,
-  setLayerVisibility,
-  setPixelAspectRatio,
-  setFramesDuration,
-  timelineLayerEntries,
-  unlinkCels,
-  updateFrameTag,
-  updateSlice,
-  updateSliceKey,
-  type BlendMode,
-  type ColorMode,
-  type PixelBounds,
-  type SliceKeyUpdate,
-  type TagDirection,
-  type PixelDocument,
-  type Tileset,
-  type TilemapData,
-  type LayerRole,
-} from "./editor/document";
-import {
-  addTileInPlace,
-  cleanupTilesetInPlace,
-  convertImageLayerToTilemap,
-  createTileset,
-  deleteTileInPlace,
-  drawTilemapPixelInPlace,
-  renderTilemapCelIntoCache,
-  setTileCellInPlace,
-  sourcePixelForTileValue,
-  tileFlipDiagonal,
-  tileFlipX,
-  tileFlipY,
-  tileValueFlags,
-  tileValueIndex,
-  tileCellsPixelBounds,
-  tileCellImageOrigin,
-  tilemapCellAtPixel,
-  tilemapPixelSize,
-  tilesetGridLayout,
-  type TilePixelSyncMode,
-} from "./editor/tilemap";
-import {cellPolygon, compareCellsForRendering, expandCellRegion, gridLineSegments, type TileCell, type TileGridLayout} from "./editor/tileGrid";
-import {
-  applyTileStamp,
-  copyTilemapSelection,
-  createTileStamp,
-  createTilemapSelection,
-  cutTilemapSelection,
-  flipTileStamp,
-  flipTilemapSelection,
-  floodFillTilemap,
-  moveTilemapSelection,
-  pasteTilemapClipboard,
-  pickTileCell,
-  rotateTileStamp,
-  rotateTilemapSelection,
-  tileLineCells,
-  tileRectangleCells,
-  type TilemapClipboard,
-  type TilemapEditResult,
-  type TilemapSelection,
-  type TileStamp,
-} from "./editor/tilemapTools";
-import {transformTilemapGrid} from "./editor/tilemapTransforms";
-import {replaceCelTerrainAuthority} from "./editor/tilemapAuthority";
-import {createTilemapSelectionPredicate} from "./editor/tilemapSelectionClip";
-import {crossesTiledBoundary, wrappedLinePoints, wrapTiledPoint} from "./editor/tiledPointer";
-import {normalizeImportedTilePixels} from "./editor/tilemapImportColors";
-import {
-  exportTilemapCsv,
-  exportTilemapJson,
-  importTilemapCsv,
-  importTilemapJson,
-} from "./editor/tilemapInterchange";
-import {importTilesetBundleIntoDocument} from "./editor/tilesetBundle";
-import {
-  createTerrainMapData,
-  createTerrainRuleTemplate,
-  normalizeBlobMask,
-  recalculateTerrainCells,
-  terrainAffectedCells,
-  terrainEmpty,
-  terrainRuleDiagnostic,
-  type TerrainBoundary,
-  type TerrainNeighborMode,
-} from "./editor/terrain";
-import {
-  createTerrainStamp,
-  flipTerrainStamp,
-  rotateTerrainStamp,
-  terrainFloodFill,
-  terrainLineCells,
-  terrainPicker,
-  terrainRectangleCells,
-  transformTerrainSelection,
-  type TerrainStamp,
-} from "./editor/terrainTools";
-import {mapTiledCellTargets, mapTiledTerrainStampTargets, mapTiledTileStampTargets} from "./editor/tilemapTiledStamp";
+import {AdjustmentDialog} from "./app/AdjustmentDialog";
+import {LayerPropertiesDialog, type LayerPropertiesDialogState, type TriStateProperty} from "./app/LayerPropertiesDialog";
+import {SlicePropertiesDialog, type SlicePropertiesDialogState} from "./app/SlicePropertiesDialog";
+import {SpriteImportDialog, type SpriteImportDialogState} from "./app/SpriteImportDialog";
+import {AdjustmentCurveChannel, AdjustmentDialogState, AdjustmentKind, adjustmentConvolutionPresets, createAdjustmentDialogState} from "./app/adjustmentState";
+import {PNGResponse, parsePNGResponse, parsePNGSequenceResponse, parseProjectResponse} from "./app/bridgeResponses";
+import {EditorDocumentStateCommand, EditorTab, TabTimelineHistoryState, captureTabTimeline, combinePixelBounds, createEditorTab, createTabID, extendTimelineLoopAfterInsertion, normalizeTabTimeline, projectPathKey, setTabCommandScope, shouldExtendTimelineLoopAfterInsertion, syncPlaybackFrameSelection, syncTabToActiveTag, touchAllTabThumbnails, touchTabThumbnailCels} from "./app/editorTab";
+import {allBlendModes, blendModeText, commandShortcutLabels, labels, layerRoleText, localizeStatus, type Language} from "./app/localization";
+import {browserGIFBlob, browserPNGBlob, chooseBrowserFile, chooseBrowserFiles, decodeBrowserPNG, downloadBlob, hasWailsAppBridge, hasWailsRuntimeBridge, readClipboardText, readPixelClipboardImage, webDecodePixio, webEncodePixio, writeClipboardText, writePixelClipboard} from "./app/platformIO";
+import {decodeRecoveryPayload, encodeRecoveryPayload} from "./app/recovery";
+import {toolDefinitionByID, tools} from "./app/toolDefinitions";
+import {useShortcuts} from "./app/useShortcuts";
+import {calculatePanelResizeValue, getTimelineHorizontalScrollbarHeight, normalizePanelDimensionInput, syncTimelineScrollPositions} from "./app/workspaceGeometry";
+import {LayerThumbnail} from "./editor/LayerThumbnail";
+import {PixelCanvas, type CanvasContextTarget, type SelectionMode} from "./editor/PixelCanvas";
+import {TerrainMaskEditor} from "./editor/TerrainMaskEditor";
 import {TerrainPreviewPanel} from "./editor/TerrainPreviewPanel";
 import {TilesetReferencesPanel} from "./editor/TilesetReferencesPanel";
-import {collectTilesetReferences} from "./editor/tilesetReferences";
-import {constrainColorToMode, convertDocumentColorMode, exportPaletteText, extractPalette, indexPixels, parsePaletteText, refreshIndexedDocument, refreshTilemapCaches, sortPalette, syncIndexedCel, type DitherMode, type PaletteFileFormat} from "./editor/colorModes";
 import {
-  alphaDisplayMaximum,
-  alphaFromDisplay,
-  alphaToDisplay,
-  clampByte,
-  clampPercent,
-  hslaToRgba,
-  parseHexColor as parseEditorHexColor,
-  rgbToHsla,
-  rgbaToHex as editorColorToHex,
-  type HSLAColor,
-  type RGBAColor,
-} from "./editor/colorEditor";
-import {findTopmostMovableCelAt, moveCels, rasterizeCelsToCanvas, transformCels, type CelTransformAddress} from "./editor/celTransform";
-import {flipDocument, resizeSpriteContent, rotateDocument, trimDocument} from "./editor/documentTransforms";
-import {assignDocumentColorProfile, convertDocumentColorProfile, type ConvertibleColorProfile} from "./editor/colorProfiles";
-import {rasterizeText, stampRasterizedText, type TextAlign, type TextHinting} from "./editor/textTool";
-import {shadePixelsInPlace, type OutlineDirection, type OutlineShape} from "./editor/effects";
-import {applyRenderedOutline, rasterizeOutlineCel, renderDocumentOutline} from "./editor/outlineDocument";
-import {
-  adjustBrightnessContrastInPlace,
-  adjustHslInPlace,
-  adjustHsvHslInPlace,
-  applyColorCurvesInPlace,
-  applyConvolutionInPlace,
-  applyMedianInPlace,
-  createCurveLut,
-  invertPixelsInPlace,
-  maskChannelsInPlace,
-  type ChannelMask,
+adjustBrightnessContrastInPlace,
+adjustHslInPlace,
+adjustHsvHslInPlace,
+applyColorCurvesInPlace,
+applyConvolutionInPlace,
+applyMedianInPlace,
+createCurveLut,
+invertPixelsInPlace,
+maskChannelsInPlace,
+type ChannelMask,
 } from "./editor/adjustments";
-import {buildSpriteSheet, exportAtlasMetadata, exportSpriteSheetMetadata, packAtlas, sliceSpriteSheet, validPNGImportDimensions, type SpriteSheetImportLayout} from "./editor/gameAssets";
-import {deleteSlices, moveSlices, resizeSliceKeys, reuseSliceColor, scaleSlices} from "./editor/sliceOperations";
-import {touchedSliceIds} from "./editor/sliceHitTesting";
-import {DocumentStateCommand, CommandHistory, defaultHistoryLimitBytes, PixelEditCommand, TerrainCellsCommand, TilemapCellsCommand} from "./editor/history";
-import {assignCommandShortcut, commandForShortcutEvent, defaultCommandShortcuts, documentOptionalCommandIDs, formatShortcutForPlatform, isUnmodifiedDeletionKey, normalizeShortcut, shortcutFromEvent, type CommandShortcutID} from "./editor/shortcuts";
-import {adjacentFocusedFrameId, focusTagIdForFrame, focusedFrameIdAtEntry, focusedFrameRange, tagContainsFrame} from "./editor/timelineFocus";
 import {deserializePixelClipboard, enqueueSerialTask, orderFrameIDs, serializePixelClipboard} from "./editor/appHelpers";
+import type {BrushPresetSettings} from "./editor/brushPresets";
 import {clearCelSelection, copyCelSelection, pasteCelSelection, type CelAddress, type CelClipboard} from "./editor/celClipboard";
-import {canCopyFramesToDocument, canCopyLayersToDocument, copyFramesToDocument, copyLayersToDocument} from "./editor/crossDocumentCopy";
-import {pasteClipboardAsNewLayer, selectionToNewLayer as applySelectionToNewLayer} from "./editor/editOperations";
-import {applyLayerProperties, existingCelsForLayers, linkedCelsForSelection, type LayerPropertyUpdate} from "./editor/layerProperties";
-import {LayerThumbnail} from "./editor/LayerThumbnail";
-import {TerrainMaskEditor} from "./editor/TerrainMaskEditor";
-import {FrameCompositeCache} from "./editor/compositingCache";
-import {PixelCanvas, type CanvasContextTarget, type SelectionMode} from "./editor/PixelCanvas";
-import {createPatch, hexToRGBA, rgbaToHex} from "./editor/pixels";
+import {findTopmostMovableCelAt, moveCels, rasterizeCelsToCanvas, transformCels, type CelTransformAddress} from "./editor/celTransform";
 import {
-  clearSelection,
-  cloneSelection,
-  combineSelections,
-  clippedSelection,
-  copySelection,
-  flipClipboard,
-  flipSelection,
-  borderSelection,
-  fillSelection,
-  growSelection,
-  invertSelection,
-  moveSelection,
-  maskForSelection,
-  selectByColor,
-  shrinkSelection,
-  selectionCoverageAt,
-  shiftPixelsWrapped,
-  strokeSelection,
-  featherSelection,
-  pasteClipboard,
-  resizeClipboard,
-  resizeSelection,
-  rotateClipboard,
-  rotateSelection,
-  type PixelClipboard,
-  type Selection,
-  type SelectionOperation,
-  type TransformAxis,
-  type RotationDirection,
-} from "./editor/selection";
-import {bytesToBase64, decodeProject, encodeProject} from "./editor/serialization";
-import {celSelectionKey, normalizeCelSelection, selectTimelineCel, selectedCelAddresses} from "./editor/timelineSelection";
-import {duplicateLinkedTimelineCels, duplicateTimelineCels, transferTimelineCels} from "./editor/timelineCelOperations";
-import {MAX_BRUSH_SIZE, MIN_BRUSH_SIZE, createBitmapBrush, toolShortcuts, type BitmapBrush, type BrushDynamicsOptions, type BrushShape, type GradientDither, type GradientType, type ShapeFillMode, type InkMode, type RGBA, type ToolID} from "./editor/tools";
-import {rotateClipboardWithPivot, type TransformMode} from "./editor/transform";
+alphaDisplayMaximum,
+alphaFromDisplay,
+alphaToDisplay,
+clampByte,
+clampPercent,
+rgbaToHex as editorColorToHex,
+hslaToRgba,
+parseHexColor as parseEditorHexColor,
+rgbToHsla,
+type HSLAColor,
+type RGBAColor,
+} from "./editor/colorEditor";
+import {constrainColorToMode, convertDocumentColorMode, exportPaletteText, extractPalette, parsePaletteText, refreshIndexedDocument, refreshTilemapCaches, sortPalette, syncIndexedCel, type DitherMode, type PaletteFileFormat} from "./editor/colorModes";
+import {assignDocumentColorProfile, convertDocumentColorProfile, type ConvertibleColorProfile} from "./editor/colorProfiles";
+import type {ColorSelectorMode} from "./editor/colorSelector";
 import {layerOpaqueContentSelection} from "./editor/contentSelection";
+import {canCopyFramesToDocument, canCopyLayersToDocument, copyFramesToDocument, copyLayersToDocument} from "./editor/crossDocumentCopy";
+import {readDefaultPalette, resetDefaultPalette, saveDefaultPalette} from "./editor/defaultPalette";
+import {
+addEmptyFrame,
+addFrame,
+addFrameTag,
+addLayer,
+addLayerGroup,
+addSlice,
+addSliceKey,
+addTilemapLayer,
+adjacentFrameID,
+cloneDocument,
+compositeFrame,
+compositeFrameForExport,
+compositeFrameWithOnionSkin,
+createDocument,
+cropDocument,
+deleteCel,
+deleteFrameTag,
+deleteFrames,
+deleteLayer,
+deleteSlice,
+deleteSliceKey,
+duplicateDocument,
+duplicateFrames,
+duplicateLayer,
+ensureCel,
+flattenVisibleLayers,
+frameIDsInRange,
+getActiveCel,
+getActiveLayer,
+getCel,
+getLayerByID,
+isCelLayer,
+isCelLinked,
+isEditableImageLayer,
+isImageLayer,
+isLayerEffectivelyLocked,
+isTilemapLayer,
+linkCels,
+mergeLayerDown,
+moveFrames,
+moveLayer,
+nextCopyName,
+nextGroupName,
+nextLayerName,
+nextTagName,
+renameLayer,
+resizeDocument,
+reverseFrames,
+setCelProperties,
+setFramesDuration,
+setLayerAlphaLock,
+setLayerBlendMode,
+setLayerContinuous,
+setLayerLocked,
+setLayerOpacity,
+setLayerRole,
+setLayerVisibility,
+setPixelAspectRatio,
+timelineLayerEntries,
+unlinkCels,
+updateFrameTag,
+updateSlice,
+updateSliceKey,
+type BlendMode,
+type ColorMode,
+type LayerRole,
+type PixelBounds,
+type PixelDocument,
+type SliceKeyUpdate,
+type TagDirection,
+type TilemapData,
+type Tileset,
+} from "./editor/document";
+import {flipDocument, resizeSpriteContent, rotateDocument, trimDocument} from "./editor/documentTransforms";
+import {selectionToNewLayer as applySelectionToNewLayer, pasteClipboardAsNewLayer} from "./editor/editOperations";
+import {shadePixelsInPlace} from "./editor/effects";
+import {buildSpriteSheet, exportAtlasMetadata, exportSpriteSheetMetadata, packAtlas, sliceSpriteSheet} from "./editor/gameAssets";
+import {DocumentStateCommand, PixelEditCommand, TerrainCellsCommand, TilemapCellsCommand} from "./editor/history";
+import {applyLayerProperties, existingCelsForLayers, linkedCelsForSelection, type LayerPropertyUpdate} from "./editor/layerProperties";
+import {handleMCPWorkspaceCommand, type MCPWorkspaceTab} from "./editor/mcpWorkspace";
+import {applyRenderedOutline, rasterizeOutlineCel, renderDocumentOutline} from "./editor/outlineDocument";
+import {applyDocumentPalette, relocateTransparentIndex} from "./editor/paletteOperations";
+import {applyPixelAspectRatio, normalizePixelAspectRatio} from "./editor/pixelAspectRatio";
+import {createPatch, hexToRGBA, rgbaToHex} from "./editor/pixels";
+import {applyNewDocumentPreferenceDefaults, readPreferences, savePreferences, type AppPreferences} from "./editor/preferences";
+import {
+borderSelection,
+clearSelection,
+clippedSelection,
+cloneSelection,
+combineSelections,
+copySelection,
+featherSelection,
+fillSelection,
+flipClipboard,
+flipSelection,
+growSelection,
+invertSelection,
+maskForSelection,
+moveSelection,
+pasteClipboard,
+resizeClipboard,
+resizeSelection,
+rotateClipboard,
+rotateSelection,
+selectByColor,
+selectionCoverageAt,
+shiftPixelsWrapped,
+shrinkSelection,
+strokeSelection,
+type PixelClipboard,
+type RotationDirection,
+type Selection,
+type SelectionOperation,
+type TransformAxis,
+} from "./editor/selection";
+import {captureSelectionBrush} from "./editor/selectionBrush";
+import {bytesToBase64, decodeProject, encodeProject} from "./editor/serialization";
+import {commandForShortcutEvent, defaultCommandShortcuts, documentOptionalCommandIDs, formatShortcutForPlatform, isUnmodifiedDeletionKey, type CommandShortcutID} from "./editor/shortcuts";
+import {touchedSliceIds} from "./editor/sliceHitTesting";
+import {deleteSlices, moveSlices, resizeSliceKeys, reuseSliceColor, scaleSlices} from "./editor/sliceOperations";
+import {
+createTerrainMapData,
+createTerrainRuleTemplate,
+normalizeBlobMask,
+recalculateTerrainCells,
+terrainAffectedCells,
+terrainEmpty,
+terrainRuleDiagnostic,
+type TerrainBoundary,
+type TerrainNeighborMode,
+} from "./editor/terrain";
+import {
+createTerrainStamp,
+flipTerrainStamp,
+rotateTerrainStamp,
+terrainFloodFill,
+terrainLineCells,
+terrainPicker,
+terrainRectangleCells,
+transformTerrainSelection,
+type TerrainStamp,
+} from "./editor/terrainTools";
+import {rasterizeText, stampRasterizedText, type TextAlign, type TextHinting} from "./editor/textTool";
+import {cellPolygon, compareCellsForRendering, expandCellRegion, gridLineSegments, type TileCell, type TileGridLayout} from "./editor/tileGrid";
+import {crossesTiledBoundary, wrapTiledPoint, wrappedLinePoints} from "./editor/tiledPointer";
+import {
+addTileInPlace,
+cleanupTilesetInPlace,
+convertImageLayerToTilemap,
+createTileset,
+deleteTileInPlace,
+drawTilemapPixelInPlace,
+renderTilemapCelIntoCache,
+setTileCellInPlace,
+sourcePixelForTileValue,
+tileCellImageOrigin,
+tileCellsPixelBounds,
+tileFlipDiagonal,
+tileFlipX,
+tileFlipY,
+tileValueFlags,
+tileValueIndex,
+tilemapCellAtPixel,
+tilemapPixelSize,
+tilesetGridLayout,
+type TilePixelSyncMode,
+} from "./editor/tilemap";
+import {replaceCelTerrainAuthority} from "./editor/tilemapAuthority";
+import {normalizeImportedTilePixels} from "./editor/tilemapImportColors";
+import {
+exportTilemapCsv,
+exportTilemapJson,
+importTilemapCsv,
+importTilemapJson,
+} from "./editor/tilemapInterchange";
+import {createTilemapSelectionPredicate} from "./editor/tilemapSelectionClip";
+import {mapTiledCellTargets, mapTiledTerrainStampTargets, mapTiledTileStampTargets} from "./editor/tilemapTiledStamp";
+import {
+applyTileStamp,
+copyTilemapSelection,
+createTileStamp,
+createTilemapSelection,
+cutTilemapSelection,
+flipTileStamp,
+flipTilemapSelection,
+floodFillTilemap,
+moveTilemapSelection,
+pasteTilemapClipboard,
+pickTileCell,
+rotateTileStamp,
+rotateTilemapSelection,
+tileRectangleCells,
+type TileStamp,
+type TilemapClipboard,
+type TilemapEditResult,
+type TilemapSelection
+} from "./editor/tilemapTools";
+import {transformTilemapGrid} from "./editor/tilemapTransforms";
+import {importTilesetBundleIntoDocument} from "./editor/tilesetBundle";
+import {collectTilesetReferences} from "./editor/tilesetReferences";
+import {duplicateLinkedTimelineCels, duplicateTimelineCels, transferTimelineCels} from "./editor/timelineCelOperations";
+import {adjacentFocusedFrameId, focusTagIdForFrame, focusedFrameIdAtEntry, tagContainsFrame} from "./editor/timelineFocus";
+import {celSelectionKey, selectTimelineCel, selectedCelAddresses} from "./editor/timelineSelection";
+import {shouldAutoShowTimeline, timelineStructure} from "./editor/timelineVisibility";
+import {getToolGroup, toolGroups, type ToolGroup} from "./editor/toolGroups";
+import {MAX_BRUSH_SIZE, MIN_BRUSH_SIZE, createBitmapBrush, patternBrushTools, type BitmapBrush, type BrushDynamicsOptions, type BrushShape, type GradientDither, type GradientType, type InkMode, type PatternAlignment, type PatternBrush, type RGBA, type ShapeFillMode, type ToolID} from "./editor/tools";
+import {rotateClipboardWithPivot, type TransformMode} from "./editor/transform";
+import {defaultWorkspaceDimensions, defaultWorkspaceVisibility, deleteWorkspaceLayout, readWorkspaceCanvasOnly, readWorkspaceLayouts, readWorkspaceVisibility, saveWorkspaceCanvasOnly, saveWorkspaceLayout, saveWorkspaceVisibility} from "./editor/workspaceLayouts";
+import {useConstrainedMenuStyle} from "./menuPositioning";
+import {useMenuKeyboardNavigation} from "./useMenuKeyboardNavigation";
+import {useModalFocus} from "./useModalFocus";
+export {createAdjustmentDialogState} from "./app/adjustmentState";
+export {parsePNGResponse, parsePNGSequenceResponse, parseProjectResponse, type PNGResponse, type ProjectResponse} from "./app/bridgeResponses";
+export {EditorDocumentStateCommand, captureTabTimeline, combinePixelBounds, createEditorTab, extendTimelineLoopAfterInsertion, normalizeTabTimeline, projectPathKey, shouldExtendTimelineLoopAfterInsertion, syncPlaybackFrameSelection, touchAllTabThumbnails, touchTabThumbnailCels, type TabTimelineHistoryState} from "./app/editorTab";
+export {localizeStatus} from "./app/localization";
+export {decodeRecoveryPayload, encodeRecoveryPayload, type RecoveryDocument, type RecoverySnapshot, type RecoveryTabInput} from "./app/recovery";
+export {calculatePanelResizeValue, getTimelineHorizontalScrollbarHeight, getTimelineScrollTopForPeer, normalizePanelDimensionInput, syncTimelineScrollPositions, type TimelineScrollMetrics} from "./app/workspaceGeometry";
 
-const zoomLevels = [1, 2, 4, 6, 8, 12, 16, 24, 32];
-const tools: Array<{id: ToolID; icon: LucideIcon}> = [
-  {id: "pencil", icon: Pencil},
-  {id: "eraser", icon: Eraser},
-  {id: "eyedropper", icon: Pipette},
-  {id: "zoom", icon: ZoomIn},
-  {id: "hand", icon: Hand},
-  {id: "move", icon: Move},
-  {id: "line", icon: Slash},
-  {id: "rectangle", icon: Square},
-  {id: "ellipse", icon: Circle},
-  {id: "curve", icon: Spline},
-  {id: "polyline", icon: Waypoints},
-  {id: "polygon", icon: Pentagon},
-  {id: "fill", icon: PaintBucket},
-  {id: "gradient", icon: Blend},
-  {id: "spray", icon: SprayCan},
-  {id: "blur", icon: Droplets},
-  {id: "jumble", icon: Shuffle},
-  {id: "contour", icon: SquaresUnite},
-  {id: "replace-color", icon: Replace},
-  {id: "selection", icon: BoxSelect},
-  {id: "transform", icon: Scaling},
-  {id: "crop", icon: Crop},
-  {id: "slice", icon: SliceIcon},
-  {id: "text", icon: Type},
-];
-const toolDefinitionByID = new Map(tools.map((tool) => [tool.id, tool]));
+import {zoomLevels} from "./editor/canvasGeometry";
+import {isActivationKey, isEditableTarget} from "./keyboardTargets";
+export {isActivationKey, isEditableTarget} from "./keyboardTargets";
 
 type EditorContextTarget =
   | {kind: "document"; tabId: string}
@@ -406,73 +385,8 @@ const defaultBrushDynamics = (size = 1): BrushDynamicsOptions => ({
   gradient: {enabled: false, source: "pressure", min: 0, max: 1, threshold: 0, invert: false, curve: "linear"},
 });
 const builtInTextFontFamilies = ["Arial", "Segoe UI", "Tahoma", "Verdana", "Times New Roman", "Georgia", "Courier New", "Consolas"];
-const allBlendModes: BlendMode[] = ["normal", "darken", "multiply", "color-burn", "lighten", "screen", "color-dodge", "overlay", "soft-light", "hard-light", "difference", "exclusion", "hue", "saturation", "color", "luminosity", "addition", "subtract", "divide"];
-const blendModeText: Record<Language, Record<BlendMode, string>> = {
-  en: {normal: "Normal", darken: "Darken", multiply: "Multiply", "color-burn": "Color burn", lighten: "Lighten", screen: "Screen", "color-dodge": "Color dodge", overlay: "Overlay", "soft-light": "Soft light", "hard-light": "Hard light", difference: "Difference", exclusion: "Exclusion", hue: "Hue", saturation: "Saturation", color: "Color", luminosity: "Luminosity", addition: "Addition", subtract: "Subtract", divide: "Divide"},
-  zh: {normal: "正常", darken: "变暗", multiply: "正片叠底", "color-burn": "颜色加深", lighten: "变亮", screen: "滤色", "color-dodge": "颜色减淡", overlay: "叠加", "soft-light": "柔光", "hard-light": "强光", difference: "差值", exclusion: "排除", hue: "色相", saturation: "饱和度", color: "颜色", luminosity: "明度", addition: "相加", subtract: "减去", divide: "划分"},
-};
-const layerRoleText: Record<Language, Record<LayerRole, string>> = {
-  en: {standard: "Standard", background: "Background", reference: "Reference"},
-  zh: {standard: "普通", background: "背景", reference: "参考"},
-};
-
-type Language = "en" | "zh";
 type ColorEditorMode = "rgba" | "hsla";
 type ColorTarget = "foreground" | "background";
-type CommandScope = "canvas" | "layer" | "frame" | "cels";
-type ToolShortcutAssignments = Record<ToolID, string>;
-
-const commandShortcutLabels: Record<Language, Record<CommandShortcutID, string>> = {
-  en: {
-    new: "New", newFromSelection: "New from selection", open: "Open", importPNG: "Import PNG", importSpriteSheet: "Import sprite sheet", importPNGSequence: "Import PNG sequence", save: "Save", saveAs: "Save as", exportPNG: "Export PNG", exportGIF: "Export animated GIF", exportSpriteSheet: "Export sprite sheet", exportPNGSequence: "Export PNG sequence", closeDocument: "Close document",
-    undo: "Undo", redo: "Redo", selectAll: "Select all", deselect: "Deselect", reselect: "Reselect", copy: "Copy", copyMerged: "Copy merged", cut: "Cut", paste: "Paste", pasteSpecialNewSprite: "Paste as new sprite", pasteSpecialNewLayer: "Paste as new layer", pasteSpecialReferenceLayer: "Paste as reference layer", fillSelection: "Fill selection", strokeSelection: "Stroke selection", copySelectionToLayer: "Copy selection to new layer", cutSelectionToLayer: "Cut selection to new layer", copySelectedFramesToDocument: "Copy selected frames to another document", copySelectedLayersToDocument: "Copy selected layers to another document", shiftPixelsLeft: "Shift pixels left", shiftPixelsRight: "Shift pixels right", shiftPixelsUp: "Shift pixels up", shiftPixelsDown: "Shift pixels down",
-    selectOpaque: "Select opaque pixels", selectColor: "Select foreground color", selectAllLayerCels: "Select all cels in layer", selectLinkedCels: "Select linked cels", invertSelection: "Invert selection", growSelection: "Grow selection", shrinkSelection: "Shrink selection", borderSelection: "Selection border", featherSelection: "Feather selection", scaleSelection: "Scale selection", rotateSelectionCCW: "Rotate selection counterclockwise", rotateSelectionCW: "Rotate selection clockwise", flipSelectionHorizontal: "Flip selection horizontally", flipSelectionVertical: "Flip selection vertically", applySelectionPosition: "Apply selection position", applySelectionRotation: "Rotate selection", createBrushFromSelection: "Create brush from selection", createPatternFromSelection: "Create pattern from selection", createSliceFromSelection: "Create slice from selection",
-    duplicateSprite: "Duplicate sprite", spriteSize: "Sprite size", canvasSize: "Canvas size", trimCanvas: "Trim transparent borders", rotateSpriteCW: "Rotate sprite clockwise", rotateSpriteCCW: "Rotate sprite counterclockwise", rotateSprite180: "Rotate sprite 180 degrees", flipSpriteHorizontal: "Flip sprite horizontally", flipSpriteVertical: "Flip sprite vertically", colorConfiguration: "Color configuration", adjustmentBrightnessContrast: "Brightness / contrast", adjustmentHSL: "Hue / saturation", adjustmentInvert: "Invert", adjustmentConvolution: "Convolution", adjustmentMedian: "Median", adjustmentDespeckle: "Despeckle", adjustmentCurves: "Curves", adjustmentHSVHSL: "HSV / HSL", adjustmentChannels: "Channels", effectOutline: "Outline", effectShading: "Shading",
-    addPaletteColor: "Add palette color", updatePaletteColor: "Edit palette color", removePaletteColor: "Remove palette color", extractPalette: "Extract palette", sortPalette: "Sort palette", saveDefaultPalette: "Save default palette", applyDefaultPalette: "Apply default palette", resetDefaultPalette: "Restore built-in palette", importPalette: "Import palette", exportGPL: "Export GPL palette", exportJASCPAL: "Export JASC-PAL palette",
-    addLayer: "Add layer", addGroup: "Add layer group", addTilemapLayer: "Add tilemap layer", convertLayerToTilemap: "Convert layer to tilemap", duplicateLayer: "Duplicate layer", layerProperties: "Layer properties", moveLayerUp: "Move layer up", moveLayerDown: "Move layer down", mergeLayerDown: "Merge layer down", mergeSelectedLayers: "Merge selected layers", flattenVisibleLayers: "Flatten visible layers", toggleLayerVisibility: "Toggle layer visibility", toggleLayerLock: "Toggle layer lock", toggleAlphaLock: "Toggle alpha lock", toggleContinuous: "Toggle continuous cel",
-    addFrame: "Add frame", newEmptyFrame: "New empty frame", duplicateFrame: "Duplicate frame", deleteFrame: "Delete frame", moveFrameBackward: "Move frame earlier", moveFrameForward: "Move frame later", previousFrame: "Previous frame", nextFrame: "Next frame", reverseFrames: "Reverse selected frames", createCels: "Create cels", duplicateCels: "Duplicate cels", duplicateLinkedCels: "Duplicate linked cels", deleteCels: "Delete cels", linkCels: "Link cels", unlinkCels: "Unlink cels", celProperties: "Cel properties", applyCelTransform: "Apply cel transform", rasterizeCels: "Rasterize cels", togglePlayback: "Play / pause animation", addTag: "Add frame tag", editTag: "Edit frame tag", deleteTag: "Delete frame tag", focusTag: "Focus active tag",
-    toggleInspector: "Toggle inspector", toggleTimeline: "Toggle timeline", togglePixelGrid: "Toggle pixel grid", toggleOnionSkin: "Toggle onion skin", toggleCanvasOnly: "Canvas-only mode", showAllPanels: "Show all panels", toggleFullscreen: "Toggle full screen", detachedPreview: "Detached animation preview", resetWorkspace: "Reset workspace layout", showHistory: "Show history", openPreferences: "Open preferences", toggleTheme: "Toggle theme", switchLanguage: "Switch language",
-    toggleGridSnap: "Toggle grid snapping", toggleMirrorX: "Toggle horizontal mirror", toggleMirrorY: "Toggle vertical mirror", toggleTileX: "Toggle horizontal tiling", toggleTileY: "Toggle vertical tiling", addVerticalGuide: "Add vertical guide", addHorizontalGuide: "Add horizontal guide", setRGBA: "Use RGBA mode", setGrayscale: "Use grayscale mode", setIndexed: "Use indexed mode", setBitmap: "Use bitmap mode", zoomIn: "Zoom in", zoomOut: "Zoom out", delete: "Delete",
-  },
-  zh: {
-    new: "新建", newFromSelection: "从选区新建", open: "打开", importPNG: "导入 PNG", importSpriteSheet: "导入精灵图", importPNGSequence: "导入 PNG 序列", save: "保存", saveAs: "另存为", exportPNG: "导出 PNG", exportGIF: "导出 GIF 动画", exportSpriteSheet: "导出精灵图", exportPNGSequence: "导出 PNG 序列", closeDocument: "关闭文件",
-    undo: "撤销", redo: "重做", selectAll: "全选", deselect: "取消选择", reselect: "重新选择", copy: "复制", copyMerged: "复制合并结果", cut: "剪切", paste: "粘贴", pasteSpecialNewSprite: "粘贴为新项目", pasteSpecialNewLayer: "粘贴为新图层", pasteSpecialReferenceLayer: "粘贴为参考图层", fillSelection: "填充选区", strokeSelection: "描边选区", copySelectionToLayer: "复制选区到新图层", cutSelectionToLayer: "剪切选区到新图层", copySelectedFramesToDocument: "复制所选帧到其他文件", copySelectedLayersToDocument: "复制所选图层到其他文件", shiftPixelsLeft: "向左环绕平移像素", shiftPixelsRight: "向右环绕平移像素", shiftPixelsUp: "向上环绕平移像素", shiftPixelsDown: "向下环绕平移像素",
-    selectOpaque: "选择不透明像素", selectColor: "选择前景色", selectAllLayerCels: "选择当前图层全部动画格", selectLinkedCels: "选择链接动画格", invertSelection: "反选", growSelection: "扩展选区", shrinkSelection: "收缩选区", borderSelection: "选区边框", featherSelection: "羽化选区", scaleSelection: "缩放选区", rotateSelectionCCW: "逆时针旋转选区", rotateSelectionCW: "顺时针旋转选区", flipSelectionHorizontal: "水平翻转选区", flipSelectionVertical: "垂直翻转选区", applySelectionPosition: "应用选区位置", applySelectionRotation: "旋转选区", createBrushFromSelection: "从选区创建笔刷", createPatternFromSelection: "从选区创建图案", createSliceFromSelection: "从选区创建切片",
-    duplicateSprite: "复制精灵", spriteSize: "缩放图像内容", canvasSize: "画布尺寸", trimCanvas: "裁去透明边缘", rotateSpriteCW: "顺时针旋转图像", rotateSpriteCCW: "逆时针旋转图像", rotateSprite180: "旋转图像 180 度", flipSpriteHorizontal: "水平翻转图像", flipSpriteVertical: "垂直翻转图像", colorConfiguration: "颜色配置", adjustmentBrightnessContrast: "亮度 / 对比度", adjustmentHSL: "色相 / 饱和度", adjustmentInvert: "反相", adjustmentConvolution: "卷积", adjustmentMedian: "中值滤波", adjustmentDespeckle: "去斑", adjustmentCurves: "曲线", adjustmentHSVHSL: "HSV / HSL", adjustmentChannels: "通道", effectOutline: "轮廓", effectShading: "着色",
-    addPaletteColor: "添加调色板颜色", updatePaletteColor: "编辑调色板颜色", removePaletteColor: "移除调色板颜色", extractPalette: "提取调色板", sortPalette: "整理调色板", saveDefaultPalette: "保存默认调色板", applyDefaultPalette: "应用默认调色板", resetDefaultPalette: "恢复内置调色板", importPalette: "导入调色板", exportGPL: "导出 GPL 调色板", exportJASCPAL: "导出 JASC-PAL 调色板",
-    addLayer: "新建图层", addGroup: "新建图层组", addTilemapLayer: "新建图块地图图层", convertLayerToTilemap: "将图层转换为图块地图", duplicateLayer: "复制图层", layerProperties: "图层属性", moveLayerUp: "上移图层", moveLayerDown: "下移图层", mergeLayerDown: "向下合并图层", mergeSelectedLayers: "合并所选图层", flattenVisibleLayers: "拼合可见图层", toggleLayerVisibility: "切换图层可见性", toggleLayerLock: "切换图层锁定", toggleAlphaLock: "切换锁定透明度", toggleContinuous: "切换连续动画格",
-    addFrame: "新建帧", newEmptyFrame: "新建空帧", duplicateFrame: "复制帧", deleteFrame: "删除帧", moveFrameBackward: "前移帧", moveFrameForward: "后移帧", previousFrame: "上一帧", nextFrame: "下一帧", reverseFrames: "反转所选帧", createCels: "创建动画格", duplicateCels: "复制动画格", duplicateLinkedCels: "复制并链接动画格", deleteCels: "删除动画格", linkCels: "链接动画格", unlinkCels: "取消链接动画格", celProperties: "动画格属性", applyCelTransform: "应用动画格变换", rasterizeCels: "栅格化动画格", togglePlayback: "播放 / 暂停动画", addTag: "添加帧标签", editTag: "编辑帧标签", deleteTag: "删除帧标签", focusTag: "聚焦当前帧标签",
-    toggleInspector: "显示 / 隐藏侧栏", toggleTimeline: "显示 / 隐藏时间轴", togglePixelGrid: "切换像素网格", toggleOnionSkin: "切换洋葱皮", toggleCanvasOnly: "画布独占模式", showAllPanels: "显示所有面板", toggleFullscreen: "切换全屏", detachedPreview: "独立动画预览", resetWorkspace: "重置工作区布局", showHistory: "显示历史记录", openPreferences: "打开偏好设置", toggleTheme: "切换主题", switchLanguage: "切换语言",
-    toggleGridSnap: "切换网格吸附", toggleMirrorX: "切换水平对称", toggleMirrorY: "切换垂直对称", toggleTileX: "切换水平平铺", toggleTileY: "切换垂直平铺", addVerticalGuide: "添加垂直辅助线", addHorizontalGuide: "添加水平辅助线", setRGBA: "使用 RGBA 模式", setGrayscale: "使用灰度模式", setIndexed: "使用索引色模式", setBitmap: "使用位图模式", zoomIn: "放大", zoomOut: "缩小", delete: "删除",
-  },
-};
-
-interface EditorTab {
-  id: string;
-  filePath?: string;
-  document: PixelDocument;
-  history: CommandHistory<PixelDocument>;
-  selection: Selection | null;
-  transformPivot: {x: number; y: number} | null;
-  lastSelection: Selection | null;
-  selectedCelKeys: string[];
-  celSelectionAnchor: CelAddress | null;
-  selectedLayerIds: string[];
-  layerSelectionAnchorId: string;
-  commandScope: CommandScope;
-  selectedFrameIds: string[];
-  frameSelectionAnchorId: string;
-  loopStartFrameId: string;
-  loopEndFrameId: string;
-  activeTagId?: string;
-  collapsedGroupIds: Set<string>;
-  zoom: number;
-  cursor: {x: number; y: number} | null;
-  status: string;
-  compositeCache: FrameCompositeCache;
-  thumbnailRevision: number;
-  thumbnailRevisions: Map<string, number>;
-}
 
 interface CelMoveSession {
   before: PixelDocument;
@@ -508,335 +422,6 @@ interface CrossDocumentCopyDialogState {
   frameIds: string[];
   layerIds: string[];
   targetTabId: string;
-}
-
-type TriStateProperty = "keep" | "on" | "off";
-type LayerRoleProperty = "keep" | LayerRole;
-
-interface LayerPropertiesDialogState {
-  layerIds: string[];
-  name: string;
-  opacity: string;
-  blendMode: "keep" | BlendMode;
-  role: LayerRoleProperty;
-  visible: TriStateProperty;
-  locked: TriStateProperty;
-  alphaLock: TriStateProperty;
-  continuous: TriStateProperty;
-}
-
-interface SlicePropertiesDialogState {
-  sliceId: string;
-  frameId: string;
-  name: string;
-  color: string;
-  x: string;
-  y: string;
-  width: string;
-  height: string;
-  centerX: string;
-  centerY: string;
-  centerWidth: string;
-  centerHeight: string;
-  pivotX: string;
-  pivotY: string;
-}
-
-type AdjustmentKind = "brightness-contrast" | "hsl" | "invert" | "convolution" | "median" | "despeckle" | "curves" | "hsv-hsl" | "channel-mask" | "outline";
-type AdjustmentTargetScope = "active" | "selected" | "all";
-type AdjustmentCurveChannel = "red" | "green" | "blue" | "alpha";
-type AdjustmentConvolutionPreset = "blur" | "sharpen" | "edge" | "emboss" | "custom";
-
-const adjustmentConvolutionPresets: Record<AdjustmentConvolutionPreset, {kernel: number[]; divisor: number; bias: number}> = {
-  blur: {kernel: [1, 1, 1, 1, 1, 1, 1, 1, 1], divisor: 9, bias: 0},
-  sharpen: {kernel: [0, -1, 0, -1, 5, -1, 0, -1, 0], divisor: 1, bias: 0},
-  edge: {kernel: [-1, -1, -1, -1, 8, -1, -1, -1, -1], divisor: 1, bias: 128},
-  emboss: {kernel: [-2, -1, 0, -1, 1, 1, 0, 1, 2], divisor: 1, bias: 128},
-  custom: {kernel: [0, 0, 0, 0, 1, 0, 0, 0, 0], divisor: 1, bias: 0},
-};
-
-type AdjustmentChannelValues = Record<"red" | "green" | "blue" | "alpha", boolean>;
-
-function defaultAdjustmentChannelValues(): AdjustmentChannelValues {
-  return {red: true, green: true, blue: true, alpha: false};
-}
-
-export function createAdjustmentDialogState(kind: AdjustmentKind): AdjustmentDialogState {
-  const channelValues = defaultAdjustmentChannelValues();
-  if (kind === "channel-mask" || kind === "outline") channelValues.alpha = true;
-  return {
-    kind,
-    scope: "active",
-    brightness: 0,
-    contrast: 0,
-    hue: 0,
-    saturation: 0,
-    lightness: 0,
-    value: 0,
-    hsvSpace: "hsl",
-    hsvMode: "relative",
-    convolutionPreset: "sharpen",
-    medianSize: kind === "despeckle" ? 5 : 3,
-    medianThreshold: 0,
-    curveChannel: "red",
-    curvePoints: {red: identityCurvePoints(), green: identityCurvePoints(), blue: identityCurvePoints(), alpha: identityCurvePoints()},
-    outlineThickness: 1,
-    outlinePosition: "outside",
-    outlineShape: "square",
-    outlineDirections: ["n", "ne", "e", "se", "s", "sw", "w", "nw"],
-    outlineTileX: false,
-    outlineTileY: false,
-    channelValues,
-  };
-}
-
-interface AdjustmentDialogState {
-  kind: AdjustmentKind;
-  scope: AdjustmentTargetScope;
-  brightness: number;
-  contrast: number;
-  hue: number;
-  saturation: number;
-  lightness: number;
-  value: number;
-  hsvSpace: "hsv" | "hsl";
-  hsvMode: "relative" | "absolute";
-  convolutionPreset: AdjustmentConvolutionPreset;
-  medianSize: 3 | 5;
-  medianThreshold: number;
-  curveChannel: AdjustmentCurveChannel;
-  curvePoints: Record<AdjustmentCurveChannel, CurvePoint[]>;
-  outlineThickness: number;
-  outlinePosition: "inside" | "outside";
-  outlineShape: OutlineShape;
-  outlineDirections: OutlineDirection[];
-  outlineTileX: boolean;
-  outlineTileY: boolean;
-  channelValues: AdjustmentChannelValues;
-}
-
-interface SpriteImportDialogState {
-  image: PNGResponse;
-  frameWidth: number;
-  frameHeight: number;
-  layout: SpriteSheetImportLayout;
-  offsetX: number;
-  offsetY: number;
-  paddingX: number;
-  paddingY: number;
-}
-
-function createTabID() {
-  return typeof crypto.randomUUID === "function"
-    ? crypto.randomUUID()
-    : `document-${Date.now()}-${Math.random().toString(36).slice(2)}`;
-}
-
-function storedHistoryLimitBytes() {
-  if (typeof localStorage === "undefined") return defaultHistoryLimitBytes;
-  return Math.round(readPreferences(localStorage).undo.memoryLimitMB) * 1024 * 1024;
-}
-
-export function createEditorTab(document: PixelDocument, id = createTabID(), filePath?: string, isDirty = false): EditorTab {
-  const firstFrameId = document.frames[0].id;
-  const lastFrameId = document.frames.at(-1)!.id;
-  const history = new CommandHistory<PixelDocument>(storedHistoryLimitBytes());
-  if (isDirty) history.markDirty();
-  return {
-    id,
-    filePath,
-    document,
-    history,
-    selection: null,
-    transformPivot: null,
-    lastSelection: null,
-    selectedCelKeys: [],
-    celSelectionAnchor: null,
-    selectedLayerIds: [document.activeLayerId],
-    layerSelectionAnchorId: document.activeLayerId,
-    commandScope: "canvas",
-    selectedFrameIds: [document.activeFrameId],
-    frameSelectionAnchorId: document.activeFrameId,
-    loopStartFrameId: firstFrameId,
-    loopEndFrameId: lastFrameId,
-    collapsedGroupIds: new Set<string>(),
-    zoom: 12,
-    cursor: null,
-    status: "Ready",
-    compositeCache: new FrameCompositeCache(),
-    thumbnailRevision: 0,
-    thumbnailRevisions: new Map<string, number>(),
-  };
-}
-
-export function touchTabThumbnailCels(tab: EditorTab, celIDs: Iterable<string>) {
-  const revision = ++tab.thumbnailRevision;
-  for (const celID of celIDs) tab.thumbnailRevisions.set(celID, revision);
-}
-
-export function touchAllTabThumbnails(tab: EditorTab) {
-  touchTabThumbnailCels(tab, Object.values(tab.document.cels).map((cel) => cel.id));
-}
-
-export function combinePixelBounds(current: PixelBounds | null, next: PixelBounds) {
-  if (!current) return next;
-  const x = Math.min(current.x, next.x);
-  const y = Math.min(current.y, next.y);
-  return {
-    x,
-    y,
-    width: Math.max(current.x + current.width, next.x + next.width) - x,
-    height: Math.max(current.y + current.height, next.y + next.height) - y,
-  };
-}
-
-export function projectPathKey(path: string) {
-  return path.replace(/\//g, "\\").toLocaleLowerCase("en-US");
-}
-
-export interface TabTimelineHistoryState {
-  selectedFrameIds: string[];
-  frameSelectionAnchorId: string;
-  loopStartFrameId: string;
-  loopEndFrameId: string;
-  activeTagId?: string;
-  selectedCelKeys: string[];
-  celSelectionAnchor: CelAddress | null;
-  commandScope: CommandScope;
-  selectedLayerIds: string[];
-  layerSelectionAnchorId: string;
-}
-
-export function captureTabTimeline(tab: EditorTab): TabTimelineHistoryState {
-  return {
-    selectedFrameIds: [...tab.selectedFrameIds],
-    frameSelectionAnchorId: tab.frameSelectionAnchorId,
-    loopStartFrameId: tab.loopStartFrameId,
-    loopEndFrameId: tab.loopEndFrameId,
-    activeTagId: tab.activeTagId,
-    selectedCelKeys: [...tab.selectedCelKeys],
-    celSelectionAnchor: tab.celSelectionAnchor ? {...tab.celSelectionAnchor} : null,
-    commandScope: tab.commandScope,
-    selectedLayerIds: [...tab.selectedLayerIds],
-    layerSelectionAnchorId: tab.layerSelectionAnchorId,
-  };
-}
-
-function restoreTabTimeline(tab: EditorTab, state: TabTimelineHistoryState) {
-  tab.selectedFrameIds = [...state.selectedFrameIds];
-  tab.frameSelectionAnchorId = state.frameSelectionAnchorId;
-  tab.loopStartFrameId = state.loopStartFrameId;
-  tab.loopEndFrameId = state.loopEndFrameId;
-  tab.activeTagId = state.activeTagId;
-  tab.selectedCelKeys = [...state.selectedCelKeys];
-  tab.celSelectionAnchor = state.celSelectionAnchor ? {...state.celSelectionAnchor} : null;
-  tab.commandScope = state.commandScope;
-  tab.selectedLayerIds = [...state.selectedLayerIds];
-  tab.layerSelectionAnchorId = state.layerSelectionAnchorId;
-}
-
-function syncTabToActiveTag(tab: EditorTab) {
-  const tag = tab.activeTagId ? tab.document.tags.find((candidate) => candidate.id === tab.activeTagId) : undefined;
-  if (!tag) return false;
-  const frameIds = frameIDsInRange(tab.document, tag.fromFrameId, tag.toFrameId);
-  if (frameIds.length === 0) return false;
-  tab.selectedFrameIds = frameIds;
-  tab.frameSelectionAnchorId = tag.fromFrameId;
-  tab.loopStartFrameId = tag.fromFrameId;
-  tab.loopEndFrameId = tag.toFrameId;
-  setTabCommandScope(tab, "frame");
-  if (!frameIds.includes(tab.document.activeFrameId)) {
-    tab.document.activeFrameId = focusedFrameIdAtEntry(tab.document, {tagId: tag.id}) ?? tag.fromFrameId;
-  }
-  return true;
-}
-
-export function normalizeTabTimeline(tab: EditorTab, syncActiveTag = false) {
-  const frameIds = tab.document.frames.map((frame) => frame.id);
-  const valid = new Set(frameIds);
-  tab.selectedFrameIds = tab.selectedFrameIds.filter((frameId) => valid.has(frameId));
-  if (tab.selectedFrameIds.length === 0) tab.selectedFrameIds = [tab.document.activeFrameId];
-  if (!valid.has(tab.frameSelectionAnchorId)) tab.frameSelectionAnchorId = tab.document.activeFrameId;
-  if (!valid.has(tab.loopStartFrameId)) tab.loopStartFrameId = frameIds[0];
-  if (!valid.has(tab.loopEndFrameId)) tab.loopEndFrameId = frameIds.at(-1)!;
-  if (tab.activeTagId && !tab.document.tags.some((tag) => tag.id === tab.activeTagId)) tab.activeTagId = undefined;
-  else if (syncActiveTag) syncTabToActiveTag(tab);
-
-  const activeLayer = getLayerByID(tab.document, tab.document.activeLayerId);
-  const validLayerIds = new Set(tab.document.layers.map((layer) => layer.id));
-  tab.selectedLayerIds = tab.selectedLayerIds.filter((layerId) => validLayerIds.has(layerId));
-  if (tab.selectedLayerIds.length === 0) tab.selectedLayerIds = [tab.document.activeLayerId];
-  if (!validLayerIds.has(tab.layerSelectionAnchorId)) tab.layerSelectionAnchorId = tab.document.activeLayerId;
-  if (tab.commandScope === "cels" && activeLayer && isCelLayer(activeLayer)) {
-    const normalized = normalizeCelSelection(
-      tab.document,
-      tab.selectedCelKeys,
-      tab.celSelectionAnchor,
-      tab.commandScope,
-    );
-    tab.selectedCelKeys = normalized.keys;
-    tab.celSelectionAnchor = normalized.anchor;
-  } else {
-    tab.selectedCelKeys = [];
-    tab.celSelectionAnchor = null;
-    if (tab.commandScope === "cels") tab.commandScope = "layer";
-  }
-}
-
-function setTabCommandScope(tab: EditorTab, scope: CommandScope) {
-  tab.commandScope = scope;
-  if (scope !== "cels") {
-    tab.selectedCelKeys = [];
-    tab.celSelectionAnchor = null;
-  }
-  if (scope !== "canvas") tab.selection = null;
-  if (scope === "layer" && !tab.selectedLayerIds.includes(tab.document.activeLayerId)) {
-    tab.selectedLayerIds = [tab.document.activeLayerId];
-    tab.layerSelectionAnchorId = tab.document.activeLayerId;
-  }
-}
-
-export function syncPlaybackFrameSelection(tab: EditorTab, frameId = tab.document.activeFrameId) {
-  if (!tab.document.frames.some((frame) => frame.id === frameId)) return false;
-  tab.document.activeFrameId = frameId;
-  tab.selectedFrameIds = [frameId];
-  tab.frameSelectionAnchorId = frameId;
-  setTabCommandScope(tab, "frame");
-  return true;
-}
-
-export function shouldExtendTimelineLoopAfterInsertion(tab: EditorTab) {
-  if (tab.activeTagId) return false;
-  return frameIDsInRange(tab.document, tab.loopStartFrameId, tab.loopEndFrameId).length === tab.document.frames.length;
-}
-
-export function extendTimelineLoopAfterInsertion(tab: EditorTab, shouldExtend: boolean) {
-  if (!shouldExtend || tab.document.frames.length === 0) return;
-  tab.loopStartFrameId = tab.document.frames[0].id;
-  tab.loopEndFrameId = tab.document.frames.at(-1)!.id;
-}
-
-export class EditorDocumentStateCommand extends DocumentStateCommand {
-  constructor(
-    before: PixelDocument,
-    after: PixelDocument,
-    label: string,
-    private readonly tab: EditorTab,
-    private readonly beforeTimeline: TabTimelineHistoryState,
-    private readonly afterTimeline: TabTimelineHistoryState,
-  ) {
-    super(before, after, label);
-  }
-
-  override undo(document: PixelDocument) {
-    super.undo(document);
-    restoreTabTimeline(this.tab, this.beforeTimeline);
-  }
-
-  override redo(document: PixelDocument) {
-    super.redo(document);
-    restoreTabTimeline(this.tab, this.afterTimeline);
-  }
 }
 
 function displayProjectName(name: string) {
@@ -880,706 +465,6 @@ function paletteColorFromEditor(color: string, alphaPercent: number) {
   return editorColorToHex({r, g, b, a: alphaPercent}, true);
 }
 
-const recoveryFormat = "pixtorio-recovery-v2" as const;
-
-export interface RecoveryTabInput {
-  id: string;
-  filePath?: string;
-  document: PixelDocument;
-  isDirty: boolean;
-}
-
-export interface RecoveryDocument {
-  tabId: string;
-  filePath?: string;
-  document: PixelDocument;
-}
-
-export interface RecoverySnapshot {
-  activeTabId?: string;
-  documents: RecoveryDocument[];
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null;
-}
-
-export interface ProjectResponse {
-  path: string;
-  document: string;
-}
-
-export interface PNGResponse {
-  name: string;
-  width: number;
-  height: number;
-  pixels: Uint8ClampedArray;
-}
-
-function parseBridgeJSON(payload: string, errorMessage: string): unknown {
-  try {
-    return JSON.parse(payload);
-  } catch {
-    throw new Error(errorMessage);
-  }
-}
-
-export function parseProjectResponse(payload: string): ProjectResponse {
-  const parsed = parseBridgeJSON(payload, "Invalid project response");
-  if (!isRecord(parsed) || typeof parsed.path !== "string" || typeof parsed.document !== "string") {
-    throw new Error("Invalid project response");
-  }
-  return {path: parsed.path, document: parsed.document};
-}
-
-export function parsePNGResponse(payload: string): PNGResponse {
-  const parsed = parseBridgeJSON(payload, "Invalid PNG response");
-  if (!isRecord(parsed) || typeof parsed.name !== "string" || typeof parsed.width !== "number" || typeof parsed.height !== "number" || typeof parsed.pixels !== "string") {
-    throw new Error("Invalid PNG response");
-  }
-  const {name, width, height, pixels: encodedPixels} = parsed;
-  if (!validPNGImportDimensions(width, height)) {
-    throw new Error("Invalid PNG response");
-  }
-  let binary: string;
-  try {
-    binary = atob(encodedPixels);
-  } catch {
-    throw new Error("Invalid PNG response");
-  }
-  if (binary.length !== parsed.width * parsed.height * 4) throw new Error("Invalid PNG response");
-  const pixels = new Uint8ClampedArray(binary.length);
-  for (let index = 0; index < binary.length; index += 1) pixels[index] = binary.charCodeAt(index);
-  return {name, width, height, pixels};
-}
-
-export function parsePNGSequenceResponse(payload: string): PNGResponse[] {
-  const parsed = parseBridgeJSON(payload, "Invalid PNG sequence response");
-  if (!isRecord(parsed) || !Array.isArray(parsed.frames) || parsed.frames.length === 0 || parsed.frames.length > 4096) {
-    throw new Error("Invalid PNG sequence response");
-  }
-  return parsed.frames.map((frame) => parsePNGResponse(JSON.stringify(frame)));
-}
-
-export function isActivationKey(key: string) {
-  return key === "Enter" || key === " ";
-}
-
-export function encodeRecoveryPayload(tabs: readonly RecoveryTabInput[], activeTabId: string): string | null {
-  const dirtyTabs = tabs.filter((tab) => tab.isDirty);
-  if (dirtyTabs.length === 0) return null;
-  const active = dirtyTabs.find((tab) => tab.id === activeTabId) ?? dirtyTabs[0];
-  return JSON.stringify({
-    format: recoveryFormat,
-    activeTabId: active.id,
-    documents: dirtyTabs.map((tab) => ({
-      tabId: tab.id,
-      ...(tab.filePath !== undefined ? {filePath: tab.filePath} : {}),
-      document: encodeProject(tab.document),
-    })),
-  });
-}
-
-export function decodeRecoveryPayload(payload: string): RecoverySnapshot {
-  const parsed = parseBridgeJSON(payload, "Recovery JSON is invalid");
-  if (!isRecord(parsed) || parsed.format !== recoveryFormat) {
-    throw new Error("Recovery JSON is invalid");
-  }
-  if (!Array.isArray(parsed.documents) || parsed.documents.length === 0) {
-    throw new Error("Recovery documents are missing");
-  }
-  const documents = parsed.documents.map((entry) => {
-    if (!isRecord(entry) || typeof entry.tabId !== "string" || typeof entry.document !== "string") {
-      throw new Error("Recovery document entry is invalid");
-    }
-    if (entry.filePath !== undefined
-      && (typeof entry.filePath !== "string"
-        || !entry.filePath.trim()
-        || entry.filePath.trim() !== entry.filePath
-        || !entry.filePath.toLowerCase().endsWith(".pixio"))) {
-      throw new Error("Recovery document entry is invalid");
-    }
-    return {
-      tabId: entry.tabId,
-      ...(entry.filePath !== undefined ? {filePath: entry.filePath} : {}),
-      document: decodeProject(entry.document),
-    };
-  });
-  return {
-    activeTabId: typeof parsed.activeTabId === "string" ? parsed.activeTabId : undefined,
-    documents,
-  };
-}
-
-export function isEditableTarget(target: EventTarget | null) {
-  if (!target) return false;
-  if (typeof HTMLInputElement !== "undefined" && target instanceof HTMLInputElement) return true;
-  if (typeof HTMLTextAreaElement !== "undefined" && target instanceof HTMLTextAreaElement) return true;
-  if (typeof HTMLSelectElement !== "undefined" && target instanceof HTMLSelectElement) return true;
-  if (typeof HTMLElement !== "undefined" && target instanceof HTMLElement && target.isContentEditable) return true;
-
-  // Keep this check safe for unit tests running without a DOM implementation.
-  const element = target as EventTarget & {nodeName?: unknown; isContentEditable?: unknown};
-  if (element.isContentEditable === true) return true;
-  return typeof element.nodeName === "string" && /^(INPUT|TEXTAREA|SELECT)$/i.test(element.nodeName);
-}
-
-const labels: Record<Language, {
-  file: string; newProject: string; openProject: string; importPNG: string; saveProject: string; saveAs: string;
-  exportPNG: string; exportGIF: string; exportSpriteSheet: string; recentProjects: string;
-  openDocuments: string; closeDocument: string; previousDocuments: string; nextDocuments: string;
-  undo: string; redo: string; toggleTheme: string; switchLanguage: string; tools: string;
-  color: string; currentColor: string; palette: string; useColor: string; selection: string; mode: string;
-  foreground: string; background: string; swapColors: string; alpha: string; brush: string; brushSize: string;
-  brushShape: string; squareBrush: string; circleBrush: string; addColor: string; removeColor: string; editColor: string;
-  brushPreset: string; crossBrush: string; diamondBrush: string; customBrush: string; brushFromSelection: string; brushSpacing: string; pixelPerfect: string; pressure: string; polygonSides: string;
-  colorMode: string; rgbaMode: string; grayscaleMode: string; indexedMode: string; bitmapMode: string; extractPalette: string; sortPalette: string;
-  selectionReplace: string; selectionAdd: string; selectionSubtract: string; selectionIntersect: string;
-  selectionShape: string; rectangularSelection: string; ellipticalSelection: string; lassoSelection: string; polygonSelection: string; magicWand: string; tolerance: string; selectOpaque: string; selectColor: string; invertSelection: string; reselect: string; growSelection: string; shrinkSelection: string; borderSelection: string; amount: string;
-  transform: string; transformModeLabel: string; transformScale: string; transformPerspective: string; transformDistort: string; scaleSelection: string; rotateClockwise: string; rotateCounterclockwise: string; flipHorizontal: string; flipVertical: string;
-  arbitraryRotation: string; applyRotation: string;
-  layers: string; addLayer: string; addGroup: string; duplicateLayer: string;
-  moveLayerUp: string; moveLayerDown: string; mergeLayerDown: string; hideLayer: string; showLayer: string;
-  renameLayer: string; lockLayer: string; unlockLayer: string; collapseGroup: string; expandGroup: string;
-  opacity: string; layerOpacity: string; blendMode: string; normal: string; multiply: string; screen: string; overlay: string;
-  animation: string; addFrame: string; newEmptyFrame: string; duplicateFrame: string; deleteFrame: string; moveFrameBackward: string;
-  moveFrameForward: string; previousFrame: string; nextFrame: string; frames: string; pause: string; play: string; onionSkin: string; loop: string;
-  linkCels: string; unlinkCels: string; duplicateCels: string; duplicateLinkedCels: string; tags: string; noTag: string; addTag: string; editTag: string; deleteTag: string; focusTag: string;
-  celTransform: string; angle: string; offsetX: string; offsetY: string; applyCelTransform: string; rasterizeCels: string;
-  tagName: string; direction: string; forward: string; reverse: string; pingpong: string; loopStart: string; loopEnd: string;
-  exportOptions: string; export: string; scale: string; applyPixelRatio: string; playback: string; once: string; forever: string; repeatCount: string;
-  frameRange: string; allFrames: string; selectedFrames: string; loopRange: string; layout: string;
-  sheetHorizontal: string; sheetVertical: string; sheetGrid: string; columns: string; borderPadding: string; framePadding: string; atlasJSON: string;
-  to: string; zoomOut: string; zoomIn: string; newDocument: string; resizeCanvas: string; width: string; height: string;
-  horizontal: string; vertical: string; left: string; center: string; right: string; top: string; bottom: string;
-  cancel: string; create: string; apply: string; sizeError: string; projectName: string; frame: string;
-  visibleLayerThumbnail: string; hiddenLayerThumbnail: string; restoreRecovery: string;
-  defaultDocumentName: string; layerBaseName: string; groupBaseName: string; tagBaseName: string; copySuffix: string;
-  closeUnsaved: (name: string) => string; toolsByID: Record<ToolID, string>;
-}> = {
-  en: {
-    file: "File", newProject: "New project", openProject: "Open project", importPNG: "Import PNG", saveProject: "Save", saveAs: "Save as",
-    exportPNG: "Export PNG", exportGIF: "Export animated GIF", exportSpriteSheet: "Export sprite sheet", recentProjects: "Recent projects", openDocuments: "Open documents", closeDocument: "Close", previousDocuments: "Previous documents", nextDocuments: "Next documents",
-    undo: "Undo", redo: "Redo", toggleTheme: "Toggle theme", switchLanguage: "Switch to Chinese", tools: "Tools",
-    color: "Color", currentColor: "Current color", palette: "Palette", useColor: "Use color", selection: "Selection", mode: "Mode",
-    foreground: "Foreground", background: "Background", swapColors: "Swap foreground and background", alpha: "Alpha", brush: "Brush", brushSize: "Brush size",
-    brushShape: "Brush shape", squareBrush: "Square", circleBrush: "Circle", addColor: "Add current color", removeColor: "Remove selected color", editColor: "Replace selected color with current color",
-    brushPreset: "Brush preset", crossBrush: "Cross", diamondBrush: "Diamond", customBrush: "Custom", brushFromSelection: "Create brush from selection", brushSpacing: "Spacing", pixelPerfect: "Pixel perfect", pressure: "Pen pressure", polygonSides: "Sides",
-    colorMode: "Color mode", rgbaMode: "RGBA", grayscaleMode: "Grayscale", indexedMode: "Indexed", bitmapMode: "Bitmap (1-bit)", extractPalette: "Extract palette from artwork", sortPalette: "Sort palette by hue",
-    selectionReplace: "Replace", selectionAdd: "Add", selectionSubtract: "Subtract", selectionIntersect: "Intersect",
-    selectionShape: "Shape", rectangularSelection: "Rectangle", ellipticalSelection: "Ellipse", lassoSelection: "Lasso", polygonSelection: "Polygon", magicWand: "Magic wand", tolerance: "Tolerance", selectOpaque: "Select opaque pixels", selectColor: "Select foreground color", invertSelection: "Invert selection", reselect: "Reselect", growSelection: "Grow selection", shrinkSelection: "Shrink selection", borderSelection: "Selection border", amount: "Amount",
-    transform: "Transform", transformModeLabel: "Mode", transformScale: "Scale", transformPerspective: "Perspective", transformDistort: "Distort", scaleSelection: "Scale selection", rotateClockwise: "Rotate clockwise", rotateCounterclockwise: "Rotate counterclockwise", flipHorizontal: "Flip horizontally", flipVertical: "Flip vertically",
-    arbitraryRotation: "Rotation angle", applyRotation: "Rotate selection",
-    layers: "Layers", addLayer: "Add layer", addGroup: "Add layer group", duplicateLayer: "Duplicate layer",
-    moveLayerUp: "Move layer up", moveLayerDown: "Move layer down", mergeLayerDown: "Merge layer down", hideLayer: "Hide layer", showLayer: "Show layer",
-    renameLayer: "Rename layer", lockLayer: "Lock layer", unlockLayer: "Unlock layer", collapseGroup: "Collapse group", expandGroup: "Expand group",
-    opacity: "Opacity", layerOpacity: "Layer opacity", blendMode: "Blend mode", normal: "Normal", multiply: "Multiply", screen: "Screen", overlay: "Overlay",
-    animation: "Animation", addFrame: "Add frame", newEmptyFrame: "New empty frame", duplicateFrame: "Duplicate frame", deleteFrame: "Delete frame", moveFrameBackward: "Move frame earlier",
-    moveFrameForward: "Move frame later", previousFrame: "Previous frame", nextFrame: "Next frame", frames: "Frames", pause: "Pause", play: "Play", onionSkin: "Onion skin", loop: "Loop",
-    linkCels: "Link selected cels", unlinkCels: "Unlink selected cels", duplicateCels: "Duplicate selected cels", duplicateLinkedCels: "Duplicate selected cels as linked", tags: "Frame tags", noTag: "No active tag", addTag: "Add frame tag", editTag: "Edit frame tag", deleteTag: "Delete frame tag", focusTag: "Focus active tag",
-    celTransform: "Selected cel transform", angle: "Angle", offsetX: "Offset X", offsetY: "Offset Y", applyCelTransform: "Apply to selected cels", rasterizeCels: "Rasterize to canvas",
-    tagName: "Tag name", direction: "Direction", forward: "Forward", reverse: "Reverse", pingpong: "Ping-pong", loopStart: "Loop start", loopEnd: "Loop end",
-    exportOptions: "Export options", export: "Export", scale: "Scale", applyPixelRatio: "Apply pixel ratio", playback: "Playback", once: "Once", forever: "Forever", repeatCount: "Repeat count",
-    frameRange: "Frame range", allFrames: "All frames", selectedFrames: "Selected frames", loopRange: "Loop range", layout: "Layout",
-    sheetHorizontal: "Horizontal", sheetVertical: "Vertical", sheetGrid: "Grid", columns: "Columns", borderPadding: "Border padding", framePadding: "Frame padding", atlasJSON: "Write atlas JSON",
-    to: "to", zoomOut: "Zoom out", zoomIn: "Zoom in",
-    newDocument: "New document", resizeCanvas: "Resize canvas", width: "Width", height: "Height",
-    horizontal: "Horizontal anchor", vertical: "Vertical anchor", left: "Left", center: "Center", right: "Right", top: "Top", bottom: "Bottom",
-    cancel: "Cancel", create: "Create", apply: "Apply", sizeError: "Enter whole-number dimensions from 1 to 2048.",
-    projectName: "Project name", frame: "Frame", visibleLayerThumbnail: "Visible layer thumbnail", hiddenLayerThumbnail: "Hidden layer thumbnail",
-    restoreRecovery: "Restore the local recovery project?", defaultDocumentName: "untitled.pixio", layerBaseName: "Layer", groupBaseName: "Group", tagBaseName: "Tag", copySuffix: "copy",
-    closeUnsaved: (name) => `Close ${name} without saving changes?`,
-    toolsByID: {pencil: "Pencil", eraser: "Eraser", eyedropper: "Eyedropper", zoom: "Zoom", hand: "Hand", move: "Move", line: "Line", rectangle: "Rectangle", ellipse: "Ellipse", curve: "Curve", polyline: "Polyline", polygon: "Polygon", fill: "Fill", gradient: "Gradient", spray: "Spray", blur: "Blur", jumble: "Jumble", contour: "Contour", "replace-color": "Replace color", selection: "Selection", transform: "Transform", crop: "Crop", slice: "Slice", text: "Text"},
-  },
-  zh: {
-    file: "文件", newProject: "新建项目", openProject: "打开项目", importPNG: "导入 PNG", saveProject: "保存", saveAs: "另存为",
-    exportPNG: "导出 PNG", exportGIF: "导出 GIF 动画", exportSpriteSheet: "导出精灵图", recentProjects: "最近项目", openDocuments: "已打开的文件", closeDocument: "关闭", previousDocuments: "向前滚动文件", nextDocuments: "向后滚动文件",
-    undo: "撤销", redo: "重做", toggleTheme: "切换主题", switchLanguage: "切换为 English", tools: "工具",
-    color: "颜色", currentColor: "当前颜色", palette: "调色板", useColor: "使用颜色", selection: "选区", mode: "组合",
-    foreground: "前景色", background: "背景色", swapColors: "交换前景色和背景色", alpha: "透明度", brush: "笔刷", brushSize: "笔刷尺寸",
-    brushShape: "笔刷形状", squareBrush: "方形", circleBrush: "圆形", addColor: "添加当前颜色", removeColor: "移除所选颜色", editColor: "用当前颜色替换所选颜色",
-    brushPreset: "笔刷预设", crossBrush: "十字", diamondBrush: "菱形", customBrush: "自定义", brushFromSelection: "从选区创建笔刷", brushSpacing: "间距", pixelPerfect: "像素完美", pressure: "压感", polygonSides: "边数",
-    colorMode: "颜色模式", rgbaMode: "RGBA", grayscaleMode: "灰度", indexedMode: "索引色", bitmapMode: "位图（1 位）", extractPalette: "从作品提取调色板", sortPalette: "按色相整理调色板",
-    selectionReplace: "替换", selectionAdd: "添加", selectionSubtract: "减去", selectionIntersect: "相交",
-    selectionShape: "形状", rectangularSelection: "矩形", ellipticalSelection: "椭圆", lassoSelection: "套索", polygonSelection: "多边形", magicWand: "魔棒", tolerance: "容差", selectOpaque: "选择不透明像素", selectColor: "选择前景色", invertSelection: "反选", reselect: "重新选择", growSelection: "扩展选区", shrinkSelection: "收缩选区", borderSelection: "选区边框", amount: "数量",
-    transform: "变换", transformModeLabel: "模式", transformScale: "缩放", transformPerspective: "透视", transformDistort: "扭曲", scaleSelection: "缩放选区", rotateClockwise: "顺时针旋转", rotateCounterclockwise: "逆时针旋转", flipHorizontal: "水平翻转", flipVertical: "垂直翻转",
-    arbitraryRotation: "旋转角度", applyRotation: "旋转选区",
-    layers: "图层", addLayer: "新建图层", addGroup: "新建图层组", duplicateLayer: "复制图层",
-    moveLayerUp: "上移图层", moveLayerDown: "下移图层", mergeLayerDown: "向下合并图层", hideLayer: "隐藏图层", showLayer: "显示图层",
-    renameLayer: "重命名图层", lockLayer: "锁定图层", unlockLayer: "解锁图层", collapseGroup: "折叠图层组", expandGroup: "展开图层组",
-    opacity: "不透明度", layerOpacity: "图层不透明度", blendMode: "混合模式", normal: "正常", multiply: "正片叠底", screen: "滤色", overlay: "叠加",
-    animation: "动画", addFrame: "新建帧", newEmptyFrame: "新建空帧", duplicateFrame: "复制帧", deleteFrame: "删除帧", moveFrameBackward: "前移帧",
-    moveFrameForward: "后移帧", previousFrame: "上一帧", nextFrame: "下一帧", frames: "帧", pause: "暂停", play: "播放", onionSkin: "洋葱皮", loop: "循环",
-    linkCels: "链接所选动画格", unlinkCels: "取消链接所选动画格", duplicateCels: "复制所选动画格", duplicateLinkedCels: "复制并链接所选动画格", tags: "帧标签", noTag: "未选择帧标签", addTag: "添加帧标签", editTag: "编辑帧标签", deleteTag: "删除帧标签", focusTag: "聚焦当前帧标签",
-    celTransform: "所选动画格变换", angle: "角度", offsetX: "水平偏移", offsetY: "垂直偏移", applyCelTransform: "应用到所选动画格", rasterizeCels: "栅格化到画布",
-    tagName: "标签名称", direction: "方向", forward: "正向", reverse: "反向", pingpong: "往返", loopStart: "循环起点", loopEnd: "循环终点",
-    exportOptions: "导出选项", export: "导出", scale: "缩放", applyPixelRatio: "应用像素宽高比", playback: "播放方式", once: "一次", forever: "无限循环", repeatCount: "循环次数",
-    frameRange: "帧范围", allFrames: "全部帧", selectedFrames: "所选帧", loopRange: "循环范围", layout: "布局",
-    sheetHorizontal: "横向", sheetVertical: "纵向", sheetGrid: "网格", columns: "列数", borderPadding: "外边距", framePadding: "帧间距", atlasJSON: "生成图集 JSON",
-    to: "至", zoomOut: "缩小", zoomIn: "放大",
-    newDocument: "新建文件", resizeCanvas: "调整画布尺寸", width: "宽度", height: "高度",
-    horizontal: "水平锚点", vertical: "垂直锚点", left: "左侧", center: "居中", right: "右侧", top: "顶部", bottom: "底部",
-    cancel: "取消", create: "创建", apply: "应用", sizeError: "请输入 1 到 2048 的整数尺寸。",
-    projectName: "项目名称", frame: "帧", visibleLayerThumbnail: "可见图层缩略图", hiddenLayerThumbnail: "隐藏图层缩略图",
-    restoreRecovery: "是否恢复本地自动保存的项目？", defaultDocumentName: "未命名.pixio", layerBaseName: "图层", groupBaseName: "组", tagBaseName: "标签", copySuffix: "副本",
-    closeUnsaved: (name) => `关闭 ${name} 并放弃未保存的更改？`,
-    toolsByID: {pencil: "铅笔", eraser: "橡皮擦", eyedropper: "吸管", zoom: "缩放", hand: "抓手", move: "移动", line: "直线", rectangle: "矩形", ellipse: "椭圆", curve: "曲线", polyline: "折线", polygon: "多边形", fill: "填充", gradient: "渐变", spray: "喷枪", blur: "模糊", jumble: "抖动", contour: "轮廓", "replace-color": "颜色替换", selection: "选区", transform: "变换", crop: "裁剪", slice: "切片", text: "文字"},
-  },
-};
-
-const chineseStatus: Record<string, string> = {
-  Ready: "就绪",
-  "New project": "新建项目",
-  "Saving project...": "正在保存项目...",
-  "Save cancelled": "已取消保存",
-  "Opening project...": "正在打开项目...",
-  "Open cancelled": "已取消打开",
-  "Exporting...": "正在导出...",
-  "Export cancelled": "已取消导出",
-  "Exporting GIF...": "正在导出 GIF...",
-  "Exporting sprite sheet...": "正在导出精灵图...",
-  "PNG export is available in the desktop app": "PNG 导出仅在桌面应用中可用",
-  "Animation export is available in the desktop app": "动画导出仅在桌面应用中可用",
-  "Project saving is available in the desktop app": "项目保存仅在桌面应用中可用",
-  "Project opening is available in the desktop app": "项目打开仅在桌面应用中可用",
-  "PNG import is available in the desktop app": "PNG 导入仅在桌面应用中可用",
-  "Recent projects open in the desktop app": "最近项目仅能在桌面应用中打开",
-  "Export failed": "导出失败",
-  "Save failed": "保存失败",
-  "Open failed": "打开失败",
-  "Import failed": "导入失败",
-  "application is not ready": "应用尚未就绪",
-  "invalid PNG dimensions": "PNG 尺寸无效",
-  "project path must use .pixio": "项目路径必须使用 .pixio 扩展名",
-  "thumbnail is not a PNG image": "缩略图不是有效的 PNG 图片",
-  "invalid canvas dimensions": "画布尺寸无效",
-  "invalid project document": "项目文档无效",
-  "invalid layer": "图层数据无效",
-  "invalid frame": "帧数据无效",
-  "invalid active layer or frame": "当前图层或帧无效",
-  "invalid cel": "动画格数据无效",
-  "project must contain one cel per layer and frame": "每个图层和帧都必须包含一个动画格",
-  "Project cels are missing": "项目缺少动画格",
-  "Project cel pixels are invalid": "动画格像素数据无效",
-  "Project cel dimensions are invalid": "动画格尺寸无效",
-  "Project contains duplicate cels": "项目包含重复的动画格",
-  "Project JSON is invalid": "项目 JSON 无效",
-  "Project document is invalid": "项目文档无效",
-  "Invalid project response": "项目响应无效",
-  "Invalid PNG response": "PNG 响应无效",
-  "Recovery documents are missing": "恢复文件缺少文档",
-  "Recovery document entry is invalid": "恢复文件中的文档条目无效",
-  "Recovery JSON is invalid": "恢复文件 JSON 无效",
-  "invalid JSON": "JSON 数据无效",
-  "GIF frames and durations must be non-empty and equal": "GIF 帧和帧时长必须存在且数量一致",
-  "GIF duration must be positive": "GIF 帧时长必须为正数",
-  "sprite sheet needs at least one frame": "精灵图至少需要一帧",
-  "sprite sheet is too wide": "精灵图宽度超出限制",
-  "image dimensions must be positive": "图片尺寸必须为正数",
-  "image dimensions must be positive and within limits": "图片尺寸必须为正数且不能超出限制",
-  "Copied Selection": "已复制选区",
-  "Copied Merged Selection": "已复制合并结果",
-  "Fill Selection": "填充选区",
-  "Stroke Selection": "描边选区",
-  "Shift Pixels": "环绕平移像素",
-  "Copy Selection to New Layer": "复制选区到新图层",
-  "Cut Selection to New Layer": "剪切选区到新图层",
-  "Paste as New Layer": "粘贴为新图层",
-  "Paste as Reference Layer": "粘贴为参考图层",
-  "Created project from clipboard": "已从剪贴板创建项目",
-  "Selected All": "已全选",
-  "Selected All Cels": "已选择当前图层全部动画格",
-  "Selected Linked Cels": "已选择链接动画格",
-  "Selection cleared": "已取消选区",
-  "Scale Selection": "缩放选区",
-  "Rotate Selection Clockwise": "顺时针旋转选区",
-  "Rotate Selection Counterclockwise": "逆时针旋转选区",
-  "Flip Selection Horizontally": "水平翻转选区",
-  "Flip Selection Vertically": "垂直翻转选区",
-  "Change Layer Opacity": "修改图层不透明度",
-  "Change Cel Properties": "修改动画格属性",
-  "MCP document edits": "MCP 文档编辑",
-  "MCP set pixels": "MCP 像素编辑",
-  "Select an image layer": "请选择图像图层",
-  "Recent project is unavailable": "最近项目不可用",
-  "Add Layer": "新建图层",
-  "Add Layer Group": "新建图层组",
-  "Delete Layer": "删除图层",
-  "Duplicate Layer": "复制图层",
-  "Rename Layer": "重命名图层",
-  "Hide Layer": "隐藏图层",
-  "Show Layer": "显示图层",
-  "Lock Layer": "锁定图层",
-  "Unlock Layer": "解锁图层",
-  "Move Layer Up": "上移图层",
-  "Move Layer Down": "下移图层",
-  "Merge Layer Down": "向下合并图层",
-  "Change Blend Mode": "修改混合模式",
-  "Add Palette Color": "添加调色板颜色",
-  "Edit Palette Color": "编辑调色板颜色",
-  "Remove Palette Color": "移除调色板颜色",
-  "Add Frame": "新建帧",
-  "Duplicate Frame": "复制帧",
-  "Delete Frame": "删除帧",
-  "Move Frame": "移动帧",
-  "Change Frame Rate": "修改帧率",
-  "Link Cels": "链接所选动画格",
-  "Unlink Cels": "取消链接所选动画格",
-  "Add Frame Tag": "添加帧标签",
-  "Edit Frame Tag": "编辑帧标签",
-  "Delete Frame Tag": "删除帧标签",
-  "Crop Canvas": "裁剪画布",
-  "Resize Canvas": "调整画布尺寸",
-  "Delete Selection": "删除选区",
-  "Cut Selection": "剪切选区",
-  "Paste Selection": "粘贴选区",
-  "Selected Cels": "已选择动画格",
-  "Copied Cels": "已复制动画格",
-  "Cut Cels": "剪切动画格",
-  "Clear Cels": "清除动画格",
-  "Paste Cels": "粘贴动画格",
-  "Selected cels are locked": "所选动画格已锁定",
-  "Cels cannot be pasted here": "无法在此处粘贴动画格",
-  "Unsupported clipboard content": "剪贴板内容不受支持",
-  "selected project is already open": "所选项目已在其他标签中打开",
-  "Rename Project": "重命名项目",
-  "Add Guide": "添加辅助线",
-  "Move Guide": "移动辅助线",
-  "Delete Guide": "删除辅助线",
-  "Change Grid": "修改网格",
-  "Move Grid": "移动网格",
-  "Change Grid Snapping": "修改网格吸附",
-  "Change Symmetry": "修改对称设置",
-  "Move Symmetry Axis": "移动对称轴",
-  "Change Tiled Preview": "修改平铺预览",
-  "Change Onion Skin": "修改洋葱皮",
-  "Change Layer Role": "修改图层角色",
-  "Layer Properties": "图层属性",
-  "Duplicate Layers": "复制图层",
-  "Move Layers": "移动图层",
-  "Merge Selected Layers": "合并所选图层",
-  "Flatten Visible Layers": "合并可见图层",
-  "Create Cels": "创建动画格",
-  "Delete Cels": "删除动画格",
-  "Reverse Frames": "反转所选帧",
-  "Add Tilemap Layer": "新建图块图层",
-  "Convert Layer to Tilemap": "将图层转换为图块地图",
-  "Add Tile": "添加图块",
-  "Delete Tile": "删除图块",
-  "Draw Tiles": "绘制图块",
-  "Draw Tile Pixels": "绘制图块像素",
-  "Change Color Mode": "修改颜色模式",
-  "Assign Color Profile": "分配颜色配置文件",
-  "Convert Color Profile": "转换颜色配置文件",
-  "Assign Embedded Color Profile": "分配嵌入式颜色配置文件",
-  "Import Palette": "导入调色板",
-  "Extract Palette": "提取调色板",
-  "Sort Palette": "整理调色板",
-  "Text": "文字",
-  "Outline": "轮廓",
-  "Shading": "明暗处理",
-  "Brightness / Contrast": "亮度 / 对比度",
-  "Hue / Saturation / Lightness": "色相 / 饱和度 / 明度",
-  "Invert Colors": "反相颜色",
-  "Convolution": "卷积滤镜",
-  "Median Filter": "中值滤波",
-  "Despeckle": "去斑",
-  "Color Curves": "颜色曲线",
-  "HSV / HSL Adjustment": "HSV / HSL 调整",
-  "Channel Mask": "通道掩码",
-  "Transform Cels": "变换动画格",
-  "Move Cels": "移动动画格",
-  "Rasterize Cels": "将动画格栅格化到画布",
-  "Move Selection": "移动选区",
-  "Rotate Selection": "旋转选区",
-  "Change Frame Duration": "修改帧时长",
-  "Resize Sprite": "调整精灵内容尺寸",
-  "Trim Canvas": "裁去画布透明边缘",
-  "Rotate Sprite Clockwise": "顺时针旋转精灵",
-  "Rotate Sprite Counterclockwise": "逆时针旋转精灵",
-  "Rotate Sprite 180": "旋转精灵 180°",
-  "Flip Sprite Horizontally": "水平翻转精灵",
-  "Flip Sprite Vertically": "垂直翻转精灵",
-  "Add Slice": "添加切片",
-  "Move Slices": "移动切片",
-  "Scale Slices": "缩放切片",
-  "Delete Slices": "删除切片",
-  "Slice Properties": "切片属性",
-  "Edit Slice": "编辑切片",
-  "Edit Slice Pivot": "编辑切片中心点",
-  "Rename Slice": "重命名切片",
-  "Toggle Nine-patch": "切换九宫格",
-  "Delete Slice": "删除切片",
-  "History state restored": "已恢复历史状态",
-  "Exporting PNG sequence...": "正在导出 PNG 序列...",
-  "Sequence export failed": "序列导出失败",
-  "No editable cels selected": "没有选择可编辑的动画格",
-  "No editable image cels": "没有可编辑的图像动画格",
-  "Text rendering failed": "文字渲染失败",
-  "Exported packed atlas": "已导出紧凑图集",
-  "Pause playback to edit": "暂停播放后才能编辑",
-};
-
-export function localizeStatus(value: string, language: Language): string {
-  if (language === "en") return value;
-  const named = chineseStatus[value];
-  if (named) return named;
-  const tool = (Object.keys(labels.en.toolsByID) as ToolID[]).find((id) => labels.en.toolsByID[id] === value);
-  if (tool) return labels.zh.toolsByID[tool];
-  const projectEntryTooLarge = value.match(/^project entry (.+) is too large$/);
-  if (projectEntryTooLarge) return `项目条目 ${projectEntryTooLarge[1]} 过大`;
-  const celDimensions = value.match(/^cel (.+) dimensions do not match manifest$/);
-  if (celDimensions) return `动画格 ${celDimensions[1]} 的尺寸与项目清单不一致`;
-  const gifDuration = value.match(/^GIF duration exceeds (\d+) centiseconds$/);
-  if (gifDuration) return `GIF 帧时长超过 ${gifDuration[1]} 个百分之一秒`;
-  const sizeLimit = value.match(/^(thumbnail|manifest) exceeds (\d+) bytes$/);
-  if (sizeLimit) return `${sizeLimit[1] === "thumbnail" ? "缩略图" : "项目清单"}超过 ${sizeLimit[2]} 字节限制`;
-  const pngSequenceExport = value.match(/^Exported (\d+) PNG frames$/);
-  if (pngSequenceExport) return `已导出 ${pngSequenceExport[1]} 个 PNG 帧`;
-  const splitSpriteSheetExport = value.match(/^Exported (tag|layer) sprite sheets$/);
-  if (splitSpriteSheetExport) return `已导出按${splitSpriteSheetExport[1] === "tag" ? "帧标签" : "图层"}拆分的精灵图`;
-  const prefixed = [
-    ["Opened ", "已打开 "],
-    ["Recovered ", "已恢复 "],
-    ["Imported ", "已导入 "],
-    ["Saved ", "已保存 "],
-    ["Exported ", "已导出 "],
-    ["Undid ", "已撤销："],
-    ["Redid ", "已重做："],
-    ["open PNG: ", "打开 PNG 失败："],
-    ["rewind PNG: ", "重置 PNG 读取位置失败："],
-    ["decode PNG: ", "解析 PNG 失败："],
-    ["decode project: ", "解析项目失败："],
-    ["decode recovery: ", "解析恢复文件失败："],
-    ["encode recovery: ", "编码恢复文件失败："],
-    ["sync recovery: ", "同步恢复文件失败："],
-    ["read recovery: ", "读取恢复文件失败："],
-    ["clear recovery: ", "清除恢复文件失败："],
-    ["find recovery directory: ", "查找恢复目录失败："],
-    ["create recovery directory: ", "创建恢复目录失败："],
-    ["create temporary recovery: ", "创建临时恢复文件失败："],
-    ["write recovery: ", "写入恢复文件失败："],
-    ["close recovery: ", "关闭恢复文件失败："],
-    ["replace recovery: ", "替换恢复文件失败："],
-    ["encode opened project: ", "编码已打开项目失败："],
-    ["encode project: ", "编码项目失败："],
-    ["open project: ", "打开项目失败："],
-    ["invalid project entry ", "无效的项目条目 "],
-    ["duplicate project entry ", "重复的项目条目 "],
-    ["project is missing cel image ", "项目缺少动画格图片 "],
-    ["decode manifest: ", "解析项目清单失败："],
-    ["create temporary project: ", "创建临时项目失败："],
-    ["close temporary project: ", "关闭临时项目失败："],
-    ["sync temporary project: ", "同步临时项目失败："],
-    ["replace project: ", "替换项目失败："],
-    ["encode empty thumbnail: ", "编码空缩略图失败："],
-    ["create cel entry: ", "创建动画格条目失败："],
-    ["encode cel ", "编码动画格失败："],
-    ["write cel ", "写入动画格失败："],
-    ["encode manifest: ", "编码项目清单失败："],
-    ["manifest exceeds ", "项目清单超过限制："],
-    ["create manifest: ", "创建项目清单失败："],
-    ["write manifest: ", "写入项目清单失败："],
-    ["create thumbnail: ", "创建缩略图失败："],
-    ["encode thumbnail: ", "编码缩略图失败："],
-    ["thumbnail exceeds ", "缩略图超过限制："],
-    ["write thumbnail: ", "写入缩略图失败："],
-    ["close project archive: ", "关闭项目文件失败："],
-    ["open project entry: ", "打开项目条目失败："],
-    ["read project entry ", "读取项目条目失败："],
-    ["decode cel ", "解析动画格失败："],
-    ["create PNG: ", "创建 PNG 失败："],
-    ["encode PNG: ", "编码 PNG 失败："],
-    ["sync PNG: ", "同步 PNG 失败："],
-    ["close PNG: ", "关闭 PNG 失败："],
-    ["rename PNG: ", "替换 PNG 失败："],
-    ["create GIF: ", "创建 GIF 失败："],
-    ["encode GIF: ", "编码 GIF 失败："],
-    ["sync GIF: ", "同步 GIF 失败："],
-    ["close GIF: ", "关闭 GIF 失败："],
-    ["rename GIF: ", "替换 GIF 失败："],
-    ["create sprite sheet: ", "创建精灵图失败："],
-    ["encode sprite sheet: ", "编码精灵图失败："],
-    ["sync sprite sheet: ", "同步精灵图失败："],
-    ["close sprite sheet: ", "关闭精灵图失败："],
-    ["rename sprite sheet: ", "替换精灵图失败："],
-    ["GIF duration exceeds ", "GIF 帧时长超过限制："],
-    ["image dimensions exceed ", "图片尺寸超过限制："],
-    ["invalid RGBA buffer: ", "RGBA 像素数据无效："],
-    ["unsupported .pixio format version ", "不支持的 .pixio 格式版本 "],
-    ["project is missing ", "项目缺少 "],
-    ["project entry ", "项目条目 "],
-  ] as const;
-  for (const [source, target] of prefixed) if (value.startsWith(source)) return `${target}${localizeStatus(value.slice(source.length), language)}`;
-  if (value.endsWith(" is locked")) return `${value.slice(0, -10)} 已锁定`;
-  return value;
-}
-
-type WailsWindow = Window & {
-  go?: {main?: {App?: unknown}};
-  runtime?: unknown;
-};
-
-const hasWailsAppBridge = () => Boolean((window as WailsWindow).go?.main?.App);
-const hasWailsRuntimeBridge = () => Boolean((window as WailsWindow).runtime);
-const webAPIBaseURL = "http://127.0.0.1:17353/api/pixio";
-
-async function writeClipboardText(value: string) {
-  if (hasWailsRuntimeBridge()) return ClipboardSetText(value);
-  if (navigator.clipboard) await navigator.clipboard.writeText(value);
-}
-
-async function readClipboardText() {
-  if (hasWailsRuntimeBridge()) return ClipboardGetText();
-  return navigator.clipboard?.readText() ?? "";
-}
-
-async function pixelClipboardBlob(clipboard: PixelClipboard) {
-  const canvas = document.createElement("canvas");
-  canvas.width = clipboard.width;
-  canvas.height = clipboard.height;
-  const context = canvas.getContext("2d");
-  if (!context) throw new Error("Clipboard image is unavailable");
-  context.putImageData(new ImageData(new Uint8ClampedArray(clipboard.pixels), clipboard.width, clipboard.height), 0, 0);
-  return canvasBlob(canvas, "image/png");
-}
-
-async function writePixelClipboard(clipboard: PixelClipboard) {
-  if (hasWailsAppBridge()) {
-    await ClipboardWriteImage(clipboard.width, clipboard.height, bytesToBase64(clipboard.pixels));
-    return;
-  }
-  if (navigator.clipboard?.write && typeof ClipboardItem !== "undefined") {
-    const blob = await pixelClipboardBlob(clipboard);
-    await navigator.clipboard.write([new ClipboardItem({"image/png": blob})]);
-    return;
-  }
-  await writeClipboardText(serializePixelClipboard(clipboard));
-}
-
-async function readPixelClipboardImage(): Promise<PixelClipboard | null> {
-  if (hasWailsAppBridge()) {
-    const payload = await ClipboardReadImage();
-    if (!payload) return null;
-    const image = parsePNGResponse(payload);
-    return {width: image.width, height: image.height, pixels: image.pixels};
-  }
-  if (!navigator.clipboard?.read) return null;
-  const items = await navigator.clipboard.read();
-  for (const item of items) {
-    const type = item.types.find((candidate) => candidate.startsWith("image/"));
-    if (!type) continue;
-    const bitmap = await createImageBitmap(await item.getType(type));
-    try {
-      if (!validPNGImportDimensions(bitmap.width, bitmap.height)) throw new Error("Invalid clipboard image dimensions");
-      const canvas = document.createElement("canvas");
-      canvas.width = bitmap.width;
-      canvas.height = bitmap.height;
-      const context = canvas.getContext("2d");
-      if (!context) return null;
-      context.drawImage(bitmap, 0, 0);
-      return {width: bitmap.width, height: bitmap.height, pixels: context.getImageData(0, 0, bitmap.width, bitmap.height).data};
-    } finally {
-      bitmap.close();
-    }
-  }
-  return null;
-}
-
-function downloadBlob(blob: Blob, filename: string) {
-  const url = URL.createObjectURL(blob);
-  const link = document.createElement("a");
-  link.href = url;
-  link.download = filename;
-  link.click();
-  window.setTimeout(() => URL.revokeObjectURL(url), 0);
-}
-
-function canvasBlob(canvas: HTMLCanvasElement, type: string) {
-  return new Promise<Blob>((resolve, reject) => {
-    canvas.toBlob((blob) => blob ? resolve(blob) : reject(new Error("Export failed")), type);
-  });
-}
-
-async function chooseBrowserFile(accept: string) {
-  return new Promise<File | null>((resolve) => {
-    const input = document.createElement("input");
-    input.type = "file";
-    input.accept = accept;
-    input.onchange = () => resolve(input.files?.[0] ?? null);
-    input.click();
-  });
-}
-
-async function chooseBrowserFiles(accept: string) {
-  return new Promise<File[]>((resolve) => {
-    const input = document.createElement("input");
-    input.type = "file";
-    input.accept = accept;
-    input.multiple = true;
-    input.onchange = () => resolve(Array.from(input.files ?? []).sort((left, right) => left.name.localeCompare(right.name, undefined, {numeric: true})));
-    input.click();
-  });
-}
-
-async function decodeBrowserPNG(file: File) {
-  const image = await createImageBitmap(file);
-  try {
-    if (!validPNGImportDimensions(image.width, image.height)) throw new Error("invalid PNG dimensions");
-    const canvas = document.createElement("canvas");
-    canvas.width = image.width;
-    canvas.height = image.height;
-    const context = canvas.getContext("2d", {willReadFrequently: true});
-    if (!context) throw new Error("PNG import is unavailable");
-    context.drawImage(image, 0, 0);
-    return {name: file.name, width: canvas.width, height: canvas.height, pixels: context.getImageData(0, 0, canvas.width, canvas.height).data};
-  } finally {
-    image.close();
-  }
-}
-
-async function browserPNGBlob(width: number, height: number, pixels: Uint8ClampedArray) {
-  const canvas = document.createElement("canvas");
-  canvas.width = width;
-  canvas.height = height;
-  const context = canvas.getContext("2d");
-  if (!context) throw new Error("PNG export is unavailable");
-  context.putImageData(new ImageData(new Uint8ClampedArray(pixels), width, height), 0, 0);
-  return canvasBlob(canvas, "image/png");
-}
-
-function browserGIFBlob(width: number, height: number, frames: Uint8ClampedArray[], durations: number[], loopCount: number, scale = 1) {
-  const encoder = GIFEncoder();
-  const outputWidth = width * scale;
-  const outputHeight = height * scale;
-  for (let index = 0; index < frames.length; index += 1) {
-    const frame = scale === 1 ? frames[index] : resizePixels(width, height, frames[index], scale, scale).pixels;
-    const palette = quantize(frame, 256, {format: "rgba4444", oneBitAlpha: true});
-    const transparentIndex = palette.findIndex((color) => color[3] === 0);
-    encoder.writeFrame(applyPalette(frame, palette, "rgba4444"), outputWidth, outputHeight, {
-      palette,
-      delay: durations[index],
-      repeat: index === 0 ? loopCount : undefined,
-      transparent: transparentIndex >= 0,
-      transparentIndex: transparentIndex >= 0 ? transparentIndex : 0,
-    });
-  }
-  encoder.finish();
-  return new Blob([new Uint8Array(encoder.bytes())], {type: "image/gif"});
-}
-
-async function webEncodePixio(document: string) {
-  const response = await fetch(`${webAPIBaseURL}/encode`, {method: "POST", headers: {"Content-Type": "application/json"}, body: document});
-  if (!response.ok) throw new Error(await response.text());
-  return response.blob();
-}
-
-async function webDecodePixio(file: File) {
-  const response = await fetch(`${webAPIBaseURL}/decode`, {method: "POST", headers: {"Content-Type": "application/octet-stream"}, body: file});
-  if (!response.ok) throw new Error(await response.text());
-  return response.text();
-}
-
 function storedNumber(key: string, fallback: number, minimum: number, maximum: number) {
   const stored = localStorage.getItem(key);
   if (stored === null) return fallback;
@@ -1587,82 +472,9 @@ function storedNumber(key: string, fallback: number, minimum: number, maximum: n
   return Number.isFinite(value) ? Math.max(minimum, Math.min(maximum, value)) : fallback;
 }
 
-export function normalizePanelDimensionInput(rawValue: string, currentValue: number, minimum: number, maximum: number) {
-  if (rawValue.trim() === "") return currentValue;
-  const value = Number(rawValue);
-  if (!Number.isFinite(value)) return currentValue;
-  return Math.max(minimum, Math.min(maximum, Math.round(value)));
-}
-
-export function calculatePanelResizeValue(startValue: number, startClient: number, currentClient: number, uiScalePercent: number, minimum: number, maximum: number) {
-  const uiScale = Math.max(0.01, uiScalePercent / 100);
-  const delta = (startClient - currentClient) / uiScale;
-  return Math.max(minimum, Math.min(maximum, Math.round(startValue + delta)));
-}
-
-export type TimelineScrollMetrics = {
-  scrollTop: number;
-  scrollHeight: number;
-  clientHeight: number;
-};
-
-export function getTimelineScrollTopForPeer(source: TimelineScrollMetrics, target: TimelineScrollMetrics) {
-  const targetMax = Math.max(0, target.scrollHeight - target.clientHeight);
-  return Math.max(0, Math.min(targetMax, source.scrollTop));
-}
-
-export function syncTimelineScrollPositions(source: TimelineScrollMetrics, target: TimelineScrollMetrics) {
-  const scrollTop = getTimelineScrollTopForPeer(source, target);
-  source.scrollTop = scrollTop;
-  target.scrollTop = scrollTop;
-  return scrollTop;
-}
-
-export function getTimelineHorizontalScrollbarHeight(surface: {offsetHeight: number; clientHeight: number}) {
-  return Math.max(0, surface.offsetHeight - surface.clientHeight);
-}
-
 function isMenuSurfaceTarget(target: EventTarget | null, refs: ReadonlyArray<{current: HTMLElement | null}>) {
   if (typeof Node === "undefined" || !(target instanceof Node)) return false;
   return refs.some((ref) => Boolean(ref.current?.contains(target)));
-}
-
-function defaultToolShortcutAssignments(): ToolShortcutAssignments {
-  const assignments = Object.fromEntries(tools.map(({id}) => [id, ""])) as ToolShortcutAssignments;
-  for (const [key, tool] of Object.entries(toolShortcuts)) assignments[tool] = key;
-  return assignments;
-}
-
-function storedToolShortcutAssignments(): ToolShortcutAssignments {
-  const fallback = defaultToolShortcutAssignments();
-  try {
-    const parsed = JSON.parse(localStorage.getItem("pixtorio-tool-shortcuts") ?? "null") as Record<string, unknown> | null;
-    if (!parsed) return fallback;
-    const used = new Set<string>();
-    for (const {id} of tools) {
-      const key = typeof parsed[id] === "string" ? parsed[id].toLowerCase() : fallback[id];
-      if (key && (!/^[a-z0-9]$/.test(key) || used.has(key))) continue;
-      fallback[id] = key;
-      if (key) used.add(key);
-    }
-  } catch {
-    return fallback;
-  }
-  return fallback;
-}
-
-function storedCommandShortcutAssignments(): Record<CommandShortcutID, string> {
-  let assignments = {...defaultCommandShortcuts};
-  try {
-    const parsed = JSON.parse(localStorage.getItem("pixtorio-command-shortcuts") ?? "null") as Record<string, unknown> | null;
-    if (!parsed) return assignments;
-    for (const command of Object.keys(assignments) as CommandShortcutID[]) {
-      if (typeof parsed[command] === "string") assignments = assignCommandShortcut(assignments, command, normalizeShortcut(parsed[command]));
-    }
-  } catch {
-    return assignments;
-  }
-  return assignments;
 }
 
 function createBlankDocument(language: Language, width = 64, height = 64, colorMode: ColorMode = "rgba", preferences?: AppPreferences) {
@@ -1684,6 +496,7 @@ function createBlankDocument(language: Language, width = 64, height = 64, colorM
 }
 
 function App() {
+  const {shortcutAssignments, commandShortcutAssignments, setCommandShortcutAssignments, shortcutToolByKey, updateToolShortcut, captureCommandShortcut, resetToolShortcuts} = useShortcuts();
   const appShellRef = useRef<HTMLDivElement>(null);
   const [preferences, setPreferences] = useState<AppPreferences>(() => readPreferences(localStorage));
   const initialLanguageRef = useRef<Language>(preferences.general.language);
@@ -2066,8 +879,6 @@ function App() {
   const [autosaveSeconds, setAutosaveSeconds] = useState(preferences.files.autosaveSeconds);
   const [showPixelGrid, setShowPixelGrid] = useState(preferences.grid.showPixelGrid);
   const [historyLimitMB, setHistoryLimitMB] = useState(preferences.undo.memoryLimitMB);
-  const [shortcutAssignments, setShortcutAssignments] = useState<ToolShortcutAssignments>(storedToolShortcutAssignments);
-  const [commandShortcutAssignments, setCommandShortcutAssignments] = useState<Record<CommandShortcutID, string>>(storedCommandShortcutAssignments);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
   const [lightTheme, setLightTheme] = useState(true);
@@ -2100,60 +911,6 @@ function App() {
   const [colorProfileTarget, setColorProfileTarget] = useState<ConvertibleColorProfile>("srgb");
   const [pixelAspectWidthDraft, setPixelAspectWidthDraft] = useState(1);
   const [pixelAspectHeightDraft, setPixelAspectHeightDraft] = useState(1);
-  const shortcutToolByKey = useMemo(() => {
-    const entries = Object.entries(shortcutAssignments)
-      .filter((entry): entry is [ToolID, string] => Boolean(entry[1]));
-    return Object.fromEntries(entries.map(([tool, key]) => [key, tool])) as Record<string, ToolID>;
-  }, [shortcutAssignments]);
-
-  const updateToolShortcut = useCallback((tool: ToolID, rawKey: string) => {
-    const key = rawKey.trim().slice(-1).toLowerCase();
-    if (key && !/^[a-z0-9]$/.test(key)) return;
-    if (key) {
-      setCommandShortcutAssignments((current) => {
-        const next = {...current};
-        for (const command of Object.keys(next) as CommandShortcutID[]) {
-          if (normalizeShortcut(next[command]) === key.toUpperCase()) next[command] = "";
-        }
-        return next;
-      });
-    }
-    setShortcutAssignments((current) => {
-      const next = {...current};
-      const previous = current[tool];
-      const conflict = (Object.keys(current) as ToolID[]).find((candidate) => candidate !== tool && current[candidate] === key);
-      next[tool] = key;
-      if (conflict) next[conflict] = previous;
-      return next;
-    });
-  }, []);
-
-  const captureCommandShortcut = useCallback((command: CommandShortcutID, event: ReactKeyboardEvent<HTMLInputElement>) => {
-    event.preventDefault();
-    event.stopPropagation();
-    if (event.key === "Escape") {
-      event.currentTarget.blur();
-      return;
-    }
-    if (event.key === "Backspace") {
-      setCommandShortcutAssignments((current) => assignCommandShortcut(current, command, ""));
-      return;
-    }
-    const shortcut = shortcutFromEvent(event.nativeEvent);
-    if (shortcut) {
-      if (/^[A-Z0-9]$/.test(shortcut)) {
-        setShortcutAssignments((current) => Object.fromEntries(Object.entries(current).map(([tool, key]) => [tool, key === shortcut.toLowerCase() ? "" : key])) as ToolShortcutAssignments);
-      }
-      setCommandShortcutAssignments((current) => assignCommandShortcut(current, command, shortcut));
-    }
-  }, []);
-
-  const resetToolShortcuts = useCallback(() => {
-    const defaults = defaultToolShortcutAssignments();
-    const defaultKeys = new Set(Object.values(defaults).filter(Boolean).map((key) => key.toUpperCase()));
-    setShortcutAssignments(defaults);
-    setCommandShortcutAssignments((current) => Object.fromEntries(Object.entries(current).map(([command, shortcut]) => [command, defaultKeys.has(normalizeShortcut(shortcut)) ? "" : shortcut])) as Record<CommandShortcutID, string>);
-  }, []);
 
   const panelResizeCleanupRef = useRef<(() => void) | null>(null);
   useEffect(() => () => panelResizeCleanupRef.current?.(), []);
@@ -2780,8 +1537,6 @@ function App() {
     const bytes = Math.round(historyLimitMB) * 1024 * 1024;
     for (const tab of tabs) tab.history.setMaxBytes(bytes);
   }, [historyLimitMB, tabs]);
-  useEffect(() => { localStorage.setItem("pixtorio-tool-shortcuts", JSON.stringify(shortcutAssignments)); }, [shortcutAssignments]);
-  useEffect(() => { localStorage.setItem("pixtorio-command-shortcuts", JSON.stringify(commandShortcutAssignments)); }, [commandShortcutAssignments]);
 
   useEffect(() => {
     if (!hasWailsAppBridge() || recoveryStartedRef.current) return;
@@ -7810,6 +6565,17 @@ function App() {
     </>;
   };
 
+  const canPreviewOutline = Boolean(activeCel && activeLayer && isEditableImageLayer(activeLayer) && !isLayerEffectivelyLocked(pixelDocument, activeLayer));
+  const previewOutline = () => {
+    if (!activeCel) return;
+    try {
+      const previewCel = renderOutlineAdjustment(activeCel);
+      setOutlinePreview({before: rasterizeOutlineCel(pixelDocument, activeCel), after: rasterizeOutlineCel(pixelDocument, previewCel), width: pixelDocument.width, height: pixelDocument.height});
+    } catch (error) {
+      setStatus(language === "zh" ? "描边后的动画格尺寸超过 2048 像素，无法生成预览" : error instanceof Error ? error.message : "Could not preview outline");
+    }
+  };
+
   const modalKey = colorProfileDialog ? "color-profile" : canvasDialog ? "canvas"
     : crossDocumentCopyDialog ? "cross-document" : exportDialog ? "export"
     : spriteImportDialog ? "sprite-import" : adjustmentDialog ? "adjustment"
@@ -9391,56 +8157,22 @@ function App() {
         </form>
       </div>}
 
-      {slicePropertiesDialog && <div className="dialog-backdrop" role="presentation">
-        <form className="canvas-dialog editor-dialog" role="dialog" aria-modal="true" aria-labelledby="slice-properties-title" onKeyDown={(event) => { if (event.key === "Escape") { event.stopPropagation(); setSlicePropertiesDialog(null); } }} onSubmit={(event) => { event.preventDefault(); applySlicePropertiesDialog(); }}>
-          <h2 id="slice-properties-title">{language === "zh" ? "切片属性" : "Slice Properties"}</h2>
-          <div className="dialog-field-grid">
-            <label className="dialog-field dialog-field-wide"><span>{language === "zh" ? "名称" : "Name"}</span><input type="text" autoFocus value={slicePropertiesDialog.name} onChange={(event) => setSlicePropertiesDialog({...slicePropertiesDialog, name: event.target.value})} /></label>
-            <label className="dialog-color-field"><span>{language === "zh" ? "颜色" : "Color"}</span><input type="color" value={slicePropertiesDialog.color} onChange={(event) => setSlicePropertiesDialog({...slicePropertiesDialog, color: event.target.value})} /></label>
-            <label className="dialog-field"><span>{language === "zh" ? "关键帧" : "Key frame"}</span><select value={slicePropertiesDialog.frameId} onChange={(event) => openSliceProperties(slicePropertiesDialog.sliceId, event.target.value)}>{pixelDocument.frames.map((frame, index) => slicePropertiesDialog.sliceId && pixelDocument.slices.find((slice) => slice.id === slicePropertiesDialog.sliceId)?.keys.some((key) => key.frameId === frame.id) ? <option value={frame.id} key={frame.id}>{index + preferences.timeline.firstFrame}</option> : null)}</select></label>
-            <label className="dialog-field"><span>X</span><input type="number" value={slicePropertiesDialog.x} onChange={(event) => setSlicePropertiesDialog({...slicePropertiesDialog, x: event.target.value})} /></label>
-            <label className="dialog-field"><span>Y</span><input type="number" value={slicePropertiesDialog.y} onChange={(event) => setSlicePropertiesDialog({...slicePropertiesDialog, y: event.target.value})} /></label>
-            <label className="dialog-field"><span>{ui.width}</span><input type="number" min="1" value={slicePropertiesDialog.width} onChange={(event) => setSlicePropertiesDialog({...slicePropertiesDialog, width: event.target.value})} /></label>
-            <label className="dialog-field"><span>{ui.height}</span><input type="number" min="1" value={slicePropertiesDialog.height} onChange={(event) => setSlicePropertiesDialog({...slicePropertiesDialog, height: event.target.value})} /></label>
-          </div>
-          <div className="panel-subheading"><span>{language === "zh" ? "九宫格中心（留空移除）" : "Nine-patch center (blank to remove)"}</span></div>
-          <div className="dialog-field-grid">
-            <label className="dialog-field"><span>X</span><input type="number" value={slicePropertiesDialog.centerX} onChange={(event) => setSlicePropertiesDialog({...slicePropertiesDialog, centerX: event.target.value})} /></label>
-            <label className="dialog-field"><span>Y</span><input type="number" value={slicePropertiesDialog.centerY} onChange={(event) => setSlicePropertiesDialog({...slicePropertiesDialog, centerY: event.target.value})} /></label>
-            <label className="dialog-field"><span>{ui.width}</span><input type="number" min="1" value={slicePropertiesDialog.centerWidth} onChange={(event) => setSlicePropertiesDialog({...slicePropertiesDialog, centerWidth: event.target.value})} /></label>
-            <label className="dialog-field"><span>{ui.height}</span><input type="number" min="1" value={slicePropertiesDialog.centerHeight} onChange={(event) => setSlicePropertiesDialog({...slicePropertiesDialog, centerHeight: event.target.value})} /></label>
-          </div>
-          <div className="panel-subheading"><span>{language === "zh" ? "枢轴（留空移除）" : "Pivot (blank to remove)"}</span></div>
-          <div className="dialog-field-grid">
-            <label className="dialog-field"><span>X</span><input type="number" value={slicePropertiesDialog.pivotX} onChange={(event) => setSlicePropertiesDialog({...slicePropertiesDialog, pivotX: event.target.value})} /></label>
-            <label className="dialog-field"><span>Y</span><input type="number" value={slicePropertiesDialog.pivotY} onChange={(event) => setSlicePropertiesDialog({...slicePropertiesDialog, pivotY: event.target.value})} /></label>
-          </div>
-          <div className="dialog-actions"><button type="button" onClick={() => setSlicePropertiesDialog(null)}>{ui.cancel}</button><button type="submit">{ui.apply}</button></div>
-        </form>
-      </div>}
+      {slicePropertiesDialog && <SlicePropertiesDialog
+        slicePropertiesDialog={slicePropertiesDialog}
+        setSlicePropertiesDialog={setSlicePropertiesDialog}
+        language={language}
+        pixelDocument={pixelDocument}
+        firstFrame={preferences.timeline.firstFrame}
+        openSliceProperties={openSliceProperties}
+        applySlicePropertiesDialog={applySlicePropertiesDialog}
+      />}
 
-      {layerPropertiesDialog && <div className="dialog-backdrop" role="presentation">
-        <form className="canvas-dialog editor-dialog" role="dialog" aria-modal="true" aria-labelledby="layer-properties-title" onKeyDown={(event) => { if (event.key === "Escape") { event.stopPropagation(); setLayerPropertiesDialog(null); } }} onSubmit={(event) => { event.preventDefault(); applyLayerPropertiesDialog(); }}>
-          <h2 id="layer-properties-title">{language === "zh" ? "图层属性" : "Layer properties"}</h2>
-          <p className="dialog-hint">{language === "zh" ? `编辑 ${layerPropertiesDialog.layerIds.length} 个图层。空值或“保持”表示保留原值。` : `Editing ${layerPropertiesDialog.layerIds.length} layers. Empty fields or “Keep” preserve each value.`}</p>
-          <div className="dialog-field-grid">
-            <label className="dialog-field dialog-field-wide"><span>{language === "zh" ? "名称（仅单个图层）" : "Name (single layer only)"}</span><input type="text" autoFocus value={layerPropertiesDialog.name} disabled={layerPropertiesDialog.layerIds.length !== 1} placeholder={language === "zh" ? "保持原名称" : "Keep current name"} onChange={(event) => setLayerPropertiesDialog({...layerPropertiesDialog, name: event.target.value})} /></label>
-            <label className="dialog-field"><span>{language === "zh" ? "不透明度 (%)" : "Opacity (%)"}</span><input type="number" min="0" max="100" step="any" value={layerPropertiesDialog.opacity} placeholder="Keep" onChange={(event) => setLayerPropertiesDialog({...layerPropertiesDialog, opacity: event.target.value})} /></label>
-            <label className="dialog-field"><span>{language === "zh" ? "混合模式" : "Blend mode"}</span><select value={layerPropertiesDialog.blendMode} onChange={(event) => setLayerPropertiesDialog({...layerPropertiesDialog, blendMode: event.target.value as LayerPropertiesDialogState["blendMode"]})}><option value="keep">{language === "zh" ? "保持" : "Keep"}</option>{allBlendModes.map((mode) => <option value={mode} key={mode}>{blendModeText[language][mode]}</option>)}</select></label>
-            <label className="dialog-field"><span>{language === "zh" ? "角色" : "Role"}</span><select value={layerPropertiesDialog.role} onChange={(event) => setLayerPropertiesDialog({...layerPropertiesDialog, role: event.target.value as LayerRoleProperty})}><option value="keep">{language === "zh" ? "保持" : "Keep"}</option>{(["standard", "background", "reference"] as LayerRole[]).map((role) => <option value={role} key={role}>{layerRoleText[language][role]}</option>)}</select></label>
-            {(["visible", "locked", "alphaLock", "continuous"] as const).map((property) => {
-              const labelsByProperty = {
-                visible: language === "zh" ? "可见" : "Visible",
-                locked: language === "zh" ? "锁定" : "Locked",
-                alphaLock: language === "zh" ? "锁定透明度" : "Alpha lock",
-                continuous: language === "zh" ? "连续动画格" : "Continuous",
-              };
-              return <label className="dialog-field" key={property}><span>{labelsByProperty[property]}</span><select value={layerPropertiesDialog[property]} onChange={(event) => setLayerPropertiesDialog({...layerPropertiesDialog, [property]: event.target.value as TriStateProperty})}><option value="keep">{language === "zh" ? "保持" : "Keep"}</option><option value="on">{language === "zh" ? "开启" : "On"}</option><option value="off">{language === "zh" ? "关闭" : "Off"}</option></select></label>;
-            })}
-          </div>
-          <div className="dialog-actions"><button type="button" onClick={() => setLayerPropertiesDialog(null)}>{ui.cancel}</button><button type="submit">{ui.apply}</button></div>
-        </form>
-      </div>}
+      {layerPropertiesDialog && <LayerPropertiesDialog
+        layerPropertiesDialog={layerPropertiesDialog}
+        setLayerPropertiesDialog={setLayerPropertiesDialog}
+        language={language}
+        applyLayerPropertiesDialog={applyLayerPropertiesDialog}
+      />}
 
       {tagDialog && <div className="dialog-backdrop" role="presentation">
         <form className="canvas-dialog editor-dialog" role="dialog" aria-modal="true" aria-label={tagDialog.tagId ? ui.editTag : ui.addTag} onSubmit={(event) => { event.preventDefault(); applyTagDialog(); }}>
@@ -9479,106 +8211,24 @@ function App() {
         </form>
       </div>}
 
-      {adjustmentDialog && <div className="dialog-backdrop" role="presentation">
-        <form className="canvas-dialog editor-dialog adjustment-dialog" role="dialog" aria-modal="true" aria-label={language === "zh" ? "颜色调整" : "Color adjustment"} onSubmit={(event) => { event.preventDefault(); applyAdjustment(); }}>
-          <h2>{adjustmentDialog.kind === "brightness-contrast" ? (language === "zh" ? "亮度 / 对比度" : "Brightness / Contrast")
-            : adjustmentDialog.kind === "hsl" ? (language === "zh" ? "色相 / 饱和度 / 明度" : "Hue / Saturation / Lightness")
-              : adjustmentDialog.kind === "invert" ? (language === "zh" ? "反相" : "Invert")
-                : adjustmentDialog.kind === "convolution" ? (language === "zh" ? "卷积滤镜" : "Convolution filter")
-                  : adjustmentDialog.kind === "median" ? (language === "zh" ? "中值滤波" : "Median filter")
-                    : adjustmentDialog.kind === "despeckle" ? (language === "zh" ? "去斑" : "Despeckle")
-                      : adjustmentDialog.kind === "curves" ? (language === "zh" ? "颜色曲线" : "Color curves")
-                        : adjustmentDialog.kind === "hsv-hsl" ? (language === "zh" ? "HSV / HSL 调整" : "HSV / HSL adjustment")
-                          : adjustmentDialog.kind === "outline" ? (language === "zh" ? "轮廓效果" : "Outline effect")
-                            : (language === "zh" ? "通道掩码" : "Channel mask")}</h2>
-          <div className="adjustment-common">
-            <label className="dialog-field"><span>{language === "zh" ? "作用范围" : "Apply to"}</span><select value={adjustmentDialog.scope} onChange={(event) => setAdjustmentDialog({...adjustmentDialog, scope: event.target.value as AdjustmentTargetScope})}>
-              <option value="active">{language === "zh" ? "当前动画格" : "Active cel"}</option>
-              <option value="selected" disabled={selectedCels.length === 0}>{language === "zh" ? `选中的动画格 (${selectedCels.length})` : `Selected cels (${selectedCels.length})`}</option>
-              <option value="all">{language === "zh" ? "全部可编辑图像动画格" : "All editable image cels"}</option>
-            </select></label>
-            <div className="adjustment-channel-block">
-              <span className="adjustment-label">{adjustmentDialog.kind === "channel-mask" ? (language === "zh" ? "保留通道" : "Keep channels") : (language === "zh" ? "处理通道" : "Channels")}</span>
-              <div className="adjustment-channel-grid">
-                {([['red', 'R'], ['green', 'G'], ['blue', 'B'], ['alpha', 'A']] as const).map(([key, label]) => <label className="dialog-checkbox" key={key}><input type="checkbox" checked={adjustmentDialog.channelValues[key]} onChange={(event) => setAdjustmentDialog({...adjustmentDialog, channelValues: {...adjustmentDialog.channelValues, [key]: event.target.checked}})} />{label}</label>)}
-              </div>
-            </div>
-            {adjustmentDialog.scope !== "active" && selection && <p className="adjustment-note">{language === "zh" ? "选区仅应用于当前动画格；批量范围将处理每个动画格的完整像素。" : "The selection applies to the active cel only; batch scopes process each cel completely."}</p>}
-          </div>
-          {adjustmentDialog.kind === "outline" && <div className="outline-options">
-            <div className="dialog-field-grid">
-              <label className="dialog-field"><span>{language === "zh" ? "位置" : "Position"}</span><select value={adjustmentDialog.outlinePosition} onChange={(event) => setAdjustmentDialog({...adjustmentDialog, outlinePosition: event.target.value as "inside" | "outside"})}><option value="outside">{language === "zh" ? "外侧" : "Outside"}</option><option value="inside">{language === "zh" ? "内侧" : "Inside"}</option></select></label>
-              <label className="dialog-field"><span>{language === "zh" ? "厚度" : "Thickness"}</span><input type="number" min="1" max="32" value={adjustmentDialog.outlineThickness} onChange={(event) => setAdjustmentDialog({...adjustmentDialog, outlineThickness: Math.max(1, Math.min(32, Math.round(Number(event.target.value) || 1)))})} /></label>
-              <label className="dialog-field dialog-field-wide"><span>{language === "zh" ? "形状" : "Shape"}</span><select value={adjustmentDialog.outlineShape} onChange={(event) => setAdjustmentDialog({...adjustmentDialog, outlineShape: event.target.value as OutlineShape})}><option value="square">{language === "zh" ? "方形" : "Square"}</option><option value="diamond">{language === "zh" ? "菱形" : "Diamond"}</option><option value="circle">{language === "zh" ? "圆形" : "Circle"}</option></select></label>
-              <label className="dialog-checkbox"><input type="checkbox" checked={adjustmentDialog.outlineTileX} onChange={(event) => setAdjustmentDialog({...adjustmentDialog, outlineTileX: event.target.checked})} />{language === "zh" ? "水平平铺" : "Tile horizontally"}</label>
-              <label className="dialog-checkbox"><input type="checkbox" checked={adjustmentDialog.outlineTileY} onChange={(event) => setAdjustmentDialog({...adjustmentDialog, outlineTileY: event.target.checked})} />{language === "zh" ? "垂直平铺" : "Tile vertically"}</label>
-            </div>
-            <div className="outline-directions" role="group" aria-label={language === "zh" ? "描边方向" : "Outline directions"}>
-              {([['nw', '↖'], ['n', '↑'], ['ne', '↗'], ['w', '←'], ['', '•'], ['e', '→'], ['sw', '↙'], ['s', '↓'], ['se', '↘']] as const).map(([direction, arrow]) => direction ? <button type="button" className="panel-command" key={direction} aria-label={`${language === "zh" ? "描边方向" : "Outline direction"} ${direction.toUpperCase()}`} aria-pressed={adjustmentDialog.outlineDirections.includes(direction)} onClick={() => setAdjustmentDialog({...adjustmentDialog, outlineDirections: adjustmentDialog.outlineDirections.includes(direction) ? adjustmentDialog.outlineDirections.filter((entry) => entry !== direction) : [...adjustmentDialog.outlineDirections, direction]})}>{arrow}</button> : <span key="center" aria-hidden="true">{arrow}</span>)}
-            </div>
-            <p className="adjustment-note">{language === "zh" ? "使用当前前景色。预览仅显示当前动画格，批量范围在应用时处理。" : "Uses the foreground color. Preview shows only the active cel; batch scope is processed on Apply."}</p>
-            <button type="button" className="panel-command" disabled={!activeCel || !activeLayer || !isEditableImageLayer(activeLayer) || isLayerEffectivelyLocked(pixelDocument, activeLayer)} onClick={() => {
-              if (!activeCel) return;
-              try {
-                const previewCel = renderOutlineAdjustment(activeCel);
-                setOutlinePreview({before: rasterizeOutlineCel(pixelDocument, activeCel), after: rasterizeOutlineCel(pixelDocument, previewCel), width: pixelDocument.width, height: pixelDocument.height});
-              } catch (error) {
-                setStatus(language === "zh" ? "描边后的动画格尺寸超过 2048 像素，无法生成预览" : error instanceof Error ? error.message : "Could not preview outline");
-              }
-            }}>{language === "zh" ? "生成预览" : "Generate preview"}</button>
-            {outlinePreview && <div className="outline-preview-pair">
-              <figure><LayerThumbnail pixels={outlinePreview.before} width={outlinePreview.width} height={outlinePreview.height} revision={0} visible ariaLabel={language === "zh" ? "描边前" : "Before outline"} size={144} /><figcaption>{language === "zh" ? "之前" : "Before"}</figcaption></figure>
-              <figure><LayerThumbnail pixels={outlinePreview.after} width={outlinePreview.width} height={outlinePreview.height} revision={0} visible ariaLabel={language === "zh" ? "描边后预览" : "Outline preview"} size={144} /><figcaption>{language === "zh" ? "预览" : "Preview"}</figcaption></figure>
-            </div>}
-          </div>}
-          {adjustmentDialog.kind === "brightness-contrast" && <div className="dialog-field-grid">
-            <label className="dialog-field"><span>{language === "zh" ? "亮度" : "Brightness"}</span><input type="number" min="-100" max="100" value={adjustmentDialog.brightness} onChange={(event) => setAdjustmentDialog({...adjustmentDialog, brightness: Number(event.target.value) || 0})} /></label>
-            <label className="dialog-field"><span>{language === "zh" ? "对比度" : "Contrast"}</span><input type="number" min="-100" max="100" value={adjustmentDialog.contrast} onChange={(event) => setAdjustmentDialog({...adjustmentDialog, contrast: Number(event.target.value) || 0})} /></label>
-          </div>}
-          {adjustmentDialog.kind === "hsl" && <div className="dialog-field-grid">
-            <label className="dialog-field"><span>{language === "zh" ? "色相" : "Hue"}</span><input type="number" min="-360" max="360" value={adjustmentDialog.hue} onChange={(event) => setAdjustmentDialog({...adjustmentDialog, hue: Number(event.target.value) || 0})} /></label>
-            <label className="dialog-field"><span>{language === "zh" ? "饱和度" : "Saturation"}</span><input type="number" min="-100" max="100" value={adjustmentDialog.saturation} onChange={(event) => setAdjustmentDialog({...adjustmentDialog, saturation: Number(event.target.value) || 0})} /></label>
-            <label className="dialog-field"><span>{language === "zh" ? "明度" : "Lightness"}</span><input type="number" min="-100" max="100" value={adjustmentDialog.lightness} onChange={(event) => setAdjustmentDialog({...adjustmentDialog, lightness: Number(event.target.value) || 0})} /></label>
-          </div>}
-          {adjustmentDialog.kind === "convolution" && <div className="dialog-field-grid">
-            <label className="dialog-field dialog-field-wide"><span>{language === "zh" ? "预设" : "Preset"}</span><select value={adjustmentDialog.convolutionPreset} onChange={(event) => setAdjustmentDialog({...adjustmentDialog, convolutionPreset: event.target.value as AdjustmentConvolutionPreset})}>
-              <option value="blur">{language === "zh" ? "柔化 / 模糊" : "Blur"}</option><option value="sharpen">{language === "zh" ? "锐化" : "Sharpen"}</option><option value="edge">{language === "zh" ? "边缘" : "Edge"}</option><option value="emboss">{language === "zh" ? "浮雕" : "Emboss"}</option><option value="custom">{language === "zh" ? "自定义（恒等）" : "Custom (identity)"}</option>
-            </select></label>
-          </div>}
-          {(adjustmentDialog.kind === "median" || adjustmentDialog.kind === "despeckle") && <div className="dialog-field-grid">
-            <label className="dialog-field"><span>{language === "zh" ? "窗口" : "Window"}</span><select value={adjustmentDialog.medianSize} onChange={(event) => setAdjustmentDialog({...adjustmentDialog, medianSize: Number(event.target.value) === 5 ? 5 : 3})}><option value={3}>3 × 3</option><option value={5}>5 × 5</option></select></label>
-            <label className="dialog-field"><span>{language === "zh" ? "阈值" : "Threshold"}</span><input type="number" min="0" max="255" value={adjustmentDialog.medianThreshold} onChange={(event) => setAdjustmentDialog({...adjustmentDialog, medianThreshold: Math.max(0, Math.min(255, Number(event.target.value) || 0))})} /></label>
-          </div>}
-          {adjustmentDialog.kind === "curves" && <div className="curve-adjustment-grid">
-            <label className="dialog-field"><span>{language === "zh" ? "曲线通道" : "Curve channel"}</span><select value={adjustmentDialog.curveChannel} onChange={(event) => setAdjustmentDialog({...adjustmentDialog, curveChannel: event.target.value as AdjustmentCurveChannel})}><option value="red">R</option><option value="green">G</option><option value="blue">B</option><option value="alpha">A</option></select></label>
-            <CurveEditor key={adjustmentDialog.curveChannel} language={language} points={adjustmentDialog.curvePoints[adjustmentDialog.curveChannel]} onChange={(points) => setAdjustmentDialog((current) => current && ({...current, curvePoints: {...current.curvePoints, [current.curveChannel]: points}, channelValues: {...current.channelValues, [current.curveChannel]: true}}))} />
-          </div>}
-          {adjustmentDialog.kind === "hsv-hsl" && <div className="dialog-field-grid">
-            <label className="dialog-field"><span>{language === "zh" ? "色彩空间" : "Color space"}</span><select value={adjustmentDialog.hsvSpace} onChange={(event) => setAdjustmentDialog({...adjustmentDialog, hsvSpace: event.target.value as "hsv" | "hsl"})}><option value="hsv">HSV</option><option value="hsl">HSL</option></select></label>
-            <label className="dialog-field"><span>{language === "zh" ? "模式" : "Mode"}</span><select value={adjustmentDialog.hsvMode} onChange={(event) => setAdjustmentDialog({...adjustmentDialog, hsvMode: event.target.value as "relative" | "absolute"})}><option value="relative">{language === "zh" ? "相对" : "Relative"}</option><option value="absolute">{language === "zh" ? "绝对" : "Absolute"}</option></select></label>
-            <label className="dialog-field"><span>{language === "zh" ? "色相" : "Hue"}</span><input type="number" min={adjustmentDialog.hsvMode === "absolute" ? 0 : -360} max="360" value={adjustmentDialog.hue} onChange={(event) => setAdjustmentDialog({...adjustmentDialog, hue: Number(event.target.value) || 0})} /></label>
-            <label className="dialog-field"><span>{language === "zh" ? "饱和度" : "Saturation"}</span><input type="number" min={adjustmentDialog.hsvMode === "absolute" ? 0 : -100} max="100" value={adjustmentDialog.saturation} onChange={(event) => setAdjustmentDialog({...adjustmentDialog, saturation: Number(event.target.value) || 0})} /></label>
-            {adjustmentDialog.hsvSpace === "hsv" ? <label className="dialog-field"><span>Value</span><input type="number" min={adjustmentDialog.hsvMode === "absolute" ? 0 : -100} max="100" value={adjustmentDialog.value} onChange={(event) => setAdjustmentDialog({...adjustmentDialog, value: Number(event.target.value) || 0})} /></label> : <label className="dialog-field"><span>{language === "zh" ? "明度" : "Lightness"}</span><input type="number" min={adjustmentDialog.hsvMode === "absolute" ? 0 : -100} max="100" value={adjustmentDialog.lightness} onChange={(event) => setAdjustmentDialog({...adjustmentDialog, lightness: Number(event.target.value) || 0})} /></label>}
-          </div>}
-          <div className="dialog-actions"><button type="button" onClick={() => setAdjustmentDialog(null)}>{ui.cancel}</button><button type="submit" disabled={adjustmentDialog.scope === "selected" && selectedCels.length === 0}>{ui.apply}</button></div>
-        </form>
-      </div>}
+      {adjustmentDialog && <AdjustmentDialog
+        adjustmentDialog={adjustmentDialog}
+        setAdjustmentDialog={setAdjustmentDialog}
+        language={language}
+        selectedCelCount={selectedCels.length}
+        hasSelection={Boolean(selection)}
+        canPreviewOutline={canPreviewOutline}
+        previewOutline={previewOutline}
+        outlinePreview={outlinePreview}
+        applyAdjustment={applyAdjustment}
+      />}
 
-      {spriteImportDialog && <div className="dialog-backdrop" role="presentation">
-        <form className="canvas-dialog editor-dialog" role="dialog" aria-modal="true" aria-label={language === "zh" ? "导入精灵表" : "Import sprite sheet"} onSubmit={(event) => { event.preventDefault(); applySpriteSheetImport(); }}>
-          <h2>{language === "zh" ? "导入精灵表" : "Import sprite sheet"}</h2>
-          <div className="dialog-field-grid">
-            <label className="dialog-field dialog-field-wide"><span>{language === "zh" ? "排列方式" : "Layout"}</span><select value={spriteImportDialog.layout} onChange={(event) => setSpriteImportDialog({...spriteImportDialog, layout: event.target.value as SpriteSheetImportLayout})}><option value="horizontal">{language === "zh" ? "横向" : "Horizontal"}</option><option value="vertical">{language === "zh" ? "纵向" : "Vertical"}</option><option value="matrix">{language === "zh" ? "矩阵" : "Matrix"}</option></select></label>
-            <label className="dialog-field"><span>{language === "zh" ? "帧宽" : "Frame width"}</span><input type="number" min="1" max={spriteImportDialog.image.width} value={spriteImportDialog.frameWidth} onChange={(event) => setSpriteImportDialog({...spriteImportDialog, frameWidth: Number(event.target.value) || 1})} /></label>
-            <label className="dialog-field"><span>{language === "zh" ? "帧高" : "Frame height"}</span><input type="number" min="1" max={spriteImportDialog.image.height} value={spriteImportDialog.frameHeight} onChange={(event) => setSpriteImportDialog({...spriteImportDialog, frameHeight: Number(event.target.value) || 1})} /></label>
-            <label className="dialog-field"><span>{language === "zh" ? "水平偏移" : "Offset X"}</span><input type="number" min="0" max={spriteImportDialog.image.width - 1} value={spriteImportDialog.offsetX} onChange={(event) => setSpriteImportDialog({...spriteImportDialog, offsetX: Number(event.target.value) || 0})} /></label>
-            <label className="dialog-field"><span>{language === "zh" ? "垂直偏移" : "Offset Y"}</span><input type="number" min="0" max={spriteImportDialog.image.height - 1} value={spriteImportDialog.offsetY} onChange={(event) => setSpriteImportDialog({...spriteImportDialog, offsetY: Number(event.target.value) || 0})} /></label>
-            <label className="dialog-field"><span>{language === "zh" ? "水平间距" : "Padding X"}</span><input type="number" min="0" max="2048" value={spriteImportDialog.paddingX} onChange={(event) => setSpriteImportDialog({...spriteImportDialog, paddingX: Number(event.target.value) || 0})} /></label>
-            <label className="dialog-field"><span>{language === "zh" ? "垂直间距" : "Padding Y"}</span><input type="number" min="0" max="2048" value={spriteImportDialog.paddingY} onChange={(event) => setSpriteImportDialog({...spriteImportDialog, paddingY: Number(event.target.value) || 0})} /></label>
-          </div>
-          <div className="dialog-actions"><button type="button" onClick={() => setSpriteImportDialog(null)}>{ui.cancel}</button><button type="submit">{language === "zh" ? "导入" : "Import"}</button></div>
-        </form>
-      </div>}
+      {spriteImportDialog && <SpriteImportDialog
+        spriteImportDialog={spriteImportDialog}
+        setSpriteImportDialog={setSpriteImportDialog}
+        language={language}
+        applySpriteSheetImport={applySpriteSheetImport}
+      />}
 
       {exportDialog && <div className="dialog-backdrop" role="presentation">
         <form className="canvas-dialog editor-dialog export-dialog" role="dialog" aria-modal="true" aria-label={ui.exportOptions} onSubmit={(event) => { event.preventDefault(); void exportAnimation(exportDialog); }}>

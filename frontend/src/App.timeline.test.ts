@@ -1,19 +1,7 @@
 import {describe, expect, it} from "vitest";
 
-import {
-  calculatePanelResizeValue,
-  captureTabTimeline,
-  createEditorTab,
-  EditorDocumentStateCommand,
-  extendTimelineLoopAfterInsertion,
-  getTimelineHorizontalScrollbarHeight,
-  getTimelineScrollTopForPeer,
-  normalizePanelDimensionInput,
-  normalizeTabTimeline,
-  shouldExtendTimelineLoopAfterInsertion,
-  syncTimelineScrollPositions,
-  syncPlaybackFrameSelection,
-} from "./App";
+import {calculatePanelResizeValue, getTimelineHorizontalScrollbarHeight, getTimelineScrollTopForPeer, normalizePanelDimensionInput, syncTimelineScrollPositions} from "./app/workspaceGeometry";
+import {captureTabTimeline, createEditorTab, EditorDocumentStateCommand, extendTimelineLoopAfterInsertion, normalizeTabTimeline, shouldExtendTimelineLoopAfterInsertion, syncPlaybackFrameSelection} from "./app/editorTab";
 import {
   addFrame,
   addFrameTag,

@@ -1,6 +1,6 @@
 import {describe, expect, it} from "vitest";
 import appSource from "./App.tsx?raw";
-import {isEditableTarget} from "./App";
+import {isEditableTarget} from "./keyboardTargets";
 
 function target(nodeName: string, isContentEditable = false) {
   return {nodeName, isContentEditable} as unknown as EventTarget;
