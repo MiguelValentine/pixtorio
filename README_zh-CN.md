@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="artifacts/logo-draft/pixtorio-pixel-p.png" width="96" alt="Pixtorio logo">
+  <img src="frontend/public/appicon.svg" width="96" alt="Pixtorio logo">
 </p>
 
 <h1 align="center">Pixtorio</h1>
@@ -15,7 +15,7 @@
   <a href="README.md">English</a>
 </p>
 
-![Pixtorio 图块地图与地形编辑界面](artifacts/final-light.png)
+![Pixtorio 编辑界面](docs/images/editor-zh.png)
 
 Pixtorio 是一个受 Aseprite 工作流启发的像素画与帧动画编辑器。桌面端使用 Wails 和 Go，编辑器界面使用 React、TypeScript、Vite 与 Canvas 2D 渲染；同一前端也可在浏览器中运行，完成本地导入和导出。
 
@@ -33,6 +33,8 @@ Pixtorio 是一个受 Aseprite 工作流启发的像素画与帧动画编辑器�
 - **照片转像素画**：从“文件 → 照片转像素画”独立入口导入 PNG/JPEG/WebP/BMP，预览原图与像素画，设置目标宽高、锁定比例、2–256 色上限、相似色合并阈值，以及有序或 Floyd-Steinberg 抖动。结果在新标签页中作为 RGBA 作品编辑，不改动已有作品。原图上限为 64 MiB、1 亿像素；输出每边为 1–1024 像素。颜色上限包含透明色，合并后实际颜色可能更少。
 
 ## 照片转像素画
+
+![Pixtorio 照片转像素画流程](docs/images/photo-pixelation-zh.png)
 
 1. 打开 **文件 → 照片转像素画**，选择 PNG、JPEG、WebP 或 BMP 图片，也可以将图片拖入此对话框。
 2. 设置目标宽度和高度；勾选 **锁定原图比例** 可保留照片比例。

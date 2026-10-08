@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="artifacts/logo-draft/pixtorio-pixel-p.png" width="96" alt="Pixtorio logo">
+  <img src="frontend/public/appicon.svg" width="96" alt="Pixtorio logo">
 </p>
 
 <h1 align="center">Pixtorio</h1>
@@ -15,7 +15,7 @@
   <a href="README_zh-CN.md">简体中文</a>
 </p>
 
-![Pixtorio tilemap and Terrain editing interface](artifacts/final-light.png)
+![Pixtorio editor interface](docs/images/editor-en.png)
 
 Pixtorio is a pixel-art and frame-animation editor inspired by the Aseprite workflow. Its desktop shell is built with Wails and Go; the editor uses React, TypeScript, Vite, and Canvas 2D. The same frontend can also run in a browser for local import and export workflows.
 
@@ -33,6 +33,8 @@ The default interface is Simplified Chinese with a light theme. Both language an
 - **Photo to pixel art**: a separate File menu entry for PNG/JPEG/WebP/BMP photos, with original/output previews, aspect-locked dimensions, a 2-256 color limit, similar-color merging, and optional ordered or Floyd-Steinberg dithering. Creates a new editable RGBA document without changing open artwork. Sources are limited to 64 MiB and 100 megapixels; output dimensions are 1-1024 pixels per side. The color limit includes transparency and merging may produce fewer colors.
 
 ## Photo to Pixel Art
+
+![Pixtorio photo to pixel art workflow](docs/images/photo-pixelation-en.png)
 
 1. Open **File > Photo to pixel art**, then choose a PNG, JPEG, WebP, or BMP image. You can also drop an image into this dialog.
 2. Set the output width and height. Keep **Lock original aspect ratio** enabled to preserve the photo's proportions.
