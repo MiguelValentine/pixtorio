@@ -75,7 +75,8 @@ import {EventsOn, WindowFullscreen, WindowIsFullscreen, WindowUnfullscreen} from
 import "./App.css";
 import {BrushDynamicsPanel} from "./BrushDynamicsPanel";
 import {BrushPresetPanel} from "./BrushPresetPanel";
-import {ColorSelector} from "./ColorSelector";
+import {CollapsiblePanelSection} from "./CollapsiblePanelSection";
+import {ColorField, ColorPickerPopover} from "./ColorPicker";
 import {PreferencesPanel} from "./PreferencesPanel";
 import {AdjustmentDialog} from "./app/AdjustmentDialog";
 import {LayerPropertiesDialog, type LayerPropertiesDialogState, type TriStateProperty} from "./app/LayerPropertiesDialog";
@@ -112,21 +113,13 @@ import type {BrushPresetSettings} from "./editor/brushPresets";
 import {clearCelSelection, copyCelSelection, pasteCelSelection, type CelAddress, type CelClipboard} from "./editor/celClipboard";
 import {findTopmostMovableCelAt, moveCels, rasterizeCelsToCanvas, transformCels, type CelTransformAddress} from "./editor/celTransform";
 import {
-alphaDisplayMaximum,
-alphaFromDisplay,
 alphaToDisplay,
-clampByte,
 clampPercent,
 rgbaToHex as editorColorToHex,
-hslaToRgba,
 parseHexColor as parseEditorHexColor,
-rgbToHsla,
-type HSLAColor,
-type RGBAColor,
 } from "./editor/colorEditor";
 import {constrainColorToMode, convertDocumentColorMode, exportPaletteText, extractPalette, parsePaletteText, refreshIndexedDocument, refreshTilemapCaches, sortPalette, syncIndexedCel, type DitherMode, type PaletteFileFormat} from "./editor/colorModes";
 import {assignDocumentColorProfile, convertDocumentColorProfile, type ConvertibleColorProfile} from "./editor/colorProfiles";
-import type {ColorSelectorMode} from "./editor/colorSelector";
 import {layerOpaqueContentSelection} from "./editor/contentSelection";
 import {canCopyFramesToDocument, canCopyLayersToDocument, copyFramesToDocument, copyLayersToDocument} from "./editor/crossDocumentCopy";
 import {readDefaultPalette, resetDefaultPalette, saveDefaultPalette} from "./editor/defaultPalette";
@@ -212,7 +205,7 @@ import {DocumentStateCommand, PixelEditCommand, TerrainCellsCommand, TilemapCell
 import {applyLayerProperties, existingCelsForLayers, linkedCelsForSelection, type LayerPropertyUpdate} from "./editor/layerProperties";
 import {handleMCPWorkspaceCommand, type MCPWorkspaceTab} from "./editor/mcpWorkspace";
 import {applyRenderedOutline, rasterizeOutlineCel, renderDocumentOutline} from "./editor/outlineDocument";
-import {applyDocumentPalette, relocateTransparentIndex} from "./editor/paletteOperations";
+import {applyDocumentPalette, editPaletteColor, relocateTransparentIndex} from "./editor/paletteOperations";
 import {applyPixelAspectRatio, normalizePixelAspectRatio} from "./editor/pixelAspectRatio";
 import {createPatch, hexToRGBA, rgbaToHex} from "./editor/pixels";
 import {applyNewDocumentPreferenceDefaults, readPreferences, savePreferences, type AppPreferences} from "./editor/preferences";
@@ -385,7 +378,6 @@ const defaultBrushDynamics = (size = 1): BrushDynamicsOptions => ({
   gradient: {enabled: false, source: "pressure", min: 0, max: 1, threshold: 0, invert: false, curve: "linear"},
 });
 const builtInTextFontFamilies = ["Arial", "Segoe UI", "Tahoma", "Verdana", "Times New Roman", "Georgia", "Courier New", "Consolas"];
-type ColorEditorMode = "rgba" | "hsla";
 type ColorTarget = "foreground" | "background";
 
 interface CelMoveSession {
@@ -598,8 +590,6 @@ function App() {
   const [backgroundColor, setBackgroundColor] = useState("#ffffff");
   const [foregroundAlpha, setForegroundAlpha] = useState(100);
   const [backgroundAlpha, setBackgroundAlpha] = useState(100);
-  const [colorEditorMode, setColorEditorMode] = useState<ColorEditorMode>("rgba");
-  const [colorSelectorMode, setColorSelectorMode] = useState<ColorSelectorMode>("spectrum");
   const [colorTarget, setColorTarget] = useState<ColorTarget>("foreground");
   const [brushSize, setBrushSize] = useState(1);
   const [brushShape, setBrushShape] = useState<BrushShape>("square");
@@ -836,6 +826,8 @@ function App() {
   const [sliceScaleX, setSliceScaleX] = useState(100);
   const [sliceScaleY, setSliceScaleY] = useState(100);
   const [selectedPaletteIndex, setSelectedPaletteIndex] = useState(0);
+  const [paletteEdit, setPaletteEdit] = useState<{tabId: string; index: number; value: string; anchor: HTMLElement} | null>(null);
+  const paletteEditButtonRef = useRef<HTMLButtonElement>(null);
   const [openToolGroupID, setOpenToolGroupID] = useState<string | null>(null);
   const [toolGroupMenuPosition, setToolGroupMenuPosition] = useState({left: 0, top: 0});
   const [preferredToolByGroup, setPreferredToolByGroup] = useState<Record<string, ToolID>>({});
@@ -896,6 +888,13 @@ function App() {
   const [contextMenu, setContextMenu] = useState<EditorContextMenuState | null>(null);
   const [inspectorVisible, setInspectorVisible] = useState(() => readWorkspaceVisibility(localStorage).inspectorVisible ?? defaultWorkspaceVisibility.inspectorVisible);
   const [timelineVisible, setTimelineVisible] = useState(() => readWorkspaceVisibility(localStorage).timelineVisible ?? defaultWorkspaceVisibility.timelineVisible);
+  const [collapsedInspectorSections, setCollapsedInspectorSections] = useState<Set<string>>(() => new Set());
+  const toggleInspectorSection = (id: string) => setCollapsedInspectorSections((current) => {
+    const next = new Set(current);
+    if (next.has(id)) next.delete(id);
+    else next.add(id);
+    return next;
+  });
   const [canvasOnly, setCanvasOnly] = useState(() => readWorkspaceCanvasOnly(localStorage));
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [tabScrollState, setTabScrollState] = useState({hasOverflow: false, canGoBack: false, canGoForward: false});
@@ -1114,54 +1113,6 @@ function App() {
     : undefined, [activeLayer.role, backgroundClearColor]);
   const editedColor = colorTarget === "foreground" ? foregroundColor : backgroundColor;
   const editedAlpha = colorTarget === "foreground" ? foregroundAlpha : backgroundAlpha;
-  const editedRGBA = useMemo<RGBAColor>(() => {
-    const [r, g, b] = hexToRGBA(editedColor);
-    return {r, g, b, a: editedAlpha};
-  }, [editedAlpha, editedColor]);
-  const editedHSLA = useMemo(() => rgbToHsla(editedRGBA), [editedRGBA]);
-  const setEditedColor = (color: RGBAColor) => {
-    const hex = editorColorToHex(color);
-    const alpha = clampPercent(color.a, editedAlpha);
-    if (colorTarget === "foreground") {
-      setForegroundColor(hex);
-      setForegroundAlpha(alpha);
-    } else {
-      setBackgroundColor(hex);
-      setBackgroundAlpha(alpha);
-    }
-  };
-  const updateColorChannel = (channel: keyof RGBAColor | keyof HSLAColor, value: number) => {
-    if (colorEditorMode === "rgba") {
-      setEditedColor({
-        ...editedRGBA,
-        [channel]: channel === "a" ? alphaFromDisplay(value, preferences.color.alphaRange, editedRGBA.a) : clampByte(value, editedRGBA[channel as keyof RGBAColor]),
-      });
-      return;
-    }
-    const next = {
-      ...editedHSLA,
-      [channel]: channel === "h" ? value : channel === "a"
-        ? alphaFromDisplay(value, preferences.color.alphaRange, editedHSLA.a)
-        : clampPercent(value, editedHSLA[channel as keyof HSLAColor]),
-    };
-    setEditedColor(hslaToRgba(next));
-  };
-  const colorChannels = colorEditorMode === "rgba"
-    ? [
-      {key: "r", label: "R", value: editedRGBA.r, maximum: 255},
-      {key: "g", label: "G", value: editedRGBA.g, maximum: 255},
-      {key: "b", label: "B", value: editedRGBA.b, maximum: 255},
-      {key: "a", label: "A", value: alphaToDisplay(editedRGBA.a, preferences.color.alphaRange), maximum: alphaDisplayMaximum(preferences.color.alphaRange)},
-    ] as const
-    : [
-      {key: "h", label: "H", value: editedHSLA.h, maximum: 360},
-      {key: "s", label: "S", value: editedHSLA.s, maximum: 100},
-      {key: "l", label: "L", value: editedHSLA.l, maximum: 100},
-      {key: "a", label: "A", value: alphaToDisplay(editedHSLA.a, preferences.color.alphaRange), maximum: alphaDisplayMaximum(preferences.color.alphaRange)},
-    ] as const;
-  const editedColorText = colorEditorMode === "rgba"
-    ? `rgba(${editedRGBA.r}, ${editedRGBA.g}, ${editedRGBA.b}, ${Math.round(alphaToDisplay(editedRGBA.a, preferences.color.alphaRange))}${preferences.color.alphaRange === "percent" ? "%" : ""})`
-    : `hsla(${Math.round(editedHSLA.h)}, ${Math.round(editedHSLA.s)}%, ${Math.round(editedHSLA.l)}%, ${Math.round(alphaToDisplay(editedHSLA.a, preferences.color.alphaRange))}${preferences.color.alphaRange === "percent" ? "%" : ""})`;
   const editedColorSummary = `${editedColor.toUpperCase()} · ${Math.round(alphaToDisplay(editedAlpha, preferences.color.alphaRange))}${preferences.color.alphaRange === "percent" ? "%" : ""}`;
   const colorChipBackground = (color: string, alpha?: number) => {
     const parsed = parseEditorHexColor(color) ?? {r: 0, g: 0, b: 0, a: 100};
@@ -1303,6 +1254,11 @@ function App() {
   useEffect(() => {
     if (selectedPaletteIndex !== paletteIndex) setSelectedPaletteIndex(paletteIndex);
   }, [activeTabID, paletteIndex, pixelDocument.palette.colors.length, revision, selectedPaletteIndex]);
+
+  useEffect(() => {
+    if (paletteEdit && (paletteEdit.tabId !== activeTabID || !inspectorVisible || isPlaying
+      || pixelDocument.palette.colors[paletteEdit.index] !== paletteEdit.value)) setPaletteEdit(null);
+  }, [activeTabID, inspectorVisible, isPlaying, paletteEdit, pixelDocument.palette.colors, revision]);
 
   useEffect(() => {
     if (!hasWailsAppBridge()) return;
@@ -1888,7 +1844,7 @@ function App() {
     activeDocumentId: activeTabID || tabs[0]?.id || "",
     assertIdle: () => {
       const focused = document.activeElement;
-      if (!recoveryReady || isPlaying || celPropertiesDialog || canvasDialog || layerPropertiesDialog || slicePropertiesDialog || exportDialog || tagDialog || crossDocumentCopyDialog || adjustmentDialog || spriteImportDialog || settingsOpen || historyOpen || opacityBeforeRef.current
+      if (!recoveryReady || isPlaying || document.querySelector(".color-picker-popover") || celPropertiesDialog || canvasDialog || layerPropertiesDialog || slicePropertiesDialog || exportDialog || tagDialog || crossDocumentCopyDialog || adjustmentDialog || spriteImportDialog || settingsOpen || historyOpen || opacityBeforeRef.current
         || saveQueuesRef.current.size > 0 || mcpInteractionGuardRef.current?.()
         || focused instanceof HTMLInputElement || focused instanceof HTMLTextAreaElement
         || (focused instanceof HTMLElement && focused.isContentEditable)) {
@@ -3051,9 +3007,18 @@ function App() {
   };
 
   const addPaletteColor = () => {
+    if (isPlaying) return;
+    const value = paletteColorFromEditor(editedColor, editedAlpha);
+    const existingIndex = pixelDocument.palette.colors.findIndex((color) => {
+      const parsed = parseEditorHexColor(color);
+      return parsed && editorColorToHex(parsed, true) === value;
+    });
+    if (existingIndex >= 0) {
+      setSelectedPaletteIndex(existingIndex);
+      return;
+    }
     mutateDocument("Add Palette Color", () => {
-      const value = paletteColorFromEditor(foregroundColor, foregroundAlpha);
-      if (pixelDocument.palette.colors.length >= 256 || pixelDocument.palette.colors.includes(value)) return false;
+      if (pixelDocument.palette.colors.length >= 256) return false;
       pixelDocument.palette.colors.push(value);
       setSelectedPaletteIndex(pixelDocument.palette.colors.length - 1);
       return true;
@@ -3075,14 +3040,11 @@ function App() {
     }
   };
 
-  const updatePaletteColor = () => {
-    mutateDocument("Edit Palette Color", () => {
-      const value = paletteColorFromEditor(foregroundColor, foregroundAlpha);
-      if (!hasSelectedPaletteColor || pixelDocument.palette.colors[paletteIndex] === value) return false;
-      pixelDocument.palette.colors[paletteIndex] = value;
-      refreshIndexedDocument(pixelDocument);
-      return true;
-    });
+  const updatePaletteColor = (index = paletteIndex, anchor = paletteEditButtonRef.current) => {
+    const value = pixelDocument.palette.colors[index];
+    if (isPlaying || !value || !anchor) return;
+    setSelectedPaletteIndex(index);
+    setPaletteEdit({tabId: activeTabID, index, value, anchor});
   };
 
   const removePaletteColor = () => {
@@ -6047,6 +6009,7 @@ function App() {
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.defaultPrevented || event.isComposing) return;
+      if (document.querySelector(".color-picker-popover")) return;
       const key = event.key.toLowerCase();
       if (key === "escape" && celPropertiesDialog) {
         event.preventDefault();
@@ -6764,6 +6727,12 @@ function App() {
                 <button type="button" role="menuitem" onClick={() => { setIsEditMenuOpen(false); dispatchCommandShortcut("shiftPixelsDown"); }}><ChevronDown size={16} />{language === "zh" ? "向下 1 像素" : "Down 1 Pixel"}<span>{formatShortcutForPlatform(commandShortcutAssignments.shiftPixelsDown)}</span></button>
               </div>, menuLayerRef.current)}
             </div>
+            <div className="menu-divider" role="separator" />
+            <p className="menu-label">{ui.colorMode}</p>
+            <button type="button" role="menuitemradio" aria-checked={pixelDocument.colorMode === "rgba"} disabled={isPlaying} onClick={() => { setIsEditMenuOpen(false); dispatchCommandShortcut("setRGBA"); }}><Check size={16} className={pixelDocument.colorMode === "rgba" ? "" : "menu-check-placeholder"} />{ui.rgbaMode}<span>{formatShortcutForPlatform(commandShortcutAssignments.setRGBA)}</span></button>
+            <button type="button" role="menuitemradio" aria-checked={pixelDocument.colorMode === "grayscale"} disabled={isPlaying} onClick={() => { setIsEditMenuOpen(false); dispatchCommandShortcut("setGrayscale"); }}><Check size={16} className={pixelDocument.colorMode === "grayscale" ? "" : "menu-check-placeholder"} />{ui.grayscaleMode}<span>{formatShortcutForPlatform(commandShortcutAssignments.setGrayscale)}</span></button>
+            <button type="button" role="menuitemradio" aria-checked={pixelDocument.colorMode === "indexed"} disabled={isPlaying} onClick={() => { setIsEditMenuOpen(false); dispatchCommandShortcut("setIndexed"); }}><Check size={16} className={pixelDocument.colorMode === "indexed" ? "" : "menu-check-placeholder"} />{ui.indexedMode}<span>{formatShortcutForPlatform(commandShortcutAssignments.setIndexed)}</span></button>
+            <button type="button" role="menuitemradio" aria-checked={pixelDocument.colorMode === "bitmap"} disabled={isPlaying} onClick={() => { setIsEditMenuOpen(false); dispatchCommandShortcut("setBitmap"); }}><Check size={16} className={pixelDocument.colorMode === "bitmap" ? "" : "menu-check-placeholder"} />{ui.bitmapMode}<span>{formatShortcutForPlatform(commandShortcutAssignments.setBitmap)}</span></button>
           </div>, menuLayerRef.current)}
         </div>
         <div className="file-menu" ref={spriteMenuRef} onPointerEnter={() => {
@@ -7197,16 +7166,14 @@ function App() {
       {inspectorVisible && <aside className="inspector" onContextMenu={(event) => {
         if (event.target === event.currentTarget) openContextMenu(event, {kind: "panel", panel: "inspector"});
       }}>
-        <section className="panel-section color-section">
-          <div className="color-section-header" onContextMenu={(event) => openContextMenu(event, {kind: "panel", panel: "inspector"})}>
-            <h2>{ui.color}</h2>
-            <select className="color-mode-select" value={pixelDocument.colorMode} disabled={isPlaying} aria-label={ui.colorMode} title={ui.colorMode} onChange={(event) => changeColorMode(event.target.value as ColorMode)}>
-              <option value="rgba">{ui.rgbaMode}</option>
-              <option value="grayscale">{ui.grayscaleMode}</option>
-              <option value="indexed">{ui.indexedMode}</option>
-              <option value="bitmap">{ui.bitmapMode}</option>
-            </select>
-          </div>
+        <CollapsiblePanelSection
+          id="color"
+          title={ui.color}
+          className="color-section"
+          collapsed={collapsedInspectorSections.has("color")}
+          onToggle={() => toggleInspectorSection("color")}
+          onHeaderContextMenu={(event) => openContextMenu(event, {kind: "panel", panel: "inspector"})}
+        >
           {pixelDocument.colorMode === "indexed" && <div className="color-settings-row">
             <label>
               <span>{language === "zh" ? "抖动" : "Dither"}</span>
@@ -7215,48 +7182,26 @@ function App() {
           </div>}
           <div className="color-editor-row">
             <div className="color-pair">
-              <label className={`color-chip is-foreground${colorTarget === "foreground" ? " is-active" : ""}`} style={colorChipBackground(foregroundColor, foregroundAlpha)} title={ui.foreground}>
-                <input type="color" value={foregroundColor} aria-label={ui.foreground} onPointerDown={() => setColorTarget("foreground")} onChange={(event) => { setColorTarget("foreground"); setForegroundColor(event.target.value); }} />
-              </label>
-              <label className={`color-chip is-background${colorTarget === "background" ? " is-active" : ""}`} style={colorChipBackground(backgroundColor, backgroundAlpha)} title={ui.background}>
-                <input type="color" value={backgroundColor} aria-label={ui.background} onPointerDown={() => setColorTarget("background")} onChange={(event) => { setColorTarget("background"); setBackgroundColor(event.target.value); }} />
-              </label>
+              <ColorField className={`color-chip is-foreground${colorTarget === "foreground" ? " is-active" : ""}`}
+                value={paletteColorFromEditor(foregroundColor, foregroundAlpha)} alpha alphaRange={preferences.color.alphaRange}
+                label={ui.foreground} language={language} onOpen={() => setColorTarget("foreground")}
+                onChange={(value) => usePaletteColor(value, "foreground")} />
+              <ColorField className={`color-chip is-background${colorTarget === "background" ? " is-active" : ""}`}
+                value={paletteColorFromEditor(backgroundColor, backgroundAlpha)} alpha alphaRange={preferences.color.alphaRange}
+                label={ui.background} language={language} onOpen={() => setColorTarget("background")}
+                onChange={(value) => usePaletteColor(value, "background")} />
             </div>
             <div className="color-editor-summary">
               <span>{colorTarget === "foreground" ? ui.foreground : ui.background}</span>
-              <code title={editedColorText}>{editedColorSummary}</code>
+              <code title={editedColorSummary}>{editedColorSummary}</code>
             </div>
             <button className="swap-colors" type="button" title={ui.swapColors} aria-label={ui.swapColors} onClick={() => { setForegroundColor(backgroundColor); setForegroundAlpha(backgroundAlpha); setBackgroundColor(foregroundColor); setBackgroundAlpha(foregroundAlpha); }}><ChevronLeft size={13} /><ChevronRight size={13} /></button>
           </div>
-          <div className="color-model-tabs" role="tablist" aria-label={ui.color}>
-            <button type="button" role="tab" aria-selected={colorEditorMode === "rgba"} className={colorEditorMode === "rgba" ? "is-active" : ""} onClick={() => setColorEditorMode("rgba")}>RGBA</button>
-            <button type="button" role="tab" aria-selected={colorEditorMode === "hsla"} className={colorEditorMode === "hsla" ? "is-active" : ""} onClick={() => setColorEditorMode("hsla")}>HSLA</button>
-          </div>
-          <div className="color-channel-grid">
-            {colorChannels.map((channel) => (
-              <label className={`color-channel${channel.key === "a" ? " is-alpha" : ""}`} key={`${colorEditorMode}-${channel.key}`}>
-                <span>{channel.label}</span>
-                <input type="range" min="0" max={channel.maximum} value={Math.round(channel.value)} onChange={(event) => updateColorChannel(channel.key, Number(event.target.value))} />
-                <input className="color-channel-number" type="number" min="0" max={channel.maximum} value={Math.round(channel.value)} aria-label={`${colorEditorMode.toUpperCase()} ${channel.label}`} onChange={(event) => updateColorChannel(channel.key, Number(event.target.value))} />
-                <span className="color-channel-unit">{channel.maximum === 100 ? "%" : ""}</span>
-              </label>
-            ))}
-          </div>
-          <details className="color-selector-panel">
-            <summary>{language === "zh" ? "颜色选择器" : "Color selector"}</summary>
-            <label className="compact-field"><span>{language === "zh" ? "类型" : "Type"}</span><select value={colorSelectorMode} onChange={(event) => setColorSelectorMode(event.target.value as ColorSelectorMode)}><option value="spectrum">{language === "zh" ? "光谱" : "Spectrum"}</option><option value="wheel">{language === "zh" ? "色轮" : "Color wheel"}</option><option value="tint-shade-tone">{language === "zh" ? "色调 / 明暗" : "Tint / shade / tone"}</option></select></label>
-            <ColorSelector
-              mode={colorSelectorMode}
-              color={colorTarget === "foreground" ? foregroundColor : backgroundColor}
-              label={language === "zh" ? "调整当前颜色" : "Adjust current color"}
-              onChange={(color) => colorTarget === "foreground" ? setForegroundColor(color) : setBackgroundColor(color)}
-            />
-          </details>
           <div className="panel-subheading">
             <span>{ui.palette}</span>
             <div className="mini-actions palette-actions" ref={paletteMenuRef}>
               <button type="button" title={ui.addColor} aria-label={ui.addColor} disabled={isPlaying} onClick={addPaletteColor}><Plus size={13} /></button>
-              <button className="palette-edit" type="button" title={ui.editColor} aria-label={ui.editColor} disabled={isPlaying || !hasSelectedPaletteColor} onClick={updatePaletteColor}>
+              <button ref={paletteEditButtonRef} className="palette-edit" type="button" title={ui.editColor} aria-label={ui.editColor} aria-haspopup="dialog" aria-expanded={Boolean(paletteEdit)} disabled={isPlaying || !hasSelectedPaletteColor} onClick={() => updatePaletteColor()}>
                 <Pencil size={12} />
               </button>
               <button type="button" title={ui.removeColor} aria-label={ui.removeColor} disabled={isPlaying || pixelDocument.palette.colors.length <= 1 || !hasSelectedPaletteColor} onClick={removePaletteColor}><Trash2 size={13} /></button>
@@ -7294,21 +7239,33 @@ function App() {
           <div className="swatch-grid" aria-label={ui.palette}>
             {pixelDocument.palette.colors.map((swatch, index) => (
               <button
-                key={`${swatch}-${index}`}
+                key={index}
                 className={paletteIndex === index ? "swatch is-selected" : "swatch"}
                 style={colorChipBackground(swatch)}
                 onClick={() => { setSelectedPaletteIndex(index); usePaletteColor(swatch, "foreground"); }}
+                onDoubleClick={(event) => updatePaletteColor(index, event.currentTarget)}
                 onContextMenu={(event) => { event.preventDefault(); setSelectedPaletteIndex(index); usePaletteColor(swatch, "background"); }}
-                title={swatch}
+                title={`${index}: ${swatch.toUpperCase()}`}
+                aria-pressed={paletteIndex === index}
                 aria-label={`${ui.useColor} ${swatch}`}
               />
             ))}
           </div>
-        </section>
+        </CollapsiblePanelSection>
+        {paletteEdit && paletteEdit.tabId === activeTabID && <ColorPickerPopover
+          value={paletteEdit.value} anchor={paletteEdit.anchor} language={language}
+          title={`${language === "zh" ? "编辑调色板颜色" : "Edit palette color"} #${paletteEdit.index}`}
+          alpha alphaRange={preferences.color.alphaRange}
+          preset={{label: language === "zh" ? "使用前景色" : "Use foreground color", value: paletteColorFromEditor(foregroundColor, foregroundAlpha)}}
+          onClose={() => setPaletteEdit(null)}
+          onApply={(value) => {
+            if (paletteEdit.tabId !== activeTabID || pixelDocument.palette.colors[paletteEdit.index] !== paletteEdit.value) return;
+            mutateDocument("Edit Palette Color", () => editPaletteColor(pixelDocument, paletteEdit.index, value));
+          }}
+        />}
 
         <div className="inspector-scroll">
-        {activeTileset && <section className="panel-section tilemap-section tool-settings-section">
-          <div className="tilemap-heading"><h2>{language === "zh" ? "图块地图" : "Tilemap"}</h2><span>{activeTileset.tileWidth} × {activeTileset.tileHeight}</span></div>
+        {activeTileset && <CollapsiblePanelSection id="tilemap" title={language === "zh" ? "图块地图" : "Tilemap"} className="tilemap-section tool-settings-section" collapsed={collapsedInspectorSections.has("tilemap")} onToggle={() => toggleInspectorSection("tilemap")} headerActions={<span className="panel-heading-meta">{activeTileset.tileWidth} × {activeTileset.tileHeight}</span>}>
           <div className="tilemap-tileset-actions">
             <button type="button" className="panel-command" onClick={renameActiveTileset}>{language === "zh" ? "重命名图块集" : "Rename Tileset"}</button>
             <button type="button" className="panel-command" onClick={createSharedTilemapLayer}>{language === "zh" ? "新建共享图层" : "New Shared Layer"}</button>
@@ -7454,7 +7411,7 @@ function App() {
               ><i style={{background: terrain.color}} /><span>{terrain.name}</span><small>{terrain.id}</small></button>)}
             </div>
             {activeTerrain && <>
-              <label className="compact-field"><span>{language === "zh" ? "标识色" : "Color"}</span><input type="color" value={activeTerrain.color.slice(0, 7)} onChange={(event) => updateSelectedTerrainColor(event.target.value)} /></label>
+              <label className="compact-field"><span>{language === "zh" ? "标识色" : "Color"}</span><ColorField label={language === "zh" ? "地形标识色" : "Terrain color"} language={language} value={activeTerrain.color.slice(0, 7)} onChange={updateSelectedTerrainColor} /></label>
               <label className="compact-field"><span>{language === "zh" ? "邻域" : "Neighbors"}</span><select value={activeTerrain.neighborMode} onChange={(event) => updateActiveTerrain({neighborMode: event.target.value as TerrainNeighborMode})}>
                 {activeTileset.grid.kind !== "hexagonal" && <option value="edge4">4-edge</option>}
                 {activeTileset.grid.kind === "orthogonal" && <option value="blob8">Blob / 47</option>}
@@ -7550,15 +7507,13 @@ function App() {
               }} onContextMenu={(event) => { setSelectedTileID(tile.id); setSelectedTileIDs([tile.id]); setTileSelectionAnchorID(tile.id); openContextMenu(event, {kind: "tile", tileId: tile.id}); }} onKeyDown={(event) => { openKeyboardContextMenu(event, {kind: "tile", tileId: tile.id}); }}><LayerThumbnail pixels={tile.pixels} width={activeTileset.tileWidth} height={activeTileset.tileHeight} revision={revision} visible ariaLabel={`${language === "zh" ? "图块" : "Tile"} ${tile.id}`} size={Math.max(20, tilePreviewSize - 4)} /><span className="tile-swatch-meta">{tile.id} · {usage.cells}</span></button>;
             })}
           </div>
-        </section>}
+        </CollapsiblePanelSection>}
 
-        {selectedTool === "move" && <section className="panel-section tool-settings-section move-tool-section">
-          <h2>{ui.toolsByID.move}</h2>
+        {selectedTool === "move" && <CollapsiblePanelSection id="tool-move" title={ui.toolsByID.move} className="tool-settings-section move-tool-section" collapsed={collapsedInspectorSections.has("tool-move")} onToggle={() => toggleInspectorSection("tool-move")}>
           <label className="brush-option-row is-single"><input type="checkbox" checked={moveAutoSelect} onChange={(event) => setMoveAutoSelect(event.target.checked)} />{language === "zh" ? "自动选择图层" : "Auto select layer"}</label>
-        </section>}
+        </CollapsiblePanelSection>}
 
-        {selectedTool === "text" && <section className="panel-section text-tool-section tool-settings-section">
-          <h2>{language === "zh" ? "文字工具" : "Text Tool"}</h2>
+        {selectedTool === "text" && <CollapsiblePanelSection id="tool-text" title={language === "zh" ? "文字工具" : "Text Tool"} className="text-tool-section tool-settings-section" collapsed={collapsedInspectorSections.has("tool-text")} onToggle={() => toggleInspectorSection("tool-text")}>
           <label className="compact-field"><span>{language === "zh" ? "内容" : "Content"}</span><input type="text" value={textValue} onChange={(event) => setTextValue(event.target.value)} /></label>
           <label className="compact-field"><span>{language === "zh" ? "字体" : "Font"}</span><select value={textFontFamily} onChange={(event) => setTextFontFamily(event.target.value)}>{builtInTextFontFamilies.map((family) => <option key={family} value={family}>{family}</option>)}{loadedTextFonts.map((font) => <option key={font.family} value={font.family}>{font.family}</option>)}</select></label>
           <button type="button" className="panel-command text-font-import" onClick={() => void importTextFont()}><FileUp size={13} /><span>{language === "zh" ? "加载字体文件" : "Load font file"}</span></button>
@@ -7573,10 +7528,9 @@ function App() {
           <div className="brush-option-row is-single"><label><input type="checkbox" checked={textStroke} onChange={(event) => setTextStroke(event.target.checked)} />{language === "zh" ? "描边" : "Stroke"}</label></div>
           {textStroke && <label className="compact-field"><span>{language === "zh" ? "描边宽度" : "Stroke width"}</span><input type="number" min="1" max="64" value={textStrokeWidth} onChange={(event) => setTextStrokeWidth(Math.max(1, Math.min(64, Math.round(Number(event.target.value) || 1))))} /></label>}
           <div className="text-color-roles"><span><i style={colorChipBackground(foregroundColor, foregroundAlpha)} />{language === "zh" ? "前景色填充" : "Foreground fill"}</span><span><i style={colorChipBackground(backgroundColor, backgroundAlpha)} />{language === "zh" ? "背景色描边" : "Background stroke"}</span></div>
-        </section>}
+        </CollapsiblePanelSection>}
 
-        {selectedTool === "slice" && <section className="panel-section slice-tool-section tool-settings-section">
-          <h2>{ui.toolsByID.slice}</h2>
+        {selectedTool === "slice" && <CollapsiblePanelSection id="tool-slice" title={ui.toolsByID.slice} className="slice-tool-section tool-settings-section" collapsed={collapsedInspectorSections.has("tool-slice")} onToggle={() => toggleInspectorSection("tool-slice")}>
           {selection && <button type="button" className="panel-command" onClick={createSliceFromSelection}>{language === "zh" ? "从选区创建切片" : "Create slice from selection"}</button>}
           {pixelDocument.slices.length > 0 && <>
             <div className="slice-list" role="listbox" aria-label={language === "zh" ? "切片选择" : "Slice selection"}>
@@ -7601,7 +7555,7 @@ function App() {
             <label className="compact-field"><span>{language === "zh" ? "切片" : "Slice"}</span><select value={activeSlice?.id ?? ""} onChange={(event) => setActiveSliceId(event.target.value)}>{pixelDocument.slices.map((slice) => <option key={slice.id} value={slice.id}>{slice.name}</option>)}</select></label>
             {activeSlice && <>
               <label className="compact-field"><span>{language === "zh" ? "名称" : "Name"}</span><input type="text" value={activeSlice.name} onChange={(event) => mutateDocument("Rename Slice", () => updateSlice(pixelDocument, activeSlice.id, {name: event.target.value}))} /></label>
-              <label className="compact-field"><span>{language === "zh" ? "颜色" : "Color"}</span><input type="color" value={/^#[0-9a-f]{8}$/i.test(activeSlice.color) ? activeSlice.color.slice(0, 7) : "#ef476f"} onChange={(event) => mutateDocument("Edit Slice Color", () => updateSlice(pixelDocument, activeSlice.id, {color: `${event.target.value}${activeSlice.color.slice(7, 9) || "ff"}`}))} /></label>
+              <label className="compact-field"><span>{language === "zh" ? "颜色" : "Color"}</span><ColorField label={language === "zh" ? "切片颜色" : "Slice color"} language={language} value={/^#[0-9a-f]{8}$/i.test(activeSlice.color) ? activeSlice.color.slice(0, 7) : "#ef476f"} onChange={(value) => mutateDocument("Edit Slice Color", () => updateSlice(pixelDocument, activeSlice.id, {color: `${value}${activeSlice.color.slice(7, 9) || "ff"}`}))} /></label>
               {!activeSliceKey && <div className="slice-tool-actions"><span className="panel-hint">{language === "zh" ? "当前帧没有切片关键帧" : "No slice key on the current frame"}</span><button className="panel-command" type="button" onClick={addCurrentSliceKey}>{language === "zh" ? "新建当前帧关键帧" : "Add key on current frame"}</button></div>}
               {activeSliceKey && <>
                 <div className="cel-transform-fields"><label><span>X</span><input type="number" value={activeSliceKey.x} onChange={(event) => editCurrentSliceGeometry({x: Math.max(0, Math.round(Number(event.target.value) || 0))})} /></label><label><span>Y</span><input type="number" value={activeSliceKey.y} onChange={(event) => editCurrentSliceGeometry({y: Math.max(0, Math.round(Number(event.target.value) || 0))})} /></label></div>
@@ -7617,10 +7571,9 @@ function App() {
               <div className="slice-tool-actions"><button className="panel-command is-danger" type="button" onClick={() => mutateDocument("Delete Slice", () => deleteSlice(pixelDocument, activeSlice.id))}>{language === "zh" ? "删除切片" : "Delete slice"}</button></div>
             </>}
           </>}
-        </section>}
+        </CollapsiblePanelSection>}
 
-        {brushSizeTools.has(selectedTool) && <section className="panel-section brush-section tool-settings-section">
-          <h2>{ui.toolsByID[selectedTool]}</h2>
+        {brushSizeTools.has(selectedTool) && <CollapsiblePanelSection id={`tool-${selectedTool}`} title={ui.toolsByID[selectedTool]} className="brush-section tool-settings-section" collapsed={collapsedInspectorSections.has(`tool-${selectedTool}`)} onToggle={() => toggleInspectorSection(`tool-${selectedTool}`)}>
           <BrushPresetPanel settings={currentBrushSettings} onApply={applyBrushPreset} zh={language === "zh"} />
           <label className="compact-range">
             <span>{ui.brushSize}</span>
@@ -7668,16 +7621,14 @@ function App() {
             </div>
             <button className="panel-command" type="button" onClick={() => setPatternBrush(null)}>{language === "zh" ? "改用前景色" : "Use foreground color"}</button>
           </div>}
-        </section>}
+        </CollapsiblePanelSection>}
 
-        {selectedTool === "gradient" && <section className="panel-section tool-settings-section">
-          <h2>{ui.toolsByID.gradient}</h2>
+        {selectedTool === "gradient" && <CollapsiblePanelSection id="tool-gradient" title={ui.toolsByID.gradient} className="tool-settings-section" collapsed={collapsedInspectorSections.has("tool-gradient")} onToggle={() => toggleInspectorSection("tool-gradient")}>
           <label className="compact-field"><span>{language === "zh" ? "类型" : "Type"}</span><select value={gradientType} onChange={(event) => setGradientType(event.target.value as GradientType)}><option value="linear">{language === "zh" ? "线性" : "Linear"}</option><option value="radial">{language === "zh" ? "径向" : "Radial"}</option><option value="angular">{language === "zh" ? "角度" : "Angular"}</option><option value="reflected">{language === "zh" ? "反射" : "Reflected"}</option><option value="diamond">{language === "zh" ? "菱形" : "Diamond"}</option></select></label>
           <label className="compact-field"><span>{language === "zh" ? "抖动" : "Dither"}</span><select value={gradientDither} onChange={(event) => setGradientDither(event.target.value as GradientDither)}><option value="none">{language === "zh" ? "无" : "None"}</option><option value="ordered">{language === "zh" ? "有序" : "Ordered"}</option></select></label>
-        </section>}
+        </CollapsiblePanelSection>}
 
-        {selectedTool === "selection" && <section className="panel-section selection-tools">
-          <h2>{ui.selection}</h2>
+        {selectedTool === "selection" && <CollapsiblePanelSection id="tool-selection" title={ui.selection} className="selection-tools" collapsed={collapsedInspectorSections.has("tool-selection")} onToggle={() => toggleInspectorSection("tool-selection")}>
           <label className="compact-field"><span>{ui.selectionShape}</span><select value={selectionMode} onChange={(event) => setSelectionMode(event.target.value as SelectionMode)}>
             <option value="rectangle">{ui.rectangularSelection}</option>
             <option value="ellipse">{ui.ellipticalSelection}</option>
@@ -7715,10 +7666,9 @@ function App() {
             <button type="button" className="panel-command" onClick={() => setSelection(featherSelection(selection, selectionFeatherAmount, pixelDocument.width, pixelDocument.height))}>{language === "zh" ? "应用羽化" : "Apply feather"}</button>
             <button type="button" className="panel-command" onClick={createSliceFromSelection}>{language === "zh" ? "从选区创建切片" : "Create slice from selection"}</button>
           </>}
-        </section>}
+        </CollapsiblePanelSection>}
 
-        {selectedTool === "transform" && <section className="panel-section selection-tools">
-          <h2>{ui.transform}</h2>
+        {selectedTool === "transform" && <CollapsiblePanelSection id="tool-transform" title={ui.transform} className="selection-tools" collapsed={collapsedInspectorSections.has("tool-transform")} onToggle={() => toggleInspectorSection("tool-transform")}>
           <label className="compact-field"><span>{ui.transformModeLabel}</span><select value={transformMode} onChange={(event) => setTransformMode(event.target.value as TransformMode)}>
             <option value="scale">{ui.transformScale}</option>
             <option value="perspective">{ui.transformPerspective}</option>
@@ -7736,10 +7686,9 @@ function App() {
             <div className="numeric-transform-actions"><button type="button" className="panel-command" disabled={!canEditPixels || (selectionXDraft === selection.x && selectionYDraft === selection.y)} onClick={moveCurrentSelectionNumerically}>{language === "zh" ? "应用位置" : "Apply position"}</button><button type="button" className="panel-command" disabled={!canEditPixels || (selectionWidthDraft === selection.width && selectionHeightDraft === selection.height)} onClick={() => transformCurrentSelection("scale")}>{ui.scaleSelection}</button></div>
             <div className="arbitrary-rotation-row"><label><span>{ui.arbitraryRotation}</span><input type="number" min="-359.9" max="359.9" step="0.1" value={selectionRotationDraft} onChange={(event) => setSelectionRotationDraft(Number(event.target.value) || 0)} /></label><button type="button" disabled={!canEditPixels || selectionRotationDraft === 0} onClick={rotateCurrentSelectionArbitrary}>{ui.applyRotation}</button></div>
           </>}
-        </section>}
+        </CollapsiblePanelSection>}
 
-        {activeTab.commandScope === "cels" && selectedCels.length > 0 && <section className="panel-section cel-transform-panel">
-          <h2>{ui.celTransform}</h2>
+        {activeTab.commandScope === "cels" && selectedCels.length > 0 && <CollapsiblePanelSection id="cel-transform" title={ui.celTransform} className="cel-transform-panel" collapsed={collapsedInspectorSections.has("cel-transform")} onToggle={() => toggleInspectorSection("cel-transform")}>
           <div className="cel-transform-fields">
             <label><span>{ui.angle}</span><input type="number" min="-359.9" max="359.9" step="0.1" value={celRotationDraft} onChange={(event) => setCelRotationDraft(Number(event.target.value) || 0)} /></label>
             <label><span>{ui.offsetX}</span><input type="number" min="-4096" max="4096" value={celOffsetXDraft} onChange={(event) => setCelOffsetXDraft(Number(event.target.value) || 0)} /></label>
@@ -7747,10 +7696,9 @@ function App() {
           </div>
           <button className="panel-command" type="button" disabled={isPlaying || !transformTargetCelsEditable || (celRotationDraft === 0 && celOffsetXDraft === 0 && celOffsetYDraft === 0)} onClick={applySelectedCelTransform}>{ui.applyCelTransform}</button>
           <button className="panel-command" type="button" disabled={isPlaying || !transformTargetCelsEditable || transformTargetCels.every(({layerId, frameId}) => { const cel = getCel(pixelDocument, layerId, frameId); return Boolean(cel && cel.x === 0 && cel.y === 0 && cel.width === pixelDocument.width && cel.height === pixelDocument.height); })} onClick={rasterizeSelectedCels}>{ui.rasterizeCels}</button>
-        </section>}
+        </CollapsiblePanelSection>}
 
-        <section className="panel-section canvas-aids-panel">
-          <h2>{language === "zh" ? "画布辅助" : "Canvas aids"}</h2>
+        <CollapsiblePanelSection id="canvas-aids" title={language === "zh" ? "画布辅助" : "Canvas aids"} className="canvas-aids-panel" collapsed={collapsedInspectorSections.has("canvas-aids")} onToggle={() => toggleInspectorSection("canvas-aids")}>
           <div className="brush-option-row">
             <label><input type="checkbox" checked={showPixelGrid} onChange={(event) => setShowPixelGrid(event.target.checked)} />{language === "zh" ? "像素网格" : "Pixel grid"}</label>
             <label><input type="checkbox" checked={pixelDocument.settings.snapToGrid} onChange={(event) => mutateDocument("Change Grid Snapping", () => { pixelDocument.settings.snapToGrid = event.target.checked; return true; })} />{language === "zh" ? "吸附网格" : "Snap"}</label>
@@ -7776,7 +7724,7 @@ function App() {
             <button type="button" className="panel-command" onClick={() => mutateDocument("Add Guide", () => { pixelDocument.guides.push({id: `guide-${Date.now()}-${pixelDocument.guides.length}`, axis: "horizontal", position: pixelDocument.height / 2}); return true; })}>{language === "zh" ? "+ 水平辅助线" : "+ Horizontal guide"}</button>
           </div>
           {pixelDocument.guides.map((guide) => <div className="guide-row" key={guide.id}><span>{guide.axis === "vertical" ? "X" : "Y"}</span><input type="number" min="0" max={guide.axis === "vertical" ? pixelDocument.width : pixelDocument.height} value={guide.position} onChange={(event) => mutateDocument("Move Guide", () => { guide.position = Math.max(0, Math.min(guide.axis === "vertical" ? pixelDocument.width : pixelDocument.height, Number(event.target.value) || 0)); return true; })} /><button type="button" title={language === "zh" ? "删除辅助线" : "Delete guide"} onClick={() => mutateDocument("Delete Guide", () => { const index = pixelDocument.guides.findIndex((candidate) => candidate.id === guide.id); if (index < 0) return false; pixelDocument.guides.splice(index, 1); return true; })}><X size={13} /></button></div>)}
-        </section>
+        </CollapsiblePanelSection>
 
         </div>
 
@@ -7858,8 +7806,8 @@ function App() {
                 <label className="timeline-fps" title={language === "zh" ? "前置帧数" : "Previous onion frames"}><span>−</span><input type="number" min="0" max="16" value={pixelDocument.settings.onionPreviousFrames} onChange={(event) => mutateDocument("Change Onion Skin", () => { pixelDocument.settings.onionPreviousFrames = Math.max(0, Math.min(16, Math.round(Number(event.target.value) || 0))); return true; })} /></label>
                 <label className="timeline-fps" title={language === "zh" ? "后置帧数" : "Next onion frames"}><span>+</span><input type="number" min="0" max="16" value={pixelDocument.settings.onionNextFrames} onChange={(event) => mutateDocument("Change Onion Skin", () => { pixelDocument.settings.onionNextFrames = Math.max(0, Math.min(16, Math.round(Number(event.target.value) || 0))); return true; })} /></label>
                 <label className="timeline-fps" title={language === "zh" ? "洋葱皮透明度" : "Onion opacity"}><span>%</span><input type="number" min="0" max="100" value={Math.round(pixelDocument.settings.onionOpacity * 100)} onChange={(event) => mutateDocument("Change Onion Skin", () => { pixelDocument.settings.onionOpacity = Math.max(0, Math.min(1, (Number(event.target.value) || 0) / 100)); return true; })} /></label>
-                <label className="timeline-advanced-color"><span>{language === "zh" ? "前帧" : "Previous"}</span><input className="timeline-color" type="color" value={pixelDocument.settings.onionPreviousColor.slice(0, 7)} onChange={(event) => mutateDocument("Change Onion Skin", () => { pixelDocument.settings.onionPreviousColor = `${event.target.value}ff`; return true; })} /></label>
-                <label className="timeline-advanced-color"><span>{language === "zh" ? "后帧" : "Next"}</span><input className="timeline-color" type="color" value={pixelDocument.settings.onionNextColor.slice(0, 7)} onChange={(event) => mutateDocument("Change Onion Skin", () => { pixelDocument.settings.onionNextColor = `${event.target.value}ff`; return true; })} /></label>
+                <label className="timeline-advanced-color"><span>{language === "zh" ? "前帧" : "Previous"}</span><ColorField className="timeline-color" label={language === "zh" ? "前帧颜色" : "Previous frame color"} language={language} value={pixelDocument.settings.onionPreviousColor.slice(0, 7)} onChange={(value) => mutateDocument("Change Onion Skin", () => { pixelDocument.settings.onionPreviousColor = `${value}ff`; return true; })} /></label>
+                <label className="timeline-advanced-color"><span>{language === "zh" ? "后帧" : "Next"}</span><ColorField className="timeline-color" label={language === "zh" ? "后帧颜色" : "Next frame color"} language={language} value={pixelDocument.settings.onionNextColor.slice(0, 7)} onChange={(value) => mutateDocument("Change Onion Skin", () => { pixelDocument.settings.onionNextColor = `${value}ff`; return true; })} /></label>
                 <button className="panel-command" type="button" aria-pressed={Boolean((detachedPreviewRef.current && !detachedPreviewRef.current.closed) || previewOpen)} onClick={toggleDetachedPreview}><Eye size={14} />{language === "zh" ? "独立动画预览" : "Detached preview"}</button>
               </div>
             </details>
@@ -8183,7 +8131,7 @@ function App() {
             <label className="dialog-field"><span>{ui.loopEnd}</span><select value={tagDialog.toFrameId} onChange={(event) => setTagDialog({...tagDialog, toFrameId: event.target.value})}>{pixelDocument.frames.map((frame, index) => <option value={frame.id} key={frame.id}>{index + preferences.timeline.firstFrame}</option>)}</select></label>
             <label className="dialog-field"><span>{ui.direction}</span><select value={tagDialog.direction} onChange={(event) => setTagDialog({...tagDialog, direction: event.target.value as TagDirection})}><option value="forward">{ui.forward}</option><option value="reverse">{ui.reverse}</option><option value="pingpong">{ui.pingpong}</option></select></label>
             <label className="dialog-field"><span>{ui.repeatCount}</span><input type="number" min="0" max="65535" value={tagDialog.repeat} onChange={(event) => setTagDialog({...tagDialog, repeat: Math.max(0, Math.min(65535, Math.round(Number(event.target.value) || 0)))})} /></label>
-            <label className="dialog-color-field"><span>{ui.color}</span><input type="color" value={tagDialog.color} onChange={(event) => setTagDialog({...tagDialog, color: event.target.value})} /></label>
+            <label className="dialog-color-field"><span>{ui.color}</span><ColorField label={ui.color} language={language} value={tagDialog.color} onChange={(value) => setTagDialog({...tagDialog, color: value})} /></label>
           </div>
           <div className="dialog-actions"><button type="button" onClick={() => setTagDialog(null)}>{ui.cancel}</button><button type="submit" disabled={!tagDialog.name.trim()}>{ui.apply}</button></div>
         </form>

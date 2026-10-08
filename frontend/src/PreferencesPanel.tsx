@@ -1,5 +1,6 @@
 import type {ReactNode} from "react";
 import type {AppPreferences} from "./editor/preferences";
+import {ColorField} from "./ColorPicker";
 
 type PreferenceSection = Exclude<keyof AppPreferences, "version">;
 
@@ -89,8 +90,8 @@ export function PreferencesPanel({preferences, onChange, zh, afterGeneral}: {
         <label className="dialog-field"><span>{zh ? "前置洋葱帧" : "Previous onion frames"}</span><input type="number" min="0" max="16" value={preferences.timeline.onionPreviousFrames} onChange={(event) => patch("timeline", {onionPreviousFrames: Math.max(0, Math.min(16, Math.round(Number(event.target.value) || 0)))})} /></label>
         <label className="dialog-field"><span>{zh ? "后置洋葱帧" : "Next onion frames"}</span><input type="number" min="0" max="16" value={preferences.timeline.onionNextFrames} onChange={(event) => patch("timeline", {onionNextFrames: Math.max(0, Math.min(16, Math.round(Number(event.target.value) || 0)))})} /></label>
         <label className="dialog-field"><span>{zh ? "洋葱皮不透明度" : "Onion opacity"}</span><input type="number" min="0" max="100" value={preferences.timeline.onionOpacity} onChange={(event) => patch("timeline", {onionOpacity: Math.max(0, Math.min(100, Math.round(Number(event.target.value) || 0)))})} /></label>
-        <label className="dialog-color-field"><span>{zh ? "前置帧颜色" : "Previous frame color"}</span><input type="color" value={preferences.timeline.onionPreviousColor} onChange={(event) => patch("timeline", {onionPreviousColor: event.target.value})} /></label>
-        <label className="dialog-color-field"><span>{zh ? "后置帧颜色" : "Next frame color"}</span><input type="color" value={preferences.timeline.onionNextColor} onChange={(event) => patch("timeline", {onionNextColor: event.target.value})} /></label>
+        <label className="dialog-color-field"><span>{zh ? "前置帧颜色" : "Previous frame color"}</span><ColorField value={preferences.timeline.onionPreviousColor} onChange={(hex) => patch("timeline", {onionPreviousColor: hex})} label={zh ? "前置帧颜色" : "Previous frame color"} language={zh ? "zh" : "en"} /></label>
+        <label className="dialog-color-field"><span>{zh ? "后置帧颜色" : "Next frame color"}</span><ColorField value={preferences.timeline.onionNextColor} onChange={(hex) => patch("timeline", {onionNextColor: hex})} label={zh ? "后置帧颜色" : "Next frame color"} language={zh ? "zh" : "en"} /></label>
       </div>
     </details>
 
@@ -99,7 +100,7 @@ export function PreferencesPanel({preferences, onChange, zh, afterGeneral}: {
       <div className="preferences-section-body preferences-general">
         <label className="dialog-field dialog-field-wide"><span>{zh ? "笔刷预览" : "Brush preview"}</span><select value={preferences.cursor.preview} onChange={(event) => patch("cursor", {preview: event.target.value as AppPreferences["cursor"]["preview"]})}><option value="brush">{zh ? "笔刷边缘" : "Brush edges"}</option><option value="crosshair">{zh ? "十字准星" : "Crosshair"}</option><option value="both">{zh ? "两者" : "Both"}</option></select></label>
         <label className="dialog-field dialog-field-wide"><span>{zh ? "光标缩放" : "Cursor scale"}</span><input type="number" min="50" max="400" step="25" value={preferences.cursor.scale} onChange={(event) => patch("cursor", {scale: Math.max(50, Math.min(400, Math.round(Number(event.target.value) || 100)))})} /></label>
-        <label className="dialog-color-field"><span>{zh ? "光标颜色" : "Cursor color"}</span><input type="color" value={preferences.cursor.color} onChange={(event) => patch("cursor", {color: event.target.value})} /></label>
+        <label className="dialog-color-field"><span>{zh ? "光标颜色" : "Cursor color"}</span><ColorField value={preferences.cursor.color} onChange={(hex) => patch("cursor", {color: hex})} label={zh ? "光标颜色" : "Cursor color"} language={zh ? "zh" : "en"} /></label>
       </div>
     </details>
 
@@ -108,8 +109,8 @@ export function PreferencesPanel({preferences, onChange, zh, afterGeneral}: {
       <div className="preferences-section-body preferences-general">
         <label className="dialog-field dialog-field-wide"><span>{zh ? "新建项目背景" : "New document background"}</span><select value={preferences.background.defaultFill} onChange={(event) => patch("background", {defaultFill: event.target.value as AppPreferences["background"]["defaultFill"]})}><option value="transparent">{zh ? "透明" : "Transparent"}</option><option value="foreground">{zh ? "前景色" : "Foreground"}</option><option value="background">{zh ? "背景色" : "Background"}</option></select></label>
         <label className="dialog-field dialog-field-wide"><span>{zh ? "棋盘格尺寸" : "Checker size"}</span><input type="number" min="2" max="64" value={preferences.background.checkerSize} onChange={(event) => patch("background", {checkerSize: Math.max(2, Math.min(64, Math.round(Number(event.target.value) || 8)))})} /></label>
-        <label className="dialog-color-field"><span>{zh ? "浅色格" : "Light square"}</span><input type="color" value={preferences.background.checkerLight} onChange={(event) => patch("background", {checkerLight: event.target.value})} /></label>
-        <label className="dialog-color-field"><span>{zh ? "深色格" : "Dark square"}</span><input type="color" value={preferences.background.checkerDark} onChange={(event) => patch("background", {checkerDark: event.target.value})} /></label>
+        <label className="dialog-color-field"><span>{zh ? "浅色格" : "Light square"}</span><ColorField value={preferences.background.checkerLight} onChange={(hex) => patch("background", {checkerLight: hex})} label={zh ? "浅色格" : "Light square"} language={zh ? "zh" : "en"} /></label>
+        <label className="dialog-color-field"><span>{zh ? "深色格" : "Dark square"}</span><ColorField value={preferences.background.checkerDark} onChange={(hex) => patch("background", {checkerDark: hex})} label={zh ? "深色格" : "Dark square"} language={zh ? "zh" : "en"} /></label>
       </div>
     </details>
 
@@ -120,16 +121,16 @@ export function PreferencesPanel({preferences, onChange, zh, afterGeneral}: {
         <label className="dialog-field"><span>{zh ? "网格线不透明度" : "Grid opacity"}</span><input type="number" min="0" max="100" value={preferences.grid.lineOpacity} onChange={(event) => patch("grid", {lineOpacity: Math.max(0, Math.min(100, Math.round(Number(event.target.value) || 0)))})} /></label>
         <label className="dialog-field"><span>{zh ? "像素网格不透明度" : "Pixel grid opacity"}</span><input type="number" min="0" max="100" value={preferences.grid.pixelGridOpacity} onChange={(event) => patch("grid", {pixelGridOpacity: Math.max(0, Math.min(100, Math.round(Number(event.target.value) || 0)))})} /></label>
         <label className="dialog-checkbox dialog-field-wide"><input type="checkbox" checked={preferences.grid.showPixelGrid} onChange={(event) => patch("grid", {showPixelGrid: event.target.checked})} />{zh ? "默认显示像素网格" : "Show pixel grid by default"}</label>
-        <label className="dialog-color-field"><span>{zh ? "网格线颜色" : "Grid line color"}</span><input type="color" value={preferences.grid.lineColor} onChange={(event) => patch("grid", {lineColor: event.target.value})} /></label>
-        <label className="dialog-color-field"><span>{zh ? "像素网格颜色" : "Pixel grid color"}</span><input type="color" value={preferences.grid.pixelGridColor} onChange={(event) => patch("grid", {pixelGridColor: event.target.value})} /></label>
+        <label className="dialog-color-field"><span>{zh ? "网格线颜色" : "Grid line color"}</span><ColorField value={preferences.grid.lineColor} onChange={(hex) => patch("grid", {lineColor: hex})} label={zh ? "网格线颜色" : "Grid line color"} language={zh ? "zh" : "en"} /></label>
+        <label className="dialog-color-field"><span>{zh ? "像素网格颜色" : "Pixel grid color"}</span><ColorField value={preferences.grid.pixelGridColor} onChange={(hex) => patch("grid", {pixelGridColor: hex})} label={zh ? "像素网格颜色" : "Pixel grid color"} language={zh ? "zh" : "en"} /></label>
       </div>
     </details>
 
     <details>
       <summary>{zh ? "辅助线与切片" : "Guides & Slices"}</summary>
       <div className="preferences-section-body preferences-general">
-        <label className="dialog-color-field"><span>{zh ? "辅助线颜色" : "Guide color"}</span><input type="color" value={preferences.guides.guideColor} onChange={(event) => patch("guides", {guideColor: event.target.value})} /></label>
-        <label className="dialog-color-field"><span>{zh ? "切片边缘颜色" : "Slice edge color"}</span><input type="color" value={preferences.guides.sliceColor} onChange={(event) => patch("guides", {sliceColor: event.target.value})} /></label>
+        <label className="dialog-color-field"><span>{zh ? "辅助线颜色" : "Guide color"}</span><ColorField value={preferences.guides.guideColor} onChange={(hex) => patch("guides", {guideColor: hex})} label={zh ? "辅助线颜色" : "Guide color"} language={zh ? "zh" : "en"} /></label>
+        <label className="dialog-color-field"><span>{zh ? "切片边缘颜色" : "Slice edge color"}</span><ColorField value={preferences.guides.sliceColor} onChange={(hex) => patch("guides", {sliceColor: hex})} label={zh ? "切片边缘颜色" : "Slice edge color"} language={zh ? "zh" : "en"} /></label>
       </div>
     </details>
 

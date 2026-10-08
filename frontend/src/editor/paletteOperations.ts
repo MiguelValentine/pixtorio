@@ -1,6 +1,18 @@
 import {isTilemapLayer, type PixelDocument} from "./document";
 import {indexPixels, refreshIndexedDocument, refreshTilemapCaches, renderIndexedPixels} from "./colorModes";
 
+/** Edit one slot without remapping the indexes that refer to it. */
+export function editPaletteColor(document: PixelDocument, index: number, color: string) {
+  if (!Number.isInteger(index) || index < 0 || index >= document.palette.colors.length
+    || !/^#[\da-f]{6}([\da-f]{2})?$/i.test(color)) throw new Error("Invalid palette color");
+  const value = color.toLowerCase();
+  const previous = document.palette.colors[index].toLowerCase();
+  if ((previous.length === 7 ? `${previous}ff` : previous) === (value.length === 7 ? `${value}ff` : value)) return false;
+  document.palette.colors[index] = value;
+  refreshIndexedDocument(document);
+  return true;
+}
+
 /** Relocate the transparent slot without changing the artwork's appearance. */
 export function relocateTransparentIndex(document: PixelDocument, index: number) {
   const previous = document.palette.transparentIndex;

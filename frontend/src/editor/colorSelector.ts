@@ -98,10 +98,12 @@ export function selectorColorAt(
   width: number,
   height: number,
   baseHex: string,
+  hue?: number,
 ): string | null {
   const safeWidth = Math.max(1, width);
   const safeHeight = Math.max(1, height);
   const base = hexToHsv(baseHex);
+  if (hue !== undefined && Number.isFinite(hue)) base.h = hue;
   if (mode === "spectrum") {
     return hsvToHex({h: base.h, s: clampUnit(x / Math.max(1, safeWidth - 1)), v: clampUnit(1 - y / Math.max(1, safeHeight - 1))});
   }

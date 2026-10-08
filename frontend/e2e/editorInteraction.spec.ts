@@ -78,6 +78,33 @@ test("panel separators support bounded keyboard resizing and cancelled pointer g
   await expect.poll(() => page.evaluate(() => localStorage.getItem("pixtorio-timeline-height"))).toBe("160");
 });
 
+test("tool blocks keep their row and field layouts at the minimum inspector width", async ({page}) => {
+  await openEnglishEditor(page);
+  await createDocument(page);
+  const inspectorResize = page.getByRole("separator", {name: "Resize inspector"});
+  await inspectorResize.focus();
+  await inspectorResize.press("Home");
+
+  const canvasAids = page.locator(".canvas-aids-panel");
+  const body = canvasAids.locator(".collapsible-panel-body");
+  await expect(body).toHaveCSS("display", "grid");
+  await expect(body).toHaveCSS("row-gap", "8px");
+
+  const fields = canvasAids.locator(".cel-transform-fields").first().locator("label");
+  const firstFieldBox = await fields.nth(0).boundingBox();
+  const secondFieldBox = await fields.nth(1).boundingBox();
+  expect(firstFieldBox).not.toBeNull();
+  expect(secondFieldBox).not.toBeNull();
+  expect(Math.abs(firstFieldBox!.y - secondFieldBox!.y)).toBeLessThan(1);
+  expect(firstFieldBox!.x + firstFieldBox!.width).toBeLessThanOrEqual(secondFieldBox!.x);
+  expect(await canvasAids.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
+
+  await page.getByRole("button", {name: "Selection", exact: true}).click();
+  const selectionPanel = page.locator(".selection-tools");
+  await expect(selectionPanel.locator(".collapsible-panel-body")).toHaveCSS("display", "flex");
+  expect(await selectionPanel.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
+});
+
 test("menu navigation skips disabled items and Escape restores its trigger", async ({page}) => {
   await openEnglishEditor(page);
   const file = page.getByRole("button", {name: "File", exact: true});

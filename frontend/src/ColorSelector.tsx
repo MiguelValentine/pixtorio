@@ -6,21 +6,24 @@ const defaultCanvasWidth = 240;
 const defaultCanvasHeight = 112;
 const wheelCanvasHeight = 252;
 
-export function ColorSelector({mode, color, onChange, label}: {mode: ColorSelectorMode; color: string; onChange: (color: string) => void; label: string}) {
+export function ColorSelector({mode, color, onChange, label, hue}: {mode: ColorSelectorMode; color: string; onChange: (color: string) => void; label: string; hue?: number}) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const [resolutionRevision, setResolutionRevision] = useState(0);
   const variantBaseRef = useRef(color);
   const variantCellRef = useRef<TintShadeToneCell | null>(null);
   const selfUpdateRef = useRef(false);
   const previousModeRef = useRef(mode);
+  const previousColorRef = useRef(color);
+  const wheelImageRef = useRef<{key: string; image: ImageData} | null>(null);
   if (previousModeRef.current !== mode) {
     previousModeRef.current = mode;
     variantBaseRef.current = color;
     variantCellRef.current = null;
-  } else if (mode === "tint-shade-tone" && !selfUpdateRef.current) {
+  } else if (mode === "tint-shade-tone" && previousColorRef.current !== color && !selfUpdateRef.current) {
     variantBaseRef.current = color;
     variantCellRef.current = null;
   }
+  previousColorRef.current = color;
   selfUpdateRef.current = false;
 
   useEffect(() => {
@@ -49,28 +52,56 @@ export function ColorSelector({mode, color, onChange, label}: {mode: ColorSelect
     const context = canvas?.getContext("2d");
     if (!canvas || !context) return;
     const geometry = mode === "wheel" ? wheelSelectorGeometry(canvas.width, canvas.height) : null;
-    const image = context.createImageData(canvas.width, canvas.height);
-    for (let y = 0; y < canvas.height; y += 1) {
-      for (let x = 0; x < canvas.width; x += 1) {
-        const selected = selectorColorAt(mode, x, y, canvas.width, canvas.height, mode === "tint-shade-tone" ? variantBaseRef.current : color);
-        const offset = (y * canvas.width + x) * 4;
-        if (!selected) {
-          image.data.set([0, 0, 0, 0], offset);
-          continue;
+    const hsv = hexToHsv(color);
+    if (hue !== undefined) hsv.h = hue;
+    context.clearRect(0, 0, canvas.width, canvas.height);
+    if (mode === "spectrum") {
+      context.fillStyle = hsvToHex({h: hsv.h, s: 1, v: 1});
+      context.fillRect(0, 0, canvas.width, canvas.height);
+      const saturation = context.createLinearGradient(0, 0, canvas.width - 1, 0);
+      saturation.addColorStop(0, "#ffffff");
+      saturation.addColorStop(1, "rgb(255 255 255 / 0%)");
+      context.fillStyle = saturation;
+      context.fillRect(0, 0, canvas.width, canvas.height);
+      const value = context.createLinearGradient(0, 0, 0, canvas.height - 1);
+      value.addColorStop(0, "rgb(0 0 0 / 0%)");
+      value.addColorStop(1, "#000000");
+      context.fillStyle = value;
+      context.fillRect(0, 0, canvas.width, canvas.height);
+    } else if (geometry) {
+      // Hue/saturation moves only change the marker and strip, not the wheel.
+      const key = `${canvas.width}:${canvas.height}:${hsv.v}`;
+      if (wheelImageRef.current?.key !== key) {
+        const image = context.createImageData(canvas.width, canvas.height);
+        for (let y = 0; y < geometry.valueStripTop; y += 1) {
+          for (let x = 0; x < canvas.width; x += 1) {
+            const selected = selectorColorAt(mode, x, y, canvas.width, canvas.height, color, hue);
+            if (!selected) continue;
+            const rgba = hexToRGBA(selected);
+            const distance = Math.hypot(x - geometry.centerX, y - geometry.centerY);
+            const alpha = Math.round(Math.max(0, Math.min(1, geometry.radius - distance + 0.5)) * 255);
+            image.data.set([rgba[0], rgba[1], rgba[2], alpha], (y * canvas.width + x) * 4);
+          }
         }
-        const rgba = hexToRGBA(selected);
-        let alpha = 255;
-        if (geometry && y < geometry.valueStripTop) {
-          const distance = Math.hypot(x - geometry.centerX, y - geometry.centerY);
-          alpha = Math.round(Math.max(0, Math.min(1, geometry.radius - distance + 0.5)) * 255);
+        wheelImageRef.current = {key, image};
+      }
+      context.putImageData(wheelImageRef.current.image, 0, 0);
+      const strip = context.createLinearGradient(0, 0, canvas.width - 1, 0);
+      strip.addColorStop(0, "#000000");
+      strip.addColorStop(1, hsvToHex({...hsv, v: 1}));
+      context.fillStyle = strip;
+      context.fillRect(0, geometry.valueStripTop, canvas.width, geometry.valueStripHeight);
+    } else {
+      for (let row = 0; row < 3; row++) {
+        for (let column = 0; column < 7; column++) {
+          context.fillStyle = tintShadeToneColor(variantBaseRef.current, {row, column});
+          const left = Math.round(column * canvas.width / 7);
+          const top = Math.round(row * canvas.height / 3);
+          context.fillRect(left, top, Math.round((column + 1) * canvas.width / 7) - left, Math.round((row + 1) * canvas.height / 3) - top);
         }
-        image.data.set([rgba[0], rgba[1], rgba[2], alpha], offset);
       }
     }
-    context.clearRect(0, 0, canvas.width, canvas.height);
-    context.putImageData(image, 0, 0);
 
-    const hsv = hexToHsv(color);
     const displayScale = canvas.width / Math.max(1, canvas.getBoundingClientRect().width || defaultCanvasWidth);
     if (mode === "spectrum") {
       drawMarker(context, hsv.s * (canvas.width - 1), (1 - hsv.v) * (canvas.height - 1), displayScale);
@@ -101,14 +132,14 @@ export function ColorSelector({mode, color, onChange, label}: {mode: ColorSelect
       context.strokeRect(variantCellRef.current.column * cellWidth + 2.5, variantCellRef.current.row * cellHeight + 2.5, cellWidth - 5, cellHeight - 5);
       context.restore();
     }
-  }, [color, mode, resolutionRevision]);
+  }, [color, hue, mode, resolutionRevision]);
 
   const update = (event: React.PointerEvent<HTMLCanvasElement>) => {
     const rect = event.currentTarget.getBoundingClientRect();
     const x = (event.clientX - rect.left) * event.currentTarget.width / Math.max(1, rect.width);
     const y = (event.clientY - rect.top) * event.currentTarget.height / Math.max(1, rect.height);
     const base = mode === "tint-shade-tone" ? variantBaseRef.current : color;
-    const selected = selectorColorAt(mode, x, y, event.currentTarget.width, event.currentTarget.height, base);
+    const selected = selectorColorAt(mode, x, y, event.currentTarget.width, event.currentTarget.height, base, hue);
     if (selected) {
       if (mode === "tint-shade-tone") variantCellRef.current = {column: Math.max(0, Math.min(6, Math.floor(x / event.currentTarget.width * 7))), row: Math.max(0, Math.min(2, Math.floor(y / event.currentTarget.height * 3)))};
       selfUpdateRef.current = true;
@@ -130,6 +161,7 @@ export function ColorSelector({mode, color, onChange, label}: {mode: ColorSelect
       return;
     }
     const hsv = hexToHsv(color);
+    if (hue !== undefined) hsv.h = hue;
     const step = event.shiftKey ? 0.1 : 0.02;
     if (mode === "wheel") {
       if (event.key === "ArrowLeft") hsv.h = (hsv.h - (event.shiftKey ? 10 : 2) + 360) % 360;
@@ -153,7 +185,12 @@ export function ColorSelector({mode, color, onChange, label}: {mode: ColorSelect
     aria-label={label}
     aria-valuetext={color.toUpperCase()}
     onKeyDown={keyboard}
-    onPointerDown={(event) => { event.currentTarget.setPointerCapture(event.pointerId); update(event); }}
+    onPointerDown={(event) => {
+      if (event.button !== 0) return;
+      event.currentTarget.focus();
+      event.currentTarget.setPointerCapture(event.pointerId);
+      update(event);
+    }}
     onPointerMove={(event) => { if (event.currentTarget.hasPointerCapture(event.pointerId)) update(event); }}
   />;
 }

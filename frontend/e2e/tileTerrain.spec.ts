@@ -71,6 +71,26 @@ async function handleNextDialog(page: Page, accept: boolean, message: RegExp) {
   });
 }
 
+test("tilemap controls reflow without overflowing the minimum inspector width", async ({page}) => {
+  await createTilemapDocument(page);
+  const inspectorResize = page.getByRole("separator", {name: "Resize inspector"});
+  await inspectorResize.focus();
+  await inspectorResize.press("Home");
+
+  const panel = page.locator(".tilemap-section");
+  const tabs = panel.getByRole("tab");
+  const firstTabBox = await tabs.nth(0).boundingBox();
+  const lastTabBox = await tabs.nth(2).boundingBox();
+  expect(firstTabBox).not.toBeNull();
+  expect(lastTabBox).not.toBeNull();
+  expect(Math.abs(firstTabBox!.y - lastTabBox!.y)).toBeLessThan(1);
+  expect(await panel.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
+
+  for (const toolbar of await panel.locator(".tilemap-tool-actions").all()) {
+    expect(await toolbar.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
+  }
+});
+
 test("manual Tile and Terrain authority confirmations cancel, accept, and undo atomically", async ({page}) => {
   await createTilemapDocument(page);
   await addTerrain(page);

@@ -1,7 +1,7 @@
 import {describe, expect, it} from "vitest";
-import {celKey, cloneDocument, createDocument, getCel} from "./document";
+import {celKey, cloneDocument, compositeFrameForExport, createDocument, getCel} from "./document";
 import {refreshIndexedDocument, refreshTilemapCaches} from "./colorModes";
-import {applyDocumentPalette, relocateTransparentIndex} from "./paletteOperations";
+import {applyDocumentPalette, editPaletteColor, relocateTransparentIndex} from "./paletteOperations";
 import {DocumentStateCommand} from "./history";
 import {decodeProject, encodeProject} from "./serialization";
 import {convertImageLayerToTilemap} from "./tilemap";
@@ -53,6 +53,49 @@ function createIndexedTilemapFixture() {
 }
 
 describe("palette operations", () => {
+  it("edits one indexed slot and synchronizes tiles, linked cels, export, v5 and history", () => {
+    const {document, first, linked, independent} = createIndexedTilemapFixture();
+    const before = cloneDocument(document);
+    expect(editPaletteColor(document, 1, "#12AB3480")).toBe(true);
+    expect(document.palette.colors[1]).toBe("#12ab3480");
+    expect([...first.indexes!]).toEqual([1, 0]);
+    expect([...first.pixels]).toEqual([18, 171, 52, 128, 0, 0, 0, 0]);
+    expect(linked.pixels).toBe(first.pixels);
+    expect(linked.indexes).toBe(first.indexes);
+    expect(independent.pixels).toEqual(first.pixels);
+    expect(document.tilesets[0].tiles[0].pixels).toEqual(new Uint8ClampedArray([18, 171, 52, 128]));
+    const output = compositeFrameForExport(document);
+    expect(output[0]).toBe(18);
+    expect(output[1]).toBe(171);
+    const decoded = decodeProject(encodeProject(document));
+    expect(decoded.palette.colors).toEqual(document.palette.colors);
+    expect(compositeFrameForExport(decoded)).toEqual(output);
+    const command = new DocumentStateCommand(before, document, "Edit Palette Color");
+    command.undo(document);
+    expect(document.palette.colors[1]).toBe("#ff0000ff");
+    expect([...getCel(document, document.activeLayerId, document.activeFrameId)!.pixels]).toEqual([255, 0, 0, 255, 0, 0, 0, 0]);
+    command.redo(document);
+    expect(compositeFrameForExport(document)).toEqual(output);
+  });
+
+  it("does not change RGBA artwork or create a change for equivalent opaque hex values", () => {
+    const document = createDocument({width: 1, height: 1, palette: ["#123456", "#abcdef"]});
+    const cel = getCel(document, document.activeLayerId, document.activeFrameId)!;
+    cel.pixels.set([18, 52, 86, 255]);
+    expect(editPaletteColor(document, 0, "#123456FF")).toBe(false);
+    expect(editPaletteColor(document, 0, "#fedcba80")).toBe(true);
+    expect([...cel.pixels]).toEqual([18, 52, 86, 255]);
+  });
+
+  it("rejects invalid slot edits before mutation", () => {
+    const document = createDocument({width: 1, height: 1});
+    const before = cloneDocument(document);
+    expect(() => editPaletteColor(document, -1, "#abcdef")).toThrow();
+    expect(() => editPaletteColor(document, document.palette.colors.length, "#abcdef")).toThrow();
+    expect(() => editPaletteColor(document, 0, "not-a-color")).toThrow();
+    expect(document).toEqual(before);
+  });
+
   it("relocates transparency once for shared linked buffers and retains appearance, history and v5 data", () => {
     const document = createDocument({width: 3, height: 1, colorMode: "indexed", palette: ["#00000000", "#ff0000ff", "#00ff0080"]});
     const cel = getCel(document, document.activeLayerId, document.activeFrameId)!;

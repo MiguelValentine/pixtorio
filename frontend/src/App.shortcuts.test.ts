@@ -41,3 +41,21 @@ describe("opaque selection command wiring", () => {
     expect(dispatchSource).toContain('case "selectOpaque": selectOpaqueContent(); return;');
   });
 });
+
+describe("color mode menu wiring", () => {
+  it("keeps color mode conversion in the Edit menu instead of the color panel", () => {
+    const editMenuStart = appSource.indexOf('aria-label={language === "zh" ? "编辑" : "Edit"}');
+    const spriteMenuStart = appSource.indexOf('ref={spriteMenuRef}', editMenuStart);
+    const editMenuSource = appSource.slice(editMenuStart, spriteMenuStart);
+    const colorPanelStart = appSource.indexOf('id="color"');
+    const colorPanelEnd = appSource.indexOf('</CollapsiblePanelSection>', colorPanelStart);
+    const colorPanelSource = appSource.slice(colorPanelStart, colorPanelEnd);
+
+    for (const command of ["setRGBA", "setGrayscale", "setIndexed", "setBitmap"]) {
+      expect(editMenuSource).toContain(`dispatchCommandShortcut("${command}")`);
+    }
+    expect(editMenuSource).toContain('role="menuitemradio"');
+    expect(colorPanelSource).not.toContain('aria-label={ui.colorMode}');
+    expect(colorPanelSource).not.toContain('changeColorMode(event.target.value as ColorMode)');
+  });
+});

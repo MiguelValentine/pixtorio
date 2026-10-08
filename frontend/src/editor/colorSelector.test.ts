@@ -14,6 +14,11 @@ describe("color selector", () => {
     expect(selectorColorAt("spectrum", 10, 10, 11, 11, "#ff0000")).toBe("#000000");
   });
 
+  it("retains the selected hue when leaving black or gray", () => {
+    expect(selectorColorAt("spectrum", 10, 0, 11, 11, "#000000", 240)).toBe("#0000ff");
+    expect(selectorColorAt("spectrum", 10, 0, 11, 11, "#808080", 120)).toBe("#00ff00");
+  });
+
   it("creates tint, tone and shade variants", () => {
     expect(mixHex("#000000", "#ffffff", 0.5)).toBe("#808080");
     expect(selectorColorAt("tint-shade-tone", 0, 0, 70, 30, "#ff0000")).not.toBe("#ff0000");

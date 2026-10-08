@@ -1,5 +1,6 @@
 import type {Dispatch, SetStateAction} from "react";
 import type {PixelDocument} from "../editor/document";
+import {ColorField} from "../ColorPicker";
 import {labels, type Language} from "./localization";
 
 export interface SlicePropertiesDialogState {
@@ -36,7 +37,7 @@ export function SlicePropertiesDialog({slicePropertiesDialog, setSliceProperties
           <h2 id="slice-properties-title">{language === "zh" ? "切片属性" : "Slice Properties"}</h2>
           <div className="dialog-field-grid">
             <label className="dialog-field dialog-field-wide"><span>{language === "zh" ? "名称" : "Name"}</span><input type="text" autoFocus value={slicePropertiesDialog.name} onChange={(event) => setSlicePropertiesDialog({...slicePropertiesDialog, name: event.target.value})} /></label>
-            <label className="dialog-color-field"><span>{language === "zh" ? "颜色" : "Color"}</span><input type="color" value={slicePropertiesDialog.color} onChange={(event) => setSlicePropertiesDialog({...slicePropertiesDialog, color: event.target.value})} /></label>
+            <label className="dialog-color-field"><span>{language === "zh" ? "颜色" : "Color"}</span><ColorField value={slicePropertiesDialog.color} onChange={(hex) => setSlicePropertiesDialog({...slicePropertiesDialog, color: hex})} label={language === "zh" ? "颜色" : "Color"} language={language} /></label>
             <label className="dialog-field"><span>{language === "zh" ? "关键帧" : "Key frame"}</span><select value={slicePropertiesDialog.frameId} onChange={(event) => openSliceProperties(slicePropertiesDialog.sliceId, event.target.value)}>{pixelDocument.frames.map((frame, index) => slicePropertiesDialog.sliceId && pixelDocument.slices.find((slice) => slice.id === slicePropertiesDialog.sliceId)?.keys.some((key) => key.frameId === frame.id) ? <option value={frame.id} key={frame.id}>{index + firstFrame}</option> : null)}</select></label>
             <label className="dialog-field"><span>X</span><input type="number" value={slicePropertiesDialog.x} onChange={(event) => setSlicePropertiesDialog({...slicePropertiesDialog, x: event.target.value})} /></label>
             <label className="dialog-field"><span>Y</span><input type="number" value={slicePropertiesDialog.y} onChange={(event) => setSlicePropertiesDialog({...slicePropertiesDialog, y: event.target.value})} /></label>

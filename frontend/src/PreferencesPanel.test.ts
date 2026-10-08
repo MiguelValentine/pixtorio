@@ -36,9 +36,9 @@ function sectionBody(markup: string, summary: string) {
 }
 
 function controlOrder(markup: string) {
-  return [...markup.matchAll(/<label class="([^"]+)">[\s\S]*?(?:<input type="([^"]+)"|<select\b)/g)].map(([, className, inputType]) => ({
+  return [...markup.matchAll(/<label class="([^"]+)">[\s\S]*?(?:<input type="([^"]+)"|<select\b|<button\b)/g)].map(([, className, inputType]) => ({
     className,
-    kind: inputType ?? "select",
+    kind: className === "dialog-color-field" ? "color" : inputType ?? "select",
   }));
 }
 
@@ -96,5 +96,12 @@ describe("PreferencesPanel afterGeneral sections", () => {
       {className: "dialog-color-field", kind: "color"},
       {className: "dialog-color-field", kind: "color"},
     ]);
+  });
+
+  it("uses application color buttons instead of native color inputs", () => {
+    const markup = renderPreferencesMarkup(false);
+    expect(markup).not.toContain('type="color"');
+    expect(markup).toContain('aria-label="Cursor color"');
+    expect(markup).toContain('aria-haspopup="dialog"');
   });
 });

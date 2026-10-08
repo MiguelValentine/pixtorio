@@ -57,6 +57,9 @@ export function useModalFocus(rootRef: RefObject<HTMLElement | null>, modalKey: 
     };
     const trapTab = (event: KeyboardEvent) => {
       if (event.key !== "Tab" || event.ctrlKey || event.metaKey || event.altKey || event.isComposing) return;
+      // Nested dialogs own their keyboard loop while remaining inside this modal.
+      const nestedDialog = event.target instanceof Element ? event.target.closest('[role="dialog"]') : null;
+      if (nestedDialog && nestedDialog !== dialog) return;
       const elements = focusableElements(dialog);
       const first = elements[0] ?? dialog;
       const last = elements[elements.length - 1] ?? dialog;
