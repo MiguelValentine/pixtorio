@@ -30,6 +30,17 @@ The default interface is Simplified Chinese with a light theme. Both language an
 - **Tilemaps and Terrain**: shared tilesets; native orthogonal, isometric, and pointy/flat hexagonal grids; tile-cell selections and drawing tools; deterministic auto-Terrain rules; rule diagnostics and previews; and transactional Tileset PNG plus `pixtorio-tilemap-v1` sidecar interchange.
 - **Effects and assets**: brightness/contrast, HSL, curves, convolution, outline, shading, tilemaps, slices, ICC colour profiles, pixel aspect ratios, history, recovery, and configurable shortcuts.
 - **Interchange**: PNG, GIF, sprite sheets, packed atlases, image sequences, and GPL/JASC-PAL palettes, with configurable frame ranges, directions, tags, and layer splitting.
+- **Photo to pixel art**: a separate File menu entry for PNG/JPEG/WebP/BMP photos, with original/output previews, aspect-locked dimensions, a 2-256 color limit, similar-color merging, and optional ordered or Floyd-Steinberg dithering. Creates a new editable RGBA document without changing open artwork. Sources are limited to 64 MiB and 100 megapixels; output dimensions are 1-1024 pixels per side. The color limit includes transparency and merging may produce fewer colors.
+
+## Photo to Pixel Art
+
+1. Open **File > Photo to pixel art**, then choose a PNG, JPEG, WebP, or BMP image. You can also drop an image into this dialog.
+2. Set the output width and height. Keep **Lock original aspect ratio** enabled to preserve the photo's proportions.
+3. Set **Maximum colors** (2-256). Increase **Merge similar colors** to combine nearby colors; the displayed count shows the actual number used.
+4. Choose smooth or nearest-neighbor resampling, and optionally enable ordered or Floyd-Steinberg dithering. Compare the original and pixel-art previews.
+5. Select **Create pixel art** to open the result in a new editable tab. Save it as `.pixio` or export it through the existing export commands.
+
+Cancel leaves open artwork unchanged. Source images may be up to 64 MiB and 100 megapixels; each output dimension must be 1-1024 pixels. The color limit includes transparency, and similar-color merging can reduce the actual count below the selected maximum.
 
 ## Quick Start
 

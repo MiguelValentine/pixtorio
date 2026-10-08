@@ -1,5 +1,5 @@
 export const commandShortcutIDs = [
-  "new", "newFromSelection", "open", "importPNG", "importSpriteSheet", "importPNGSequence", "save", "saveAs", "exportPNG", "exportGIF", "exportSpriteSheet", "exportPNGSequence", "closeDocument",
+  "new", "newFromSelection", "open", "importPNG", "importPhoto", "importSpriteSheet", "importPNGSequence", "save", "saveAs", "exportPNG", "exportGIF", "exportSpriteSheet", "exportPNGSequence", "closeDocument",
   "undo", "redo", "selectAll", "deselect", "reselect", "copy", "copyMerged", "cut", "paste", "pasteSpecialNewSprite", "pasteSpecialNewLayer", "pasteSpecialReferenceLayer", "fillSelection", "strokeSelection", "copySelectionToLayer", "cutSelectionToLayer", "copySelectedFramesToDocument", "copySelectedLayersToDocument", "shiftPixelsLeft", "shiftPixelsRight", "shiftPixelsUp", "shiftPixelsDown",
   "selectOpaque", "selectColor", "selectAllLayerCels", "selectLinkedCels", "invertSelection", "growSelection", "shrinkSelection", "borderSelection", "featherSelection", "scaleSelection", "rotateSelectionCCW", "rotateSelectionCW", "flipSelectionHorizontal", "flipSelectionVertical", "applySelectionPosition", "applySelectionRotation", "createBrushFromSelection", "createPatternFromSelection", "createSliceFromSelection",
   "duplicateSprite", "spriteSize", "canvasSize", "trimCanvas", "rotateSpriteCW", "rotateSpriteCCW", "rotateSprite180", "flipSpriteHorizontal", "flipSpriteVertical", "colorConfiguration", "adjustmentBrightnessContrast", "adjustmentHSL", "adjustmentInvert", "adjustmentConvolution", "adjustmentMedian", "adjustmentDespeckle", "adjustmentCurves", "adjustmentHSVHSL", "adjustmentChannels", "effectOutline", "effectShading",
@@ -17,6 +17,7 @@ export const defaultCommandShortcuts: Record<CommandShortcutID, string> = {
   newFromSelection: "Ctrl+Alt+N",
   open: "Ctrl+O",
   importPNG: "Ctrl+Alt+O",
+  importPhoto: "",
   importSpriteSheet: "Ctrl+Alt+Shift+O",
   importPNGSequence: "Ctrl+Alt+Shift+I",
   save: "Ctrl+S",
@@ -167,7 +168,7 @@ export const defaultCommandShortcuts: Record<CommandShortcutID, string> = {
 };
 
 export const documentOptionalCommandIDs: ReadonlySet<CommandShortcutID> = new Set([
-  "new", "open", "importPNG", "importSpriteSheet", "importPNGSequence", "toggleInspector", "toggleTimeline", "togglePixelGrid", "toggleCanvasOnly", "showAllPanels", "toggleFullscreen", "resetWorkspace", "openPreferences", "toggleTheme", "switchLanguage", "zoomIn", "zoomOut",
+  "new", "open", "importPNG", "importPhoto", "importSpriteSheet", "importPNGSequence", "toggleInspector", "toggleTimeline", "togglePixelGrid", "toggleCanvasOnly", "showAllPanels", "toggleFullscreen", "resetWorkspace", "openPreferences", "toggleTheme", "switchLanguage", "zoomIn", "zoomOut",
 ]);
 
 export interface ShortcutEventLike {

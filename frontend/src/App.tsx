@@ -82,6 +82,8 @@ import {AdjustmentDialog} from "./app/AdjustmentDialog";
 import {LayerPropertiesDialog, type LayerPropertiesDialogState, type TriStateProperty} from "./app/LayerPropertiesDialog";
 import {SlicePropertiesDialog, type SlicePropertiesDialogState} from "./app/SlicePropertiesDialog";
 import {SpriteImportDialog, type SpriteImportDialogState} from "./app/SpriteImportDialog";
+import {PhotoImportDialog} from "./app/PhotoImportDialog";
+import {createPhotoDocument} from "./app/photoImport";
 import {AdjustmentCurveChannel, AdjustmentDialogState, AdjustmentKind, adjustmentConvolutionPresets, createAdjustmentDialogState} from "./app/adjustmentState";
 import {PNGResponse, parsePNGResponse, parsePNGSequenceResponse, parseProjectResponse} from "./app/bridgeResponses";
 import {EditorDocumentStateCommand, EditorTab, TabTimelineHistoryState, captureTabTimeline, combinePixelBounds, createEditorTab, createTabID, extendTimelineLoopAfterInsertion, normalizeTabTimeline, projectPathKey, setTabCommandScope, shouldExtendTimelineLoopAfterInsertion, syncPlaybackFrameSelection, syncTabToActiveTag, touchAllTabThumbnails, touchTabThumbnailCels} from "./app/editorTab";
@@ -858,6 +860,7 @@ function App() {
   const [outlinePreview, setOutlinePreview] = useState<{before: Uint8ClampedArray; after: Uint8ClampedArray; width: number; height: number} | null>(null);
   useEffect(() => { setOutlinePreview(null); }, [adjustmentDialog, foregroundColor, foregroundAlpha, revision]);
   const [spriteImportDialog, setSpriteImportDialog] = useState<SpriteImportDialogState | null>(null);
+  const [photoImportOpen, setPhotoImportOpen] = useState(false);
   const [previewOpen, setPreviewOpen] = useState(false);
   const [inspectorWidth, setInspectorWidth] = useState(() => storedNumber("pixtorio-inspector-width", 228, 190, 420));
   const [inspectorWidthDraft, setInspectorWidthDraft] = useState(() => String(storedNumber("pixtorio-inspector-width", 228, 190, 420)));
@@ -1844,7 +1847,7 @@ function App() {
     activeDocumentId: activeTabID || tabs[0]?.id || "",
     assertIdle: () => {
       const focused = document.activeElement;
-      if (!recoveryReady || isPlaying || document.querySelector(".color-picker-popover") || celPropertiesDialog || canvasDialog || layerPropertiesDialog || slicePropertiesDialog || exportDialog || tagDialog || crossDocumentCopyDialog || adjustmentDialog || spriteImportDialog || settingsOpen || historyOpen || opacityBeforeRef.current
+      if (!recoveryReady || isPlaying || document.querySelector(".color-picker-popover") || celPropertiesDialog || canvasDialog || layerPropertiesDialog || slicePropertiesDialog || exportDialog || tagDialog || crossDocumentCopyDialog || adjustmentDialog || spriteImportDialog || photoImportOpen || settingsOpen || historyOpen || opacityBeforeRef.current
         || saveQueuesRef.current.size > 0 || mcpInteractionGuardRef.current?.()
         || focused instanceof HTMLInputElement || focused instanceof HTMLTextAreaElement
         || (focused instanceof HTMLElement && focused.isContentEditable)) {
@@ -5771,6 +5774,7 @@ function App() {
       case "newFromSelection": newDocumentFromSelection(); return;
       case "open": void openPixio(); return;
       case "importPNG": void importPNG(); return;
+      case "importPhoto": setPhotoImportOpen(true); return;
       case "importSpriteSheet": void importSpriteSheet(); return;
       case "importPNGSequence": void importPNGSequence(); return;
       case "save": void savePixio(); return;
@@ -6056,6 +6060,11 @@ function App() {
         setSpriteImportDialog(null);
         return;
       }
+      if (key === "escape" && photoImportOpen) {
+        event.preventDefault();
+        setPhotoImportOpen(false);
+        return;
+      }
       if (key === "escape" && settingsOpen) {
         event.preventDefault();
         setSettingsOpen(false);
@@ -6104,7 +6113,7 @@ function App() {
         setIsFileMenuOpen(false);
         return;
       }
-      if (celPropertiesDialog || canvasDialog || layerPropertiesDialog || slicePropertiesDialog || tagDialog || crossDocumentCopyDialog || exportDialog || adjustmentDialog || spriteImportDialog || settingsOpen || historyOpen || colorProfileDialog || isViewMenuOpen) return;
+      if (celPropertiesDialog || canvasDialog || layerPropertiesDialog || slicePropertiesDialog || tagDialog || crossDocumentCopyDialog || exportDialog || adjustmentDialog || spriteImportDialog || photoImportOpen || settingsOpen || historyOpen || colorProfileDialog || isViewMenuOpen) return;
       if (key === "escape" && canvasOnly) {
         event.preventDefault();
         setCanvasOnly(false);
@@ -6169,7 +6178,7 @@ function App() {
     };
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [activeCel, activeClearColor, activeLayer, activeTab, activateTool, adjustmentDialog, canEditPixels, canvasDialog, canvasOnly, celPropertiesDialog, clearCurrentCels, colorProfileDialog, commandShortcutAssignments, commitPixelMutation, crossDocumentCopyDialog, dispatchCommandShortcut, exportDialog, hasOpenDocument, historyOpen, isEditMenuOpen, isFileMenuOpen, isPaletteMenuOpen, isPlaying, isRecentProjectsMenuOpen, isSpriteMenuOpen, isViewMenuOpen, layerPropertiesDialog, preferences.selection.keepAfterDelete, selection, settingsOpen, shortcutToolByKey, slicePropertiesDialog, spriteImportDialog, tagDialog]);
+  }, [activeCel, activeClearColor, activeLayer, activeTab, activateTool, adjustmentDialog, canEditPixels, canvasDialog, canvasOnly, celPropertiesDialog, clearCurrentCels, colorProfileDialog, commandShortcutAssignments, commitPixelMutation, crossDocumentCopyDialog, dispatchCommandShortcut, exportDialog, hasOpenDocument, historyOpen, isEditMenuOpen, isFileMenuOpen, isPaletteMenuOpen, isPlaying, isRecentProjectsMenuOpen, isSpriteMenuOpen, isViewMenuOpen, layerPropertiesDialog, photoImportOpen, preferences.selection.keepAfterDelete, selection, settingsOpen, shortcutToolByKey, slicePropertiesDialog, spriteImportDialog, tagDialog]);
 
   const siblingLayers = pixelDocument.layers.filter((layer) => layer.parentId === activeLayer.parentId);
   const activeSiblingIndex = siblingLayers.findIndex((layer) => layer.id === activeLayer.id);
@@ -6541,7 +6550,7 @@ function App() {
 
   const modalKey = colorProfileDialog ? "color-profile" : canvasDialog ? "canvas"
     : crossDocumentCopyDialog ? "cross-document" : exportDialog ? "export"
-    : spriteImportDialog ? "sprite-import" : adjustmentDialog ? "adjustment"
+    : photoImportOpen ? "photo-import" : spriteImportDialog ? "sprite-import" : adjustmentDialog ? "adjustment"
     : tagDialog ? "tag" : celPropertiesDialog ? "cel" : layerPropertiesDialog ? "layer"
     : slicePropertiesDialog ? "slice" : settingsOpen ? "settings" : historyOpen && hasOpenDocument ? "history" : null;
   useModalFocus(appShellRef, modalKey);
@@ -6659,6 +6668,7 @@ function App() {
               </div>, menuLayerRef.current)}
             </div>
             <button type="button" role="menuitem" onClick={() => { setIsFileMenuOpen(false); dispatchCommandShortcut("importPNG"); }}><FileImage size={16} />{ui.importPNG}<span>{formatShortcutForPlatform(commandShortcutAssignments.importPNG)}</span></button>
+            <button type="button" role="menuitem" onClick={() => { setIsFileMenuOpen(false); dispatchCommandShortcut("importPhoto"); }}><WandSparkles size={16} />{commandShortcutLabels[language].importPhoto}<span>{formatShortcutForPlatform(commandShortcutAssignments.importPhoto)}</span></button>
             <button type="button" role="menuitem" onClick={() => { setIsFileMenuOpen(false); dispatchCommandShortcut("importSpriteSheet"); }}><Grid2X2 size={16} />{language === "zh" ? "导入精灵表" : "Import sprite sheet"}<span>{formatShortcutForPlatform(commandShortcutAssignments.importSpriteSheet)}</span></button>
             <button type="button" role="menuitem" onClick={() => { setIsFileMenuOpen(false); dispatchCommandShortcut("importPNGSequence"); }}><FolderPlus size={16} />{language === "zh" ? "导入 PNG 序列" : "Import PNG sequence"}<span>{formatShortcutForPlatform(commandShortcutAssignments.importPNGSequence)}</span></button>
             <div className="menu-divider" role="separator" />
@@ -8171,6 +8181,11 @@ function App() {
         applyAdjustment={applyAdjustment}
       />}
 
+      {photoImportOpen && <PhotoImportDialog language={language} onClose={() => setPhotoImportOpen(false)} onImport={(name, result) => {
+        const imported = createPhotoDocument(name, result);
+        openDocumentTab(imported, language === "zh" ? `已创建像素画 ${imported.name}` : `Created pixel art ${imported.name}`, undefined, undefined, true);
+        setPhotoImportOpen(false);
+      }} />}
       {spriteImportDialog && <SpriteImportDialog
         spriteImportDialog={spriteImportDialog}
         setSpriteImportDialog={setSpriteImportDialog}

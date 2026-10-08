@@ -23,7 +23,7 @@ describe("command shortcut coverage", () => {
 
   it("routes all top-level menu commands through the shared dispatcher", () => {
     const topLevelMenuCommands = [
-      "new", "newFromSelection", "open", "importPNG", "importSpriteSheet", "importPNGSequence", "save", "saveAs",
+      "new", "newFromSelection", "open", "importPNG", "importPhoto", "importSpriteSheet", "importPNGSequence", "save", "saveAs",
       "exportPNG", "exportGIF", "exportSpriteSheet", "exportPNGSequence", "undo", "redo", "copy", "copyMerged", "cut", "paste",
       "pasteSpecialNewSprite", "pasteSpecialNewLayer", "pasteSpecialReferenceLayer", "fillSelection", "strokeSelection",
       "copySelectionToLayer", "cutSelectionToLayer", "selectAllLayerCels", "selectLinkedCels", "copySelectedFramesToDocument", "copySelectedLayersToDocument", "layerProperties",

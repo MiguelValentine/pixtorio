@@ -1,0 +1,25 @@
+.canvas-dialog.photo-import-dialog { width: min(720px, calc(var(--ui-viewport-width) - 32px)); }
+.photo-import-file { display: flex; align-items: center; gap: 12px; margin-bottom: 14px; min-width: 0; font-size: 11px; }
+.photo-import-file button { display: inline-flex; align-items: center; gap: 6px; flex: none; min-height: 30px; padding: 4px 10px; border: 1px solid var(--form-control-border); border-radius: 4px; background: var(--form-control-background); color: var(--form-control-foreground); }
+.photo-import-file > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.photo-import-previews { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin-bottom: 16px; }
+.photo-import-previews figure { min-width: 0; margin: 0; }
+.photo-import-previews figcaption { min-height: 28px; overflow-wrap: anywhere; font-size: 11px; }
+.photo-import-stage { position: relative; display: flex; align-items: center; justify-content: center; height: 230px; overflow: hidden; border: 1px solid var(--form-control-border); background-color: #95999b; background-image: conic-gradient(#c0c3c4 25%, transparent 0 50%, #c0c3c4 0 75%, transparent 0); background-size: 16px 16px; }
+.photo-import-stage img { display: block; width: 100%; height: 100%; object-fit: contain; }
+.photo-import-stage canvas { display: block; max-width: 100%; max-height: 100%; width: 100%; height: auto; object-fit: contain; image-rendering: pixelated; }
+.photo-import-spinner { animation: photo-import-spin 1s linear infinite; color: #202124; }
+.photo-import-palette { display: flex; flex-wrap: wrap; gap: 3px; max-height: 68px; overflow-y: auto; margin-top: 14px; }
+.photo-import-palette span { flex: 0 0 16px; height: 16px; border: 1px solid var(--form-control-border); }
+.photo-import-error { color: var(--danger); font-size: 12px; overflow-wrap: anywhere; }
+.photo-import-dialog input[type="range"] { padding: 0; }
+@keyframes photo-import-spin { to { transform: rotate(360deg); } }
+@media (max-width: 520px) {
+  .photo-import-stage { height: 150px; }
+  .photo-import-file { flex-wrap: wrap; gap: 6px; }
+  .photo-import-dialog .dialog-field-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .photo-import-dialog .dialog-field-wide { grid-column: 1 / -1; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .photo-import-spinner { animation: none; }
+}

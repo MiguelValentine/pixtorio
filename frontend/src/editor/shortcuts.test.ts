@@ -21,6 +21,8 @@ describe("command shortcuts", () => {
       .filter(Boolean);
     expect(new Set(assigned).size).toBe(assigned.length);
     expect(documentOptionalCommandIDs.has("openPreferences")).toBe(true);
+    expect(documentOptionalCommandIDs.has("importPhoto")).toBe(true);
+    expect(defaultCommandShortcuts.importPhoto).toBe("");
     expect(defaultCommandShortcuts.toggleCanvasOnly).toBe("Tab");
     expect(defaultCommandShortcuts.toggleFullscreen).toBe("F11");
     expect(documentOptionalCommandIDs.has("showAllPanels")).toBe(true);
